@@ -1,0 +1,71 @@
+{
+  "sourceRepository": "D:\\SourceCodes\\ExitPass",
+  "sourceCommit": "951a7c0f5fb03efbab8de03d555820f1e0d420d5",
+  "sourceFilesInspected": [
+    "src/Services/CentralPms/src/ExitPass.CentralPms.Api/Controllers/VendorParkingResolutionController.cs",
+    "src/Services/CentralPms/src/ExitPass.CentralPms.Contracts/Public/VendorParking/ResolveVendorParkingRequest.cs",
+    "src/Services/CentralPms/src/ExitPass.CentralPms.Contracts/Public/VendorParking/ResolveVendorParkingResponse.cs",
+    "src/Services/CentralPms/src/ExitPass.CentralPms.Contracts/Common/ErrorResponse.cs",
+    "src/Services/CentralPms/src/ExitPass.CentralPms.Api/Validation/ResolveVendorParkingRequestValidator.cs"
+  ],
+  "endpoint": {
+    "method": "POST",
+    "path": "/v1/vendor-parking/resolve",
+    "correlationHeader": "X-Correlation-Id"
+  },
+  "request": {
+    "siteGroupId": "uuid string, required",
+    "siteId": "uuid string, required",
+    "vendorSystemId": "string, required",
+    "plateNumber": "string, optional, <= 64 chars, no control characters",
+    "ticketReference": "string, optional, <= 64 chars, no control characters",
+    "correlationId": "uuid, required"
+  },
+  "successResponse": {
+    "parkingSessionId": "uuid",
+    "tariffSnapshotId": "uuid",
+    "siteGroupId": "string",
+    "siteId": "string",
+    "siteGroupName": "string?",
+    "siteName": "string?",
+    "lookupOutcome": "resolved",
+    "plateNumber": "string?",
+    "ticketReference": "string?",
+    "entryTime": "date-time?",
+    "currentFeeCalculationTime": "date-time?",
+    "netPayableMinorUnits": "integer",
+    "currency": "string",
+    "tariffExpiresAt": "date-time",
+    "feeValidUntil": "date-time",
+    "parkingStatus": "string",
+    "paymentStatus": "string",
+    "statutoryDiscountApplied": "boolean",
+    "statutoryDiscountValidationId": "uuid?",
+    "statutoryDiscountApplicationId": "uuid?",
+    "originalTariffSnapshotId": "uuid?",
+    "effectiveTariffSnapshotId": "uuid?",
+    "appliedTariffSnapshotId": "uuid?",
+    "policyResolutionBasis": "string?",
+    "benefitType": "string?",
+    "vendorSystemId": "string",
+    "correlationId": "uuid"
+  },
+  "errorResponse": {
+    "errorCode": "string",
+    "message": "string",
+    "correlationId": "uuid",
+    "retryable": "boolean",
+    "details": "object?"
+  },
+  "statusCodes": {
+    "400": ["INVALID_REQUEST"],
+    "404": ["SESSION_NOT_FOUND"],
+    "409": ["VENDOR_REJECTED", "AMBIGUOUS_MATCH"],
+    "502": ["MALFORMED_VENDOR_RESPONSE"],
+    "503": ["RETRYABLE_UNAVAILABLE", "PROJECTION_SNAPSHOT_AVAILABLE"]
+  },
+  "notes": [
+    "This is a narrow inspected snapshot, not copied Central PMS DTO source.",
+    "Generated-client publication remains pending; this slice uses a typed adapter matching the inspected JSON shape."
+  ]
+}

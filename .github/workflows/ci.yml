@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [ main, feature/** ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend type check
+        run: npm run app:typecheck
+
+      - name: Frontend unit tests
+        run: npm run app:test
+
+      - name: Frontend production build
+        run: npm run app:build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Browser end-to-end smoke
+        run: npm run e2e
+
+      - name: Restore .NET
+        run: dotnet restore
+
+      - name: Build .NET
+        run: dotnet build --no-restore
+
+      - name: Test .NET
+        run: dotnet test --no-build
+
+      - name: Contract snapshot present
+        run: Test-Path contracts/central-pms/vendor-parking-resolve.contract.json
+        shell: pwsh
+
+      - name: Basic secret and certificate scan
+        run: ./scripts/check-no-secrets.ps1
+        shell: pwsh
