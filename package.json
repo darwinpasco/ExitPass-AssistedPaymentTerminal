@@ -1,0 +1,17 @@
+{
+  "name": "exitpass-assisted-payment-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "src/AssistedPaymentTerminal.App",
+    "tests/AssistedPaymentTerminal.EndToEndTests"
+  ],
+  "scripts": {
+    "app:dev": "npm run dev --workspace src/AssistedPaymentTerminal.App",
+    "app:typecheck": "npm run typecheck --workspace src/AssistedPaymentTerminal.App",
+    "app:test": "npm run test --workspace src/AssistedPaymentTerminal.App",
+    "app:build": "npm run build --workspace src/AssistedPaymentTerminal.App",
+    "e2e": "npm run app:build && node tests/AssistedPaymentTerminal.EndToEndTests/run-e2e.mjs"
+  }
+}

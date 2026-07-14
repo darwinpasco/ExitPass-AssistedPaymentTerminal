@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{0E2ACCC5-C73D-4ABA-AFE0-1F8F178976C5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.Desktop", "src\AssistedPaymentTerminal.Desktop\AssistedPaymentTerminal.Desktop.csproj", "{2EE15A1F-CCE5-474B-A093-9A05837D5C50}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{EF0C5216-7436-46A5-81CF-1AB0AC845A1A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.Desktop.Tests", "tests\AssistedPaymentTerminal.Desktop.Tests\AssistedPaymentTerminal.Desktop.Tests.csproj", "{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2EE15A1F-CCE5-474B-A093-9A05837D5C50}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2EE15A1F-CCE5-474B-A093-9A05837D5C50}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2EE15A1F-CCE5-474B-A093-9A05837D5C50}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2EE15A1F-CCE5-474B-A093-9A05837D5C50}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{2EE15A1F-CCE5-474B-A093-9A05837D5C50} = {0E2ACCC5-C73D-4ABA-AFE0-1F8F178976C5}
+		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07} = {EF0C5216-7436-46A5-81CF-1AB0AC845A1A}
+	EndGlobalSection
+EndGlobal
