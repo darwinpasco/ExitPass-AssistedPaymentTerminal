@@ -5,7 +5,8 @@ public sealed record StartupOptions(
     string? DevelopmentWebUiUrl,
     string BaseDirectory,
     bool PreferPackagedAssets,
-    bool SmokeCheckOnly)
+    bool SmokeCheckOnly,
+    bool WebViewSmokeCheck = false)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
     {
@@ -13,6 +14,7 @@ public sealed record StartupOptions(
         var webUiUrl = Environment.GetEnvironmentVariable("APT_WEB_UI_URL");
         var preferPackagedAssets = false;
         var smokeCheckOnly = false;
+        var webViewSmokeCheck = false;
 
         foreach (var arg in args)
         {
@@ -32,8 +34,13 @@ public sealed record StartupOptions(
             {
                 smokeCheckOnly = true;
             }
+            else if (arg.Equals("--webview-smoke-check", StringComparison.OrdinalIgnoreCase))
+            {
+                smokeCheckOnly = false;
+                webViewSmokeCheck = true;
+            }
         }
 
-        return new StartupOptions(profile, webUiUrl, AppContext.BaseDirectory, preferPackagedAssets, smokeCheckOnly);
+        return new StartupOptions(profile, webUiUrl, AppContext.BaseDirectory, preferPackagedAssets, smokeCheckOnly, webViewSmokeCheck);
     }
 }

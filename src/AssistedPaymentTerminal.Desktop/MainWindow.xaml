@@ -9,6 +9,57 @@
         MinHeight="700"
         WindowStartupLocation="CenterScreen">
     <Grid>
-        <wv2:WebView2 x:Name="TerminalWebView" />
+        <wv2:WebView2 x:Name="TerminalWebView" Visibility="Collapsed" />
+        <Border x:Name="StatusOverlay"
+                Background="#F7F8FA"
+                Padding="32"
+                Visibility="Visible">
+            <Grid MaxWidth="720"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center">
+                <Border Background="White"
+                        BorderBrush="#D6DAE1"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="28">
+                    <StackPanel>
+                        <TextBlock Text="ExitPass Assisted Payment Terminal"
+                                   Foreground="#526071"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,8" />
+                        <TextBlock x:Name="StatusTitle"
+                                   Text="Starting terminal"
+                                   Foreground="#172033"
+                                   FontSize="28"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,12" />
+                        <TextBlock x:Name="StatusMessage"
+                                   Text="Loading the cashier terminal..."
+                                   Foreground="#263244"
+                                   FontSize="16"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,12" />
+                        <TextBlock x:Name="StatusDetail"
+                                   Foreground="#526071"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,20" />
+                        <StackPanel x:Name="ErrorActions"
+                                    Orientation="Horizontal"
+                                    Visibility="Collapsed">
+                            <Button Content="Retry"
+                                    Width="112"
+                                    Margin="0,0,12,0"
+                                    Click="RetryButton_Click" />
+                            <Button Content="Close"
+                                    Width="112"
+                                    Click="CloseButton_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

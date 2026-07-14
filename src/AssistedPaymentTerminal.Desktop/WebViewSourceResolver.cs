@@ -4,14 +4,14 @@ namespace AssistedPaymentTerminal.Desktop;
 
 public static class WebViewSourceResolver
 {
-    public static Uri Resolve(StartupOptions options)
+    public static WebViewSource Resolve(StartupOptions options)
     {
         if (!options.PreferPackagedAssets && !string.IsNullOrWhiteSpace(options.DevelopmentWebUiUrl))
         {
-            return ResolveDevelopmentUri(options.DevelopmentWebUiUrl);
+            return ResolveDevelopmentSource(options.DevelopmentWebUiUrl);
         }
 
-        return ResolvePackagedAssetUri(options.BaseDirectory);
+        return ResolvePackagedAssetSource(options.BaseDirectory);
     }
 
     public static Uri ResolveDevelopmentUri(string url)
@@ -24,9 +24,22 @@ public static class WebViewSourceResolver
         return uri;
     }
 
-    public static Uri ResolvePackagedAssetUri(string baseDirectory)
+    public static WebViewSource ResolveDevelopmentSource(string url)
     {
-        var indexPath = Path.Combine(baseDirectory, "wwwroot", "index.html");
+        var uri = ResolveDevelopmentUri(url);
+
+        return new WebViewSource(
+            NavigationUri: uri,
+            IsPackaged: false,
+            PackagedAssetsDirectory: null,
+            VirtualHostName: null,
+            SafeDisplayLocation: uri.GetLeftPart(UriPartial.Authority));
+    }
+
+    public static WebViewSource ResolvePackagedAssetSource(string baseDirectory)
+    {
+        var wwwroot = Path.Combine(baseDirectory, "wwwroot");
+        var indexPath = Path.Combine(wwwroot, "index.html");
         if (!File.Exists(indexPath))
         {
             throw new FileNotFoundException(
@@ -34,6 +47,11 @@ public static class WebViewSourceResolver
                 indexPath);
         }
 
-        return new Uri(indexPath);
+        return new WebViewSource(
+            NavigationUri: new Uri($"https://{WebViewSource.PackagedHostName}/index.html"),
+            IsPackaged: true,
+            PackagedAssetsDirectory: wwwroot,
+            VirtualHostName: WebViewSource.PackagedHostName,
+            SafeDisplayLocation: $"packaged frontend assets via https://{WebViewSource.PackagedHostName}/index.html");
     }
 }

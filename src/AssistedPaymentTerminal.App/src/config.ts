@@ -114,7 +114,7 @@ async function loadRawConfig(): Promise<RawAptConfig> {
     return { ...window.__APT_CONFIG__ };
   }
 
-  if (window.location.protocol === "file:") {
+  if (usesPackagedFallbackConfig(window.location.protocol, window.location.hostname)) {
     return { ...fileSmokeConfig };
   }
 
@@ -125,6 +125,10 @@ async function loadRawConfig(): Promise<RawAptConfig> {
 
   const payload = (await response.json()) as RawAptConfig;
   return { ...payload };
+}
+
+export function usesPackagedFallbackConfig(protocol: string, hostname: string): boolean {
+  return protocol === "file:" || hostname === "apt.local";
 }
 
 function applyQueryOverrides(raw: RawAptConfig): void {

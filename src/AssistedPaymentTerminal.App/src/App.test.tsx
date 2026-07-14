@@ -18,6 +18,7 @@ describe("App startup and terminal workflow", () => {
   it("displays bound terminal, site, POS, cashier, shift, and connection context", () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
+    expect(screen.getByTestId("apt-mode1-shell")).toHaveAttribute("data-app-ready", "true");
     expect(screen.getByText("Mode 1")).toBeInTheDocument();
     expect(screen.getByText("APT-DEV-001")).toBeInTheDocument();
     expect(screen.getByText("ExitPass Demo Parking")).toBeInTheDocument();

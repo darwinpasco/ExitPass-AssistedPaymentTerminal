@@ -68,7 +68,7 @@ export function TerminalShell({ config, client }: { config: AptConfig; client: C
   const tariffExpired = resolvedSession ? new Date(resolvedSession.tariffExpiresAt).getTime() <= Date.now() : false;
 
   return (
-    <main className="terminal-shell">
+    <main className="terminal-shell" data-testid="apt-mode1-shell" data-app-ready="true">
       <header className="brand-header">
         <div>
           <p className="eyebrow">ExitPass Assisted Payment Terminal</p>

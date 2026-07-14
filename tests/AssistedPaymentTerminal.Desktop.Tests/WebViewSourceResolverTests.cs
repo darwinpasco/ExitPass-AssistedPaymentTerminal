@@ -16,15 +16,19 @@ public sealed class WebViewSourceResolverTests
     [Fact]
     public void Resolve_UsesDevelopmentUrlWhenConfigured()
     {
-        var options = new StartupOptions("CASHIER_ASSISTED_TERMINAL", "http://localhost:5173", AppContext.BaseDirectory, false, false);
+        var options = new StartupOptions("CASHIER_ASSISTED_TERMINAL", "http://localhost:5173", AppContext.BaseDirectory, false, false, false);
 
-        var uri = WebViewSourceResolver.Resolve(options);
+        var source = WebViewSourceResolver.Resolve(options);
 
-        Assert.Equal("http://localhost:5173/", uri.ToString());
+        Assert.Equal("http://localhost:5173/", source.NavigationUri.ToString());
+        Assert.False(source.IsPackaged);
+        Assert.Null(source.PackagedAssetsDirectory);
+        Assert.Null(source.VirtualHostName);
+        Assert.Equal("http://localhost:5173", source.SafeDisplayLocation);
     }
 
     [Fact]
-    public void ResolvePackagedAssetUri_UsesWwwrootIndex()
+    public void ResolvePackagedAssetSource_MapsWwwrootToStableVirtualHost()
     {
         var temp = Path.Combine(Path.GetTempPath(), $"apt-desktop-test-{Guid.NewGuid():N}");
         var wwwroot = Path.Combine(temp, "wwwroot");
@@ -33,9 +37,13 @@ public sealed class WebViewSourceResolverTests
 
         try
         {
-            var uri = WebViewSourceResolver.ResolvePackagedAssetUri(temp);
+            var source = WebViewSourceResolver.ResolvePackagedAssetSource(temp);
 
-            Assert.Equal(new Uri(Path.Combine(wwwroot, "index.html")), uri);
+            Assert.Equal("https://apt.local/index.html", source.NavigationUri.ToString());
+            Assert.True(source.IsPackaged);
+            Assert.Equal(wwwroot, source.PackagedAssetsDirectory);
+            Assert.Equal(WebViewSource.PackagedHostName, source.VirtualHostName);
+            Assert.Contains("packaged frontend assets", source.SafeDisplayLocation);
         }
         finally
         {
@@ -44,14 +52,14 @@ public sealed class WebViewSourceResolverTests
     }
 
     [Fact]
-    public void ResolvePackagedAssetUri_FailsWhenIndexMissing()
+    public void ResolvePackagedAssetSource_FailsWhenIndexMissing()
     {
         var temp = Path.Combine(Path.GetTempPath(), $"apt-desktop-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
 
         try
         {
-            var exception = Assert.Throws<FileNotFoundException>(() => WebViewSourceResolver.ResolvePackagedAssetUri(temp));
+            var exception = Assert.Throws<FileNotFoundException>(() => WebViewSourceResolver.ResolvePackagedAssetSource(temp));
 
             Assert.Contains("Packaged frontend assets were not found", exception.Message);
         }

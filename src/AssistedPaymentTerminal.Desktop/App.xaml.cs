@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 
 namespace AssistedPaymentTerminal.Desktop;
@@ -34,6 +35,29 @@ public partial class App : Application
             if (options.SmokeCheckOnly)
             {
                 Shutdown(0);
+                return;
+            }
+
+            if (options.WebViewSmokeCheck)
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                _ = Dispatcher.BeginInvoke(new Action(async () =>
+                {
+                    var result = await WebViewRenderSmokeRunner.RunAsync(source, TimeSpan.FromSeconds(30));
+                    if (!result.Succeeded)
+                    {
+                        System.Diagnostics.Trace.TraceError(
+                            "WebView render smoke failed. reason={0} url={1}",
+                            result.ErrorMessage,
+                            source.NavigationUri);
+                    }
+
+                    File.WriteAllText(
+                        Path.Combine(Path.GetTempPath(), "exitpass-apt-webview-smoke-result.txt"),
+                        result.Succeeded ? "PASSED" : $"FAILED: {result.ErrorMessage}");
+
+                    Environment.Exit(result.Succeeded ? 0 : 4);
+                }));
                 return;
             }
 
