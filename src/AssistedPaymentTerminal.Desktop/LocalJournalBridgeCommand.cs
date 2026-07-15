@@ -1,0 +1,11 @@
+namespace AssistedPaymentTerminal.Desktop;
+
+public static class LocalJournalBridgeCommand
+{
+    public const string Source = "apt-local-journal";
+    public const string Health = "localJournal.health";
+    public const string CreateOrGetDevelopmentSession = "localJournal.createOrGetDevelopmentSession";
+    public const string StartTender = "localJournal.startTender";
+    public const string RecordCashReceived = "localJournal.recordCashReceived";
+    public const string ReadTenderByParkingSession = "localJournal.readTenderByParkingSession";
+}

@@ -15,17 +15,44 @@ describe("App startup and terminal workflow", () => {
     expect(screen.getByText(/Unsupported APT_PROFILE/)).toBeInTheDocument();
   });
 
-  it("displays bound terminal, site, POS, cashier, shift, and connection context", () => {
+  it("displays Cashier-Assisted Terminal without numbered-mode wording", () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     expect(screen.getByTestId("apt-mode1-shell")).toHaveAttribute("data-app-ready", "true");
-    expect(screen.getByText("Mode 1")).toBeInTheDocument();
-    expect(screen.getByText("APT-DEV-001")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Cashier-Assisted Terminal" })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/Mode 1|Mode 2|Mode1|Mode2/);
+  });
+
+  it("displays compact operational context", () => {
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
+
+    expect(screen.getByLabelText("Operational context")).toBeInTheDocument();
+    expect(screen.getByText("Site")).toBeInTheDocument();
     expect(screen.getByText("ExitPass Demo Parking")).toBeInTheDocument();
+    expect(screen.getByText("Cashier")).toBeInTheDocument();
+    expect(screen.getByText("Development Cashier")).toBeInTheDocument();
+    expect(screen.getByText("Shift")).toBeInTheDocument();
+    expect(screen.getByText("OPEN")).toBeInTheDocument();
+    expect(screen.getByText("Terminal")).toBeInTheDocument();
+    expect(screen.getByText("Development Cashier Terminal 1")).toBeInTheDocument();
+    expect(screen.getByText("POS readiness")).toBeInTheDocument();
+    expect(screen.getByText("Configured: POS-DEV-001")).toBeInTheDocument();
+  });
+
+  it("collapses and expands terminal technical details", async () => {
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
+
+    const details = screen.getByText("Terminal details").closest("details");
+    expect(details).not.toHaveAttribute("open");
+
+    await userEvent.click(screen.getByText("Terminal details"));
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByText("APT-DEV-001")).toBeInTheDocument();
     expect(screen.getByText("POS-DEV-001")).toBeInTheDocument();
-    expect(screen.getByText("Development Cashier (CASHIER-DEV-001)")).toBeInTheDocument();
     expect(screen.getByText("SHIFT-DEV-20260714-A")).toBeInTheDocument();
-    expect(screen.getByText("Controlled mock")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("Terminal details"));
+    expect(details).not.toHaveAttribute("open");
   });
 
   it("resolves a valid ticket and keeps payment stage disabled", async () => {

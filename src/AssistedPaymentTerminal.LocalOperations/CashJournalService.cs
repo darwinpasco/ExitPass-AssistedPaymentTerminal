@@ -60,6 +60,32 @@ public sealed class CashJournalService
         return CashJournalResult<CashCustodySessionSnapshot>.Success(CashCustodySessionSnapshot.FromEntity(session));
     }
 
+    public async Task<CashJournalResult<CashCustodySessionSnapshot>> CreateOrGetCashCustodySessionAsync(
+        CreateCashCustodySessionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        var existing = await dbContext.CashCustodySessions
+            .AsNoTracking()
+            .Where(session => session.CashierId == request.CashierId)
+            .Where(session => session.AuthenticatedCashierSessionReference == request.AuthenticatedCashierSessionReference)
+            .Where(session => session.CashierShiftId == request.CashierShiftId)
+            .Where(session => session.TerminalId == request.TerminalId)
+            .Where(session => session.SiteId == request.SiteId)
+            .Where(session => session.SiteGroupId == request.SiteGroupId)
+            .Where(session => session.PosServerId == request.PosServerId)
+            .Where(session => session.Status == CashCustodySessionStatus.Open)
+            .OrderBy(session => session.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return existing is not null
+            ? CashJournalResult<CashCustodySessionSnapshot>.Success(CashCustodySessionSnapshot.FromEntity(existing))
+            : await CreateCashCustodySessionAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<CashJournalResult<CashTenderSnapshot>> StartCashTenderAsync(
         StartCashTenderRequest request,
         CancellationToken cancellationToken = default)
@@ -262,6 +288,21 @@ public sealed class CashJournalService
         var tender = await dbContext.CashTenders
             .AsNoTracking()
             .SingleOrDefaultAsync(value => value.Id == localCashTenderId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return tender is null ? null : CashTenderSnapshot.FromEntity(tender);
+    }
+
+    public async Task<CashTenderSnapshot?> GetCashTenderByParkingSessionAsync(
+        string parkingSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        var tender = await dbContext.CashTenders
+            .AsNoTracking()
+            .SingleOrDefaultAsync(value => value.ParkingSessionId == parkingSessionId, cancellationToken)
             .ConfigureAwait(false);
 
         return tender is null ? null : CashTenderSnapshot.FromEntity(tender);

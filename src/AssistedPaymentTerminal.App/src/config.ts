@@ -18,6 +18,7 @@ export type AptConfig = {
   centralPmsConnectionMode: "mock" | "live";
   webUiUrl?: string;
   vendorSystemId: string;
+  nonLiveCashCaptureEnabled: boolean;
 };
 
 export type ConfigLoadResult =
@@ -27,6 +28,7 @@ export type ConfigLoadResult =
 declare global {
   interface Window {
     __APT_CONFIG__?: RawAptConfig;
+    __APT_DESKTOP_FLAGS__?: RawAptConfig;
   }
 }
 
@@ -66,6 +68,7 @@ const fileSmokeConfig: RawAptConfig = {
 
 export async function loadAptConfig(): Promise<ConfigLoadResult> {
   const raw = await loadRawConfig();
+  applyDesktopFlags(raw);
   applyQueryOverrides(raw);
   return parseAptConfig(raw);
 }
@@ -105,6 +108,7 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       centralPmsConnectionMode: raw.USE_MOCK_CENTRAL_PMS!.trim().toLowerCase() === "true" ? "mock" : "live",
       webUiUrl: raw.APT_WEB_UI_URL?.trim(),
       vendorSystemId: raw.CENTRAL_PMS_VENDOR_SYSTEM_ID?.trim() || "VENDOR-PMS-DEV",
+      nonLiveCashCaptureEnabled: raw.APT_ENABLE_NON_LIVE_CASH_CAPTURE?.trim().toLowerCase() === "true",
     },
   };
 }
@@ -136,5 +140,15 @@ function applyQueryOverrides(raw: RawAptConfig): void {
   const profile = query.get("aptProfile");
   if (profile !== null) {
     raw.APT_PROFILE = profile;
+  }
+}
+
+function applyDesktopFlags(raw: RawAptConfig): void {
+  if (!window.__APT_DESKTOP_FLAGS__) {
+    return;
+  }
+
+  if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_NON_LIVE_CASH_CAPTURE) {
+    raw.APT_ENABLE_NON_LIVE_CASH_CAPTURE = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_NON_LIVE_CASH_CAPTURE;
   }
 }

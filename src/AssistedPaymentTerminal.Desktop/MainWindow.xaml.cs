@@ -9,12 +9,17 @@ public partial class MainWindow : Window
 {
     private readonly WebViewSource _source;
     private readonly StartupOptions _options;
+    private readonly LocalJournalBridgeHandler _localJournalBridge;
     private bool _eventsRegistered;
 
     public MainWindow(WebViewSource source, StartupOptions options)
     {
         _source = source;
         _options = options;
+        _localJournalBridge = new LocalJournalBridgeHandler(
+            new AssistedPaymentTerminal.LocalOperations.CashJournalService(
+                new AssistedPaymentTerminal.LocalOperations.LocalOperationsDatabaseOptions(options.LocalDatabasePath)),
+            options.EnableNonLiveCashCapture);
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -147,12 +152,18 @@ public partial class MainWindow : Window
                 $"Reference: {errorReference}\nFailure kind: {args.ProcessFailedKind}\nReason: {args.Reason}");
         };
 
-        core.WebMessageReceived += (_, args) =>
+        core.WebMessageReceived += async (_, args) =>
         {
             var message = args.TryGetWebMessageAsString();
-            Trace.TraceInformation(
-                "WebView2 frontend diagnostic. message={0}",
-                message);
+            var response = await _localJournalBridge.HandleWebMessageAsync(message);
+
+            if (response is not null)
+            {
+                core.PostWebMessageAsString(response);
+                return;
+            }
+
+            Trace.TraceInformation("WebView2 frontend diagnostic. message={0}", message);
         };
 
         core.WebResourceResponseReceived += (_, args) =>
@@ -182,6 +193,9 @@ public partial class MainWindow : Window
                   // Diagnostic reporting must never block terminal startup.
                 }
               };
+              window.__APT_DESKTOP_FLAGS__ = {
+                APT_ENABLE_NON_LIVE_CASH_CAPTURE: "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__"
+              };
               const originalError = console.error.bind(console);
               console.error = (...args) => {
                 post("error", args.map(String).join(" "), "console.error");
@@ -194,7 +208,9 @@ public partial class MainWindow : Window
                 post("error", event.reason?.message ?? event.reason, "unhandledrejection");
               });
             })();
-            """);
+            """.Replace(
+                "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
+                _options.EnableNonLiveCashCapture ? "true" : "false"));
     }
 
     private async Task<bool> WaitForReadinessMarkerAsync(TimeSpan timeout)

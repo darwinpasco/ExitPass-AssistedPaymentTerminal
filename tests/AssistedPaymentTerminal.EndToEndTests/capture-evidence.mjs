@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const distRoot = path.resolve(process.cwd(), "src/AssistedPaymentTerminal.App/dist");
-const evidenceRoot = path.resolve(process.cwd(), "docs/evidence/mode1-terminal-shell");
+const evidenceRoot = path.resolve(process.cwd(), "docs/evidence/cashier-assisted-terminal-shell");
 const port = 4174;
 const baseUrl = `http://127.0.0.1:${port}`;
 

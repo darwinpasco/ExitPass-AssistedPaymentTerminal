@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" />
   </ItemGroup>
 

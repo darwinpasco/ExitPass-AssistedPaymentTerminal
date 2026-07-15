@@ -6,7 +6,9 @@ public sealed record StartupOptions(
     string BaseDirectory,
     bool PreferPackagedAssets,
     bool SmokeCheckOnly,
-    bool WebViewSmokeCheck = false)
+    bool WebViewSmokeCheck = false,
+    bool EnableNonLiveCashCapture = false,
+    string? LocalDatabasePath = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
     {
@@ -15,6 +17,8 @@ public sealed record StartupOptions(
         var preferPackagedAssets = false;
         var smokeCheckOnly = false;
         var webViewSmokeCheck = false;
+        var enableNonLiveCashCapture = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_NON_LIVE_CASH_CAPTURE"));
+        var localDatabasePath = Environment.GetEnvironmentVariable("APT_LOCAL_DB_PATH");
 
         foreach (var arg in args)
         {
@@ -39,8 +43,27 @@ public sealed record StartupOptions(
                 smokeCheckOnly = false;
                 webViewSmokeCheck = true;
             }
+            else if (arg.Equals("--enable-non-live-cash-capture", StringComparison.OrdinalIgnoreCase))
+            {
+                enableNonLiveCashCapture = true;
+            }
+            else if (arg.StartsWith("--local-db-path=", StringComparison.OrdinalIgnoreCase))
+            {
+                localDatabasePath = arg["--local-db-path=".Length..];
+            }
         }
 
-        return new StartupOptions(profile, webUiUrl, AppContext.BaseDirectory, preferPackagedAssets, smokeCheckOnly, webViewSmokeCheck);
+        return new StartupOptions(
+            profile,
+            webUiUrl,
+            AppContext.BaseDirectory,
+            preferPackagedAssets,
+            smokeCheckOnly,
+            webViewSmokeCheck,
+            enableNonLiveCashCapture,
+            string.IsNullOrWhiteSpace(localDatabasePath) ? null : localDatabasePath);
     }
+
+    private static bool IsTrue(string? value) =>
+        string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
 }
