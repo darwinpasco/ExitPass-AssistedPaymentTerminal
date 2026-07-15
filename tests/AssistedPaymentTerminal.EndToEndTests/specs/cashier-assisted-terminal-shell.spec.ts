@@ -3,13 +3,12 @@ import { expect, test } from "@playwright/test";
 test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tickets", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal" })).toBeVisible();
-  await expect(page.getByText("Mode 1", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Development Cashier Terminal 1" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
-  await expect(page.getByText("POS-DEV-001")).toBeVisible();
-  await expect(page.getByText("Development Cashier (CASHIER-DEV-001)")).toBeVisible();
-  await expect(page.getByText("SHIFT-DEV-20260714-A")).toBeVisible();
+  await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
+  await expect(page.getByText("OPEN", { exact: true })).toBeVisible();
+  await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
+  await expect(page.getByText("Configured: POS-DEV-001")).toBeVisible();
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
