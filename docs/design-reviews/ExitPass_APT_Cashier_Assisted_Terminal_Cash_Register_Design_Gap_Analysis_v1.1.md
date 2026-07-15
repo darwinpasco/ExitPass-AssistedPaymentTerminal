@@ -1,4 +1,4 @@
-# ExitPass APT Mode 1 Cash-Register Design Gap Analysis v1.0
+# ExitPass APT Cashier-Assisted Terminal Cash-Register Design Gap Analysis v1.1
 
 Date: 2026-07-15
 
@@ -6,21 +6,29 @@ Primary repository: `D:\SourceCodes\ExitPass-AssistedPaymentTerminal`
 
 Read-only reference repository: `D:\SourceCodes\ExitPass`
 
-Target branch: `docs/mode1-cash-register-design-gap-analysis`
+Target branch: `docs/rewrite-cashier-assisted-terminal-gap-analysis`
 
-Scope: Design analysis only. No production code, database migration, terminal shell change, Mode 2 implementation, push, or pull request is part of this report.
+Scope: Design terminology, scope, and product-classification correction only. This v1.1 document supersedes v1.0 and narrows the completed cash-register gap analysis to the Windows Cashier-Assisted Terminal. It does not perform another repository audit, reopen the completed gap analysis, define production code, create database migrations, change the terminal shell, analyze Continuity Terminal behavior, push, or create a pull request.
+
+Version-change statement: v1.1 removes the obsolete numbered-mode designations, reframes the analysis around the Cashier-Assisted Terminal, treats the Continuity Terminal as a separate future BCP/degraded-operation terminal, and does not materially reopen or repeat the completed gap analysis.
 
 ## 1. Executive decision
 
-Mode 1 is not sufficiently defined today as a safe cashier POS client and computerized cash register. The current APT BRD/system design and current APT repository correctly preserve the major ExitPass authority boundaries, but they stop at generic "payment-capable terminal" behavior and the existing implementation stops before payment collection. They do not define the cash-register responsibilities now required for physical cash tender: local durable custody evidence, drawer/session accounting, cash tender state, cashier attestation, restart recovery, cash-specific idempotency, receipt print journaling, and reconciliation ownership.
+The Cashier-Assisted Terminal is the Windows fixed-station Cashier POS Client and computerized Cash Register Terminal for normal staffed parking operations. It is the focus of this analysis. The current Assisted Payment Terminal BRD/system design and current APT repository correctly preserve the major ExitPass authority boundaries, but they stop at generic "payment-capable terminal" behavior and the existing implementation stops before payment collection. They do not define the cash-register responsibilities now required for physical cash tender: local durable custody evidence, drawer/session accounting, cash tender state, cashier attestation, restart recovery, cash-specific idempotency, receipt print journaling, and reconciliation ownership.
 
-The design should be revised before cash tender implementation. The revision should not reopen the approved Windows, React/TypeScript/Vite, .NET/WPF/WebView2, or separate-repository decisions. The revision should explicitly classify Mode 1 as:
+The design should be revised before cash tender implementation. The revision should not reopen the approved Windows, React/TypeScript/Vite, .NET/WPF/WebView2, or separate-repository decisions. The revision should explicitly classify the Cashier-Assisted Terminal as:
 
-> ExitPass Assisted Payment Terminal Mode 1 is a Windows fixed-station Cashier POS Client and computerized Cash Register Terminal connected to Central PMS and the Site POS Server. It records terminal-local physical cash and device facts locally, while Central PMS remains payment-finality authority and POS Server remains fiscal authority.
+> The ExitPass Cashier-Assisted Terminal is a Windows fixed-station Cashier POS Client and computerized Cash Register Terminal for normal staffed parking operations. It records terminal-local physical cash and device facts in a durable local operational database, while Central PMS retains canonical payment authority and POS Server retains fiscal authority.
+
+The Continuity Terminal is a separate future terminal for approved BCP and degraded-operation scenarios. It is outside this cash-register design gap analysis and must not influence Cashier-Assisted Terminal requirements unless a shared backend contract is explicitly approved.
+
+Do not assume the Cashier-Assisted Terminal and Continuity Terminal must use the same operating system, deployment package, hardware profile, local database posture, or device integrations. Shared backend authority boundaries and reusable business contracts may exist, but shared application implementation is not a requirement established by this analysis.
+
+The Cashier-Assisted Terminal remains separate from Operator Console. All previously approved cash, drawer, shift, refund, fiscal, receipt, authority, and Operator Console decisions remain unchanged by this terminology and scope correction.
 
 Final readiness classification: `ready_for_design_revision`.
 
-This means the design gap register and decisions are now concrete enough to update the design documents. It does not mean Mode 1 is ready for cash tender implementation.
+This means the design gap register and decisions are now concrete enough to update the design documents. It does not mean the Cashier-Assisted Terminal is ready for cash tender implementation.
 
 ## 2. Sources inspected
 
@@ -28,12 +36,12 @@ When sources conflict, the governing order for this review is: fixed product dec
 
 | Source | Purpose | Version/status | Authority posture | Cash tender relevance | Local DB relevance | Shift/drawer relevance | Central PMS finality relevance | POS Server fiscal relevance | Contradictions or missing detail |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `README.md` | Current APT product boundary and run/test instructions | Current repo, shell-slice README | Authoritative for current repo baseline | Says payment collection is disabled | Says no local DB/device service | Shows static cashier/shift config only | Preserves Central PMS authority | Preserves POS Server authority | Does not classify Mode 1 as cash register or POS client; no cash lifecycle |
+| `README.md` | Current APT product boundary and run/test instructions | Current repo, shell-slice README | Authoritative for current repo baseline | Says payment collection is disabled | Says no local DB/device service | Shows static cashier/shift config only | Preserves Central PMS authority | Preserves POS Server authority | Does not classify Cashier-Assisted Terminal as cash register or POS client; no cash lifecycle |
 | `contracts/central-pms/vendor-parking-resolve.contract.json` | Pinned Central PMS resolve snapshot | Current inspected snapshot | Supporting contract snapshot | Provides session/payable basis only | None | None | No cash/payment finality path | None | No cash-payment endpoint |
-| `src/AssistedPaymentTerminal.App/src/App.tsx`, `terminalContext.ts`, `config.ts`, `api/*` | Current Mode 1 UI and Central PMS adapter | Current implementation baseline | Authoritative for actual APT behavior | Payment UI intentionally blocked | No local persistence | Static cashier/shift context | Resolve/recalculate only | None | Uses mock recalculation and static local config; no auth, custody, journal, devices |
+| `src/AssistedPaymentTerminal.App/src/App.tsx`, `terminalContext.ts`, `config.ts`, `api/*` | Current Cashier-Assisted Terminal UI and Central PMS adapter | Current implementation baseline | Authoritative for actual APT behavior | Payment UI intentionally blocked | No local persistence | Static cashier/shift context | Resolve/recalculate only | None | Uses mock recalculation and static local config; no auth, custody, journal, devices |
 | `src/AssistedPaymentTerminal.Desktop/README.md`, WPF source | Thin WebView2 host design | Current implementation baseline | Authoritative for shell behavior | No cash drawer/printer/device service | No local DB | No shift enforcement | None | None | Shell is not responsible for cashier/device logic yet |
-| `docs/evidence/mode1-terminal-shell/*` | Validation evidence for shell slice | Current evidence | Supporting | Confirms no payment/fiscal/devices | None | Bound-context screenshots only | None | None | Useful baseline, not cash evidence |
-| `git log --oneline --stat` | Mode 1 shell history | Current branch history | Supporting implementation history | Shows shell and WebView fix only | None | None | None | None | No cash-register commits exist |
+| Terminal-shell validation evidence under `docs/evidence/` | Validation evidence for shell slice | Current evidence | Supporting | Confirms no payment/fiscal/devices | None | Bound-context screenshots only | None | None | Useful baseline, not cash evidence |
+| `git log --oneline --stat` | Cashier-Assisted Terminal shell history | Current branch history | Supporting implementation history | Shows shell and WebView fix only | None | None | None | None | No cash-register commits exist |
 | `docs/v1.3/ExitPass_BRD_v1.3.md` | Core v1.3 business authority baseline | v1.3, 2026-07-01, approved baseline | Authoritative business baseline | Names cashier-assisted terminal but not cash custody | Defers DB detail | Mentions cashier/shift accountability | Central PMS owns payment-linked state/finality | Fiscal before ExitAuthorization | Not cash-register-specific |
 | `docs/v1.3/ExitPass_System_Design_v1.3.md` | Core v1.3 architecture baseline | v1.3 | Authoritative architecture baseline | APT is payment-capable, not finality authority | Defers terminal implementation/local storage | Mentions device/shift context | Central PMS owns finality | POS Server owns fiscal | Terminal final implementation architecture deferred |
 | `docs/v1.3/assisted-payment-terminal/ExitPass_Assisted_Payment_Terminal_BRD_v1.0.md` | APT companion BRD | v1.0, approved for v1.3 baseline | Authoritative APT business baseline, now incomplete | Mentions payment collection, not physical cash register custody | No local durable DB design | Mentions login/shift/session but not drawer | Explicitly not finality authority | Site POS Server fiscal routing | Says APT shall not "operate as a separate POS system per terminal"; needs clarification so POS client/cash register is not mistaken for fiscal authority |
@@ -44,14 +52,14 @@ When sources conflict, the governing order for this review is: fixed product dec
 | `docs/v1.3/pos-server-api/ExitPass_Central_PMS_to_POS_Server_Fiscal_Issuance_Integration_Contract_v1.0.md` | Central PMS to POS Server fiscal integration | v1.0 | Authoritative integration contract | Not cash-specific | None | Channel/terminal context only | Central PMS initiates fiscal after finality | Readback/idempotency described | Printable SI, reprints, void/refund/cancel/return fiscal adjustments are not implemented contracts |
 | `docs/v1.3/operator-console/ExitPass_Operator_Console_BRD_v1.1.md` | Operator Console boundary | v1.1 approved | Authoritative for Operator Console | Operator Console must not collect payment | None | Device/shift governance only | Read-only payment context | Read-only fiscal context / governance | No APT cash supervision model |
 | `docs/v1.3/operator-console/ExitPass_Operator_Console_System_Design_SDD_v1.0.md` and contracts | Operator Console design and fiscal visibility contracts | v1.0 | Supporting/authoritative for OC design | Non-payment surface | None | Shift/device visibility | No finality mutation | Fiscal status viewer/action logs | Lacks cash drawer/session/shortage/overage views |
-| `docs/v1.3/continuity/*` | Boundary awareness for Mode 2/BCP | v1.0 approved | Authoritative only for continuity boundary | Warns against unmanaged offline payment | Open | Continuity terminal validation only | Payment uncertainty not finality | Fiscal exception not exit authorization | Do not use Mode 2 to overcomplicate Mode 1 |
+| `docs/v1.3/continuity/*` | Boundary awareness for Continuity Terminal/BCP | v1.0 approved | Authoritative only for continuity boundary | Warns against unmanaged offline payment | Open | Continuity terminal validation only | Payment uncertainty not finality | Fiscal exception not exit authorization | Do not use Continuity Terminal to overcomplicate Cashier-Assisted Terminal |
 | Central PMS code under `src/Services/CentralPms` | Actual API/runtime facts | Current source | Authoritative implementation reality | No public cash payment endpoint | Central DB only | Operator Console shift/device objects exist separately | Payment attempt/create, confirmation, finality, exit auth are Central PMS-owned | Fiscal status/void/readback references exist | Existing payment-attempt API is provider-oriented and returns provider handoff |
 | Payment Orchestrator code under `src/Services/PaymentOrchestrator` | Provider execution and outcomes | Current source | Authoritative implementation reality | No cash provider rail | None | None | Reports provider outcomes, not finality | None | Cash should not be shoehorned into provider outcome model |
 | Gate Integration source references | Gate command/consumption boundary | Current source | Supporting implementation reality | None | None | None | Consumes Central PMS exit auth | None | APT must not command gates |
 
-## 3. Current Mode 1 posture
+## 3. Current Cashier-Assisted Terminal Product Posture
 
-Current APT implementation is a visible terminal shell, not a cash register implementation. It supports:
+Current APT implementation is a visible Cashier-Assisted Terminal shell, not a cash register implementation. It supports:
 
 - Windows fixed-station app posture through WPF/WebView2.
 - React/TypeScript/Vite UI.
@@ -59,7 +67,7 @@ Current APT implementation is a visible terminal shell, not a cash register impl
 - Static terminal/site/POS/cashier/shift display.
 - Central PMS session resolve by ticket reference.
 - Payable/tariff expiry display and mock recalculation.
-- Explicit refusal of payment collection, fiscal issuance, receipt numbering, device integration, and Mode 2.
+- Explicit refusal of payment collection, fiscal issuance, receipt numbering, device integration, and Continuity Terminal behavior.
 
 Current unsafe assumptions for cash-register posture:
 
@@ -69,7 +77,7 @@ Current unsafe assumptions for cash-register posture:
 - Existing Central PMS payment-attempt API can represent cash. It cannot; it requires a provider code and handoff.
 - Fiscal success plus print success can be treated as a single backend status. That is incomplete; fiscal truth and local print attempts are separate facts.
 
-## 4. Recommended Mode 1 cash-register definition
+## 4. Recommended Cashier-Assisted Terminal Cash-Register Definition
 
 The APT BRD and System Design should use the following terms explicitly:
 
@@ -78,9 +86,9 @@ The APT BRD and System Design should use the following terms explicitly:
 - Cashier Payment Workstation
 - Cash Register Terminal connected to the ExitPass POS Server
 
-Preferred product description:
+Preferred product definition:
 
-> Assisted Payment Terminal Mode 1 is the ExitPass Windows fixed-station Cashier POS Client and computerized Cash Register Terminal for staffed parking operations. It records terminal-local physical cash custody and device facts in a durable local operational database, submits cash payment facts idempotently to Central PMS for canonical payment state, and relies on the Site POS Server for fiscal documents and fiscal numbering.
+> The ExitPass Cashier-Assisted Terminal is a Windows fixed-station Cashier POS Client and computerized Cash Register Terminal for normal staffed parking operations. It records terminal-local physical cash and device facts in a durable local operational database, while Central PMS retains canonical payment authority and POS Server retains fiscal authority.
 
 Do not rename the product. The clarification is a functional classification, not a product rename. The phrase "not a separate POS system per terminal" should be revised to "not an independent fiscal POS authority per terminal" so it does not contradict the approved cash-register classification.
 
@@ -129,15 +137,17 @@ Do not rename the product. The clarification is a functional classification, not
 
 Target posture:
 
-- APT local database is authoritative only for terminal-local physical and device facts.
-- Central PMS is authoritative for canonical payment state.
-- POS Server is authoritative for fiscal truth.
-- Vendor PMS is authoritative for tariff and raw parking-session truth.
+- Vendor PMS is authoritative for raw parking sessions and tariffs.
+- Central PMS is authoritative for accepted payable basis, canonical payment state, and payment finality.
+- Payment Orchestrator is authoritative for provider execution and verified provider outcomes.
+- POS Server is authoritative for fiscal documents, fiscal numbering, fiscal records, receipt fiscal content, and fiscal voids.
+- Central PMS and Gate Integration retain exit-authorization and gate authority.
+- The Cashier-Assisted Terminal local database is authoritative only for terminal-local physical cash and device facts.
 - Audit evidence does not silently replace business authority.
 
 ## 6. Cash-tender lifecycle
 
-Smallest coherent Mode 1 cash tender state model:
+Smallest coherent Cashier-Assisted Terminal cash-tender state model:
 
 | State | Meaning | Allowed next states |
 | --- | --- | --- |
@@ -207,15 +217,15 @@ Availability checks before drawer open:
 - Terminal/site/POS Server binding valid.
 - Local DB writable and healthy.
 - Central PMS reachable enough to accept or at least preflight cash command unless offline cash is explicitly approved. Recommendation: do not accept cash if Central PMS is unavailable.
-- POS Server/fiscal readiness check should pass before drawer open for normal Mode 1. Recommendation: do not accept cash if POS Server is unavailable or fiscal path is known blocked, unless an approved supervisor exception exists.
+- POS Server/fiscal readiness check should pass before drawer open for normal Cashier-Assisted Terminal operation. Recommendation: do not accept cash if POS Server is unavailable or fiscal path is known blocked, unless an approved supervisor exception exists.
 
 ## 8. Local operational database design gaps
 
-Existing designs mention local storage/evidence and leave exact DB changes open; they do not define the required local operational database. Mode 1 requires one before physical cash tender.
+Existing designs mention local storage/evidence and leave exact DB changes open; they do not define the required local operational database. The Cashier-Assisted Terminal requires one before physical cash tender.
 
 Recommended posture:
 
-- Use SQLite through EF Core for the first Windows fixed-station implementation, with WAL mode, explicit transactions, and deterministic schema migrations.
+- Use SQLite through EF Core as the approved local operational database baseline for the Windows fixed-station Cashier-Assisted Terminal, with WAL mode, explicit transactions, and deterministic schema migrations.
 - Require database-at-rest encryption for controlled UAT and production. Preferred approach: SQLCipher-capable SQLite provider or an approved encrypted embedded DB. If SQLCipher licensing/support is rejected, use a Windows-protected encrypted database file strategy approved by security before cash UAT.
 - Store key material with Windows DPAPI or certificate-backed Windows key protection bound to registered terminal identity. Do not store reusable secrets in plaintext.
 - Keep the DB append-oriented for cash/device/journal events. Allow mutable rows only for derived local projections and sync attempt counters.
@@ -351,7 +361,7 @@ Gaps for APT:
 - No original print versus reprint rules for APT.
 - No print-attempt audit contract between APT and Central PMS/POS Server.
 - No decision whether APT prints a POS Server-provided payload or renders locally from safe fiscal fields. Recommendation: POS Server should own the fiscal receipt/SI payload or render template; APT should only spool/print and journal local print outcome.
-- Successful payment without fiscal issuance must not be considered complete for normal Mode 1, because fiscal issuance is required before ExitAuthorization. It may become `FISCAL_PENDING` or exception state, not `COMPLETED`.
+- Successful payment without fiscal issuance must not be considered complete for normal Cashier-Assisted Terminal, because fiscal issuance is required before ExitAuthorization. It may become `FISCAL_PENDING` or exception state, not `COMPLETED`.
 
 ## 13. Refund, reversal, correction, and void gaps
 
@@ -458,7 +468,7 @@ Cross-repository changes:
 
 | Gap ID | Title | Affected source file | Affected section | Current statement/omission | Problem | Risk | Recommended correction | PO decision required | Repo | Severity | Blocker | Stage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| APT-CR-GAP-001 | Mode 1 not explicitly classified as cash register | APT BRD, APT System Design, APT README | Executive/product boundary | "payment-capable terminal" and "cashier-assisted" | Weak terminology hides cash custody duties | Design under-scopes audit/local DB/devices | Add Cashier POS Client/computerized cash register classification | Yes | APT + ExitPass | CRITICAL | blocks_design_lock | design closure |
+| APT-CR-GAP-001 | Cashier-Assisted Terminal not explicitly classified as cash register | APT BRD, APT System Design, APT README | Executive/product boundary | "payment-capable terminal" and "cashier-assisted" | Weak terminology hides cash custody duties | Design under-scopes audit/local DB/devices | Add Cashier POS Client/computerized cash register classification | Yes | APT + ExitPass | CRITICAL | blocks_design_lock | design closure |
 | APT-CR-GAP-002 | "Not a separate POS system per terminal" conflicts with POS client wording | APT BRD | Explicit Non-Authority Scope | Says APT shall not operate as separate POS system per terminal | Could be read to forbid cash-register terminal | Blocks clear product posture | Revise to "not independent fiscal POS authority" | Yes | ExitPass | HIGH | blocks_design_lock | design closure |
 | APT-CR-GAP-003 | No cash-payment Central PMS contract | Central PMS contracts/code | Payment attempts | Provider-oriented payment attempt only | Cannot record cash receipt/finality safely | Duplicate or missing cash payments | Define idempotent terminal cash-payment command/readback | Yes | ExitPass | CRITICAL | blocks_cash_implementation | design closure |
 | APT-CR-GAP-004 | No local durable operational DB design | APT System Design, APT repo | DB/open questions | DB exact changes open, no APT DB | Physical cash cannot rely on memory/remote call | Cash loss, disputes after crash | Add local DB design with append-only journal/outbox | Yes | APT | CRITICAL | blocks_cash_implementation | design closure |
@@ -468,7 +478,7 @@ Cross-repository changes:
 | APT-CR-GAP-008 | Static cashier/shift config in implementation | APT `config.ts`/README | Runtime config | Dev config supplies cashier/shift | Not authentication/authorization | Fraud and attribution weakness | Replace before cash with backend-authenticated shift context | Yes | APT | HIGH | blocks_first_cash_transaction | cash implementation |
 | APT-CR-GAP-009 | No drawer-open/device journal | APT repo | Device integration | No device service | No proof drawer opened/failed | Cash disputes | Add local device service and `device_events` journal | Yes | APT | HIGH | blocks_first_cash_transaction | cash implementation |
 | APT-CR-GAP-010 | No denomination policy | APT docs | Cash lifecycle | Omitted | Cannot reconcile counts/float | Weak drawer variance proof | Decide mandatory/optional by stage | Yes | APT | MEDIUM | blocks_controlled_uat | design closure |
-| APT-CR-GAP-011 | No rule for cash when Central PMS unavailable | APT/Continuity docs | Offline payment | Offline payment open | Drawer may accept unconfirmable cash | Uncontrolled receivables | Default fail closed for Mode 1; explicit exception only | Yes | APT + ExitPass | HIGH | blocks_first_cash_transaction | design closure |
+| APT-CR-GAP-011 | No rule for cash when Central PMS unavailable | APT/Continuity docs | Offline payment | Offline payment open | Drawer may accept unconfirmable cash | Uncontrolled receivables | Default fail closed for the Cashier-Assisted Terminal; explicit exception only | Yes | APT + ExitPass | HIGH | blocks_first_cash_transaction | design closure |
 | APT-CR-GAP-012 | No rule for cash when POS Server unavailable | APT/POS/Continuity docs | Fiscal exception | Fiscal exceptions discussed generally | Paid customer may lack fiscal path | Exit block/customer dispute | Default fail closed before drawer open | Yes | APT + ExitPass | HIGH | blocks_first_cash_transaction | design closure |
 | APT-CR-GAP-013 | Existing payment API cannot represent amount tendered/change | Central PMS `CreatePaymentAttemptRequest` | Public payment attempts | parking session, tariff snapshot, provider only | Cash overpay/change facts lost | Drawer mismatch | Add cash tender fields in separate endpoint | Yes | ExitPass | HIGH | blocks_cash_implementation | design closure |
 | APT-CR-GAP-014 | No restart recovery/outbox design | APT docs | Recovery | Omitted | Crash after cash receipt unsafe | Duplicate or missing backend command | Add command journal/outbox/readback rules | Yes | APT | HIGH | blocks_first_cash_transaction | cash implementation |
@@ -484,7 +494,7 @@ Cross-repository changes:
 | APT-CR-GAP-024 | No terminal clock authority/drift rule | APT/Continuity/POS docs | Security | POS clock open; APT omitted | Cash/fiscal ordering disputed | Audit weakness | Backend time comparison and drift alert | Yes | APT | MEDIUM | blocks_production | controlled UAT |
 | APT-CR-GAP-025 | No APT reconciliation exception taxonomy | APT/Central PMS docs | Reconciliation | Generic reconciliation exists | Cash-specific exceptions not classified | Slow closure | Adopt exception classes in Section 11 | Yes | APT + ExitPass | MEDIUM | blocks_controlled_uat | design closure |
 | APT-CR-GAP-026 | No customer-present failure messaging | APT docs | UX/workflow | Fiscal/payment display generic | Cashier may tell customer wrong status | Disputes and exit blocking | Add exact copy/flow for pending/unknown/failures | Yes | APT | MEDIUM | blocks_controlled_uat | cash implementation |
-| APT-CR-GAP-027 | Mode 2 references may overfit Mode 1 | APT/Continuity docs | Continuity | Offline/degraded questions near Mode 1 | Could overcomplicate normal cash register | Scope creep | Keep Mode 1 fail-closed; do not implement Mode 2 | Yes | APT | LOW | informational | design closure |
+| APT-CR-GAP-027 | Continuity Terminal references may overfit Cashier-Assisted Terminal | APT/Continuity docs | Continuity | Offline/degraded questions near Cashier-Assisted Terminal | Could overcomplicate normal cash register | Scope creep | Keep the Cashier-Assisted Terminal fail-closed; do not let Continuity Terminal requirements drive this cash-register analysis | Yes | APT | LOW | informational | design closure |
 | APT-CR-GAP-028 | Generated/published APT contracts absent | APT README, contracts snapshot | Contract strategy | Narrow JSON snapshot only | Drift from Central PMS/POS contracts | Integration errors | Publish OpenAPI/package for APT endpoints | Yes | APT + ExitPass | LOW | deferrable | cash implementation |
 
 Gap counts: CRITICAL 5, HIGH 13, MEDIUM 8, LOW 2.
@@ -493,7 +503,7 @@ Gap counts: CRITICAL 5, HIGH 13, MEDIUM 8, LOW 2.
 
 | Document | Owning repo | Section to add/update | Purpose | Priority | Prerequisite decisions |
 | --- | --- | --- | --- | --- | --- |
-| APT BRD | ExitPass | Product purpose, boundary, non-authority, Mode 1 | Classify Mode 1 as cash-register POS client | P0 | D-001 |
+| APT BRD | ExitPass | Product purpose, boundary, non-authority, Cashier-Assisted Terminal | Classify the Cashier-Assisted Terminal as a cash-register POS client | P0 | D-001 |
 | APT System Design | ExitPass | Workflow/state, local DB, device service, security, recovery | Define cash lifecycle and local durability | P0 | D-002 to D-007 |
 | ExitPass BRD | ExitPass | Assisted Payment Terminal positioning | Clarify functional classification without renaming | P1 | D-001 |
 | ExitPass System Design | ExitPass | Authority model, APT context, observability | Add local physical-fact authority | P1 | D-001, D-002 |
@@ -545,7 +555,7 @@ Smallest safe first implementation slice after design revision:
 | D-001 | Formal classification as computerized cash register? | Explicit / implicit | Explicit | Unlocks cash-local design scope | Design closure |
 | D-002 | Local DB technology? | SQLite+EF Core, encrypted SQLite/SQLCipher, other embedded DB, no DB profile | SQLite+EF Core with approved encryption before UAT | Balances Windows support and durability | Design closure |
 | D-003 | Mandatory denomination capture? | Mandatory all tenders, mandatory only counts, optional tender denominations | Mandatory opening/closing; transaction denominations mandatory for UAT unless waived | Better reconciliation vs cashier speed | Design closure |
-| D-004 | Accept cash when Central PMS unavailable? | Yes under local queue, no, supervisor exception | No for Mode 1 normal operation | Avoids offline finality ambiguity | Design closure |
+| D-004 | Accept cash when Central PMS unavailable? | Yes under local queue, no, supervisor exception | No for normal Cashier-Assisted Terminal operation | Avoids offline finality ambiguity | Design closure |
 | D-005 | Accept cash when POS Server unavailable? | Yes fiscal-pending, no, supervisor exception | No for normal cash tender before drawer open | Avoids paid/no fiscal flow | Design closure |
 | D-006 | Exact physical custody point? | Drawer opened, cashier confirms amount, backend confirms | Cashier confirms and local `CASH_RECEIVED` commits | Defines irreversible event | Design closure |
 | D-007 | Cancellation after cash receipt? | Allow cancel, require refund/return event, supervisor only | No cancel; append return/refund/correction | Preserves evidence | Design closure |
