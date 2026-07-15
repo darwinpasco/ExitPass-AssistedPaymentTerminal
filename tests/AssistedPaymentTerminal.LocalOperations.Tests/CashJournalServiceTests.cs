@@ -155,11 +155,11 @@ public sealed class CashJournalServiceTests
         using var database = TestDatabase.Create();
         var service = database.CreateService();
         var session = await CreateSessionAsync(service);
-        var firstTender = await StartTenderAsync(service, session.Id, parkingSessionId: "parking-session-dup");
+        var firstTender = await StartTenderAsync(service, session.Id, parkingSessionId: "55555555-5555-4555-8555-555555555555");
 
         var duplicate = await service.StartCashTenderAsync(TestRequests.StartTender(
             session.Id,
-            parkingSessionId: "parking-session-dup",
+            parkingSessionId: "55555555-5555-4555-8555-555555555555",
             localIdempotencyIdentity: "idem-duplicate"));
 
         Assert.False(duplicate.IsSuccess);
@@ -222,7 +222,7 @@ public sealed class CashJournalServiceTests
     private static async Task<CashTenderSnapshot> StartTenderAsync(
         CashJournalService service,
         Guid cashCustodySessionId,
-        string parkingSessionId = "parking-session-001",
+        string parkingSessionId = "33333333-3333-4333-8333-333333333333",
         decimal amountDue = 100m,
         decimal amountTendered = 100m)
     {

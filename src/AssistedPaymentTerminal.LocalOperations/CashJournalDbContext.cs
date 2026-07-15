@@ -13,6 +13,10 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<CashDenominationEntry> CashDenominationEntries => Set<CashDenominationEntry>();
 
+    public DbSet<TerminalCashPaymentOutboxCommand> TerminalCashPaymentOutboxCommands => Set<TerminalCashPaymentOutboxCommand>();
+
+    public DbSet<TerminalCashPaymentSubmissionAttempt> TerminalCashPaymentSubmissionAttempts => Set<TerminalCashPaymentSubmissionAttempt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
@@ -87,6 +91,45 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
                 .WithMany(cashEvent => cashEvent.DenominationEntries)
                 .HasForeignKey(entry => entry.CashTenderEventId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TerminalCashPaymentOutboxCommand>(entity =>
+        {
+            entity.ToTable("terminal_cash_payment_outbox_commands");
+            entity.HasKey(command => command.Id);
+            entity.Property(command => command.RequestPayloadJson).IsRequired();
+            entity.Property(command => command.RequestPayloadHash).HasMaxLength(128).IsRequired();
+            entity.Property(command => command.IdempotencyKey).HasMaxLength(160).IsRequired();
+            entity.Property(command => command.OriginalCorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(command => command.CentralPmsTarget).HasMaxLength(512).IsRequired();
+            entity.Property(command => command.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(command => command.LastSafeErrorCode).HasMaxLength(128);
+            entity.Property(command => command.ResultClassification).HasMaxLength(128);
+            entity.Property(command => command.FirstAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.LastAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.NextRetryAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.ConfirmedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.UpdatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasIndex(command => command.TerminalCashTenderId).IsUnique();
+            entity.HasIndex(command => command.IdempotencyKey).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashPaymentSubmissionAttempt>(entity =>
+        {
+            entity.ToTable("terminal_cash_payment_submission_attempts");
+            entity.HasKey(attempt => attempt.Id);
+            entity.Property(attempt => attempt.OperationType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(attempt => attempt.OutcomeClassification).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(attempt => attempt.SafeErrorCode).HasMaxLength(128);
+            entity.Property(attempt => attempt.CorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(attempt => attempt.StartedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(attempt => attempt.CompletedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(attempt => attempt.LocalCommand)
+                .WithMany(command => command.Attempts)
+                .HasForeignKey(attempt => attempt.LocalCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(attempt => new { attempt.LocalCommandId, attempt.AttemptSequence }).IsUnique();
         });
     }
 }

@@ -231,6 +231,11 @@ public sealed class CashJournalService
 
         dbContext.CashTenderEvents.Add(receivedEvent);
 
+        if (request.SimulateOutboxCreationFailure)
+        {
+            throw new InvalidOperationException("Simulated outbox creation failure.");
+        }
+
         foreach (var denomination in request.Denominations)
         {
             dbContext.CashDenominationEntries.Add(new CashDenominationEntry
@@ -241,6 +246,36 @@ public sealed class CashJournalService
                 DenominationValue = denomination.DenominationValue,
                 Quantity = denomination.Quantity,
                 CreatedAt = now
+            });
+        }
+
+        var existingOutbox = await dbContext.TerminalCashPaymentOutboxCommands
+            .SingleOrDefaultAsync(command => command.TerminalCashTenderId == tender.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (existingOutbox is null)
+        {
+            var payload = TerminalCashPaymentPayloadFactory.CreatePayload(
+                tender,
+                tender.CashCustodySession!,
+                receivedEvent,
+                request.Denominations);
+            var payloadJson = TerminalCashPaymentPayloadFactory.Serialize(payload);
+
+            dbContext.TerminalCashPaymentOutboxCommands.Add(new TerminalCashPaymentOutboxCommand
+            {
+                Id = Guid.NewGuid(),
+                TerminalCashTenderId = tender.Id,
+                CashCustodySessionId = tender.CashCustodySessionId,
+                RequestPayloadJson = payloadJson,
+                RequestPayloadHash = TerminalCashPaymentPayloadFactory.ComputeHash(payloadJson),
+                IdempotencyKey = tender.LocalIdempotencyIdentity,
+                OriginalCorrelationId = tender.CorrelationId,
+                CentralPmsTarget = request.CentralPmsTarget,
+                Status = TerminalCashPaymentCommandStatus.Pending,
+                AttemptCount = 0,
+                CreatedAt = now,
+                UpdatedAt = now
             });
         }
 
@@ -325,7 +360,35 @@ public sealed class CashJournalService
             .ConfigureAwait(false);
     }
 
-    private CashJournalDbContext CreateDbContext()
+    public async Task<TerminalCashPaymentOutboxCommand?> GetTerminalCashPaymentOutboxCommandByTenderAsync(
+        Guid terminalCashTenderId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        return await dbContext.TerminalCashPaymentOutboxCommands
+            .AsNoTracking()
+            .SingleOrDefaultAsync(command => command.TerminalCashTenderId == terminalCashTenderId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<TerminalCashPaymentSubmissionAttempt>> GetTerminalCashPaymentAttemptsAsync(
+        Guid localCommandId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        return await dbContext.TerminalCashPaymentSubmissionAttempts
+            .AsNoTracking()
+            .Where(attempt => attempt.LocalCommandId == localCommandId)
+            .OrderBy(attempt => attempt.AttemptSequence)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public CashJournalDbContext CreateDbContext()
     {
         var connectionString = new SqliteConnectionStringBuilder
         {
