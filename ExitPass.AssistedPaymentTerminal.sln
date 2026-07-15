@@ -11,6 +11,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{EF0C5216
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.Desktop.Tests", "tests\AssistedPaymentTerminal.Desktop.Tests\AssistedPaymentTerminal.Desktop.Tests.csproj", "{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.LocalOperations", "src\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj", "{5BF6C561-F378-49A1-A331-F95391C24D03}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.LocalOperations.Tests", "tests\AssistedPaymentTerminal.LocalOperations.Tests\AssistedPaymentTerminal.LocalOperations.Tests.csproj", "{C176E6F3-878F-420B-9A7D-C9214CFA3CAF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{001D7FD3-28AC-487F-965E-DC58CA05F815}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.LocalOperations.Proof", "tools\AssistedPaymentTerminal.LocalOperations.Proof\AssistedPaymentTerminal.LocalOperations.Proof.csproj", "{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -28,9 +36,24 @@ Global
 		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5BF6C561-F378-49A1-A331-F95391C24D03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5BF6C561-F378-49A1-A331-F95391C24D03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5BF6C561-F378-49A1-A331-F95391C24D03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5BF6C561-F378-49A1-A331-F95391C24D03}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C176E6F3-878F-420B-9A7D-C9214CFA3CAF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C176E6F3-878F-420B-9A7D-C9214CFA3CAF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C176E6F3-878F-420B-9A7D-C9214CFA3CAF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C176E6F3-878F-420B-9A7D-C9214CFA3CAF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2EE15A1F-CCE5-474B-A093-9A05837D5C50} = {0E2ACCC5-C73D-4ABA-AFE0-1F8F178976C5}
 		{6EFBA611-53F5-46DF-A3BA-A02D187DBB07} = {EF0C5216-7436-46A5-81CF-1AB0AC845A1A}
+		{5BF6C561-F378-49A1-A331-F95391C24D03} = {0E2ACCC5-C73D-4ABA-AFE0-1F8F178976C5}
+		{C176E6F3-878F-420B-9A7D-C9214CFA3CAF} = {EF0C5216-7436-46A5-81CF-1AB0AC845A1A}
+		{475C71E3-2C85-4C0E-97A0-AC2AB2F3BA56} = {001D7FD3-28AC-487F-965E-DC58CA05F815}
 	EndGlobalSection
 EndGlobal
