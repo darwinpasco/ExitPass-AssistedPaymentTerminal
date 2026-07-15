@@ -1,0 +1,91 @@
+{
+  "contract": "Central PMS terminal cash-payment command/readback",
+  "version": "1.0",
+  "sourceRepository": "D:\\SourceCodes\\ExitPass",
+  "sourceCommit": "7379a4d4098c8339bc4ff46227a4b2ac797315fd",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/terminal-cash-payments",
+      "requiredHeaders": ["Idempotency-Key", "X-Correlation-Id"],
+      "requestFields": [
+        "terminalCashTenderId",
+        "cashCustodySessionId",
+        "parkingSessionId",
+        "tariffSnapshotId",
+        "cashierId",
+        "cashierSessionReference",
+        "cashierShiftId",
+        "terminalId",
+        "siteId",
+        "siteGroupId",
+        "posServerId",
+        "currency",
+        "amountDueMinorUnits",
+        "amountTenderedMinorUnits",
+        "changeDueMinorUnits",
+        "cashReceivedAt",
+        "denominationEntries",
+        "localEventReference"
+      ],
+      "successStatusCodes": [201, 200],
+      "successFields": [
+        "terminalCashTenderId",
+        "paymentAttemptId",
+        "paymentConfirmationId",
+        "canonicalPaymentStatus",
+        "resultClassification",
+        "idempotencyScope",
+        "semanticHashSourceVersion",
+        "createdAt",
+        "confirmedAt",
+        "lastUpdatedAt",
+        "correlationId",
+        "fiscalStatus"
+      ],
+      "errorOutcomes": {
+        "400": "deterministic validation rejection",
+        "409": "semantic conflict",
+        "5xxOrTransportFailure": "unavailable or uncertain"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/terminal-cash-payments/references/{terminalCashTenderId}",
+      "requiredHeaders": ["X-Correlation-Id"],
+      "successStatusCodes": [200],
+      "successFields": [
+        "terminalCashTenderId",
+        "cashCustodySessionId",
+        "parkingSessionId",
+        "tariffSnapshotId",
+        "terminalId",
+        "siteId",
+        "siteGroupId",
+        "posServerId",
+        "cashierId",
+        "cashierShiftId",
+        "currency",
+        "amountDueMinorUnits",
+        "amountTenderedMinorUnits",
+        "changeDueMinorUnits",
+        "canonicalPaymentStatus",
+        "paymentConfirmationId",
+        "resultClassification",
+        "idempotencyScope",
+        "semanticHashSourceVersion",
+        "createdAt",
+        "confirmedAt",
+        "lastUpdatedAt",
+        "correlationId",
+        "fiscalStatus"
+      ],
+      "errorOutcomes": {
+        "404": "terminal cash tender reference not found",
+        "409": "semantic conflict if returned by gateway",
+        "5xxOrTransportFailure": "unavailable or inconclusive"
+      }
+    }
+  ],
+  "authorityBoundary": "APT records terminal-local CASH_RECEIVED custody evidence and a durable Central PMS command. Only confirmed Central PMS response or readback establishes canonical payment confirmation. This contract does not initiate provider execution, POS fiscal issuance, receipt printing, exit authorization, or gate control."
+}

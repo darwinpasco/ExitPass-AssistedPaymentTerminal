@@ -7,6 +7,12 @@ namespace AssistedPaymentTerminal.Desktop.Tests;
 public sealed class LocalJournalBridgeHandlerTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string ParkingSessionStartId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+    private const string ParkingSessionCashReceivedId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+    private const string ParkingSessionReadbackId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3";
+    private const string TariffSnapshotId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    private const string SiteId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    private const string SiteGroupId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
     [Fact]
     public async Task UnsupportedBridgeCommandIsRejected()
@@ -41,11 +47,11 @@ public sealed class LocalJournalBridgeHandlerTests
         var handler = database.CreateHandler(enabled: true);
         var sessionId = await CreateSessionAsync(handler);
 
-        var response = await StartTenderAsync(handler, sessionId, "parking-start");
+        var response = await StartTenderAsync(handler, sessionId, ParkingSessionStartId);
 
         Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
         var payload = response.RootElement.GetProperty("payload");
-        Assert.Equal("parking-start", payload.GetProperty("parkingSessionId").GetString());
+        Assert.Equal(ParkingSessionStartId, payload.GetProperty("parkingSessionId").GetString());
         Assert.Equal(nameof(CashTenderState.TenderStarted), payload.GetProperty("currentLocalState").GetString());
     }
 
@@ -55,7 +61,7 @@ public sealed class LocalJournalBridgeHandlerTests
         using var database = DesktopTestDatabase.Create();
         var handler = database.CreateHandler(enabled: true);
         var sessionId = await CreateSessionAsync(handler);
-        var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, "parking-cash-received"));
+        var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, ParkingSessionCashReceivedId));
 
         var response = await SendAsync(
             handler,
@@ -81,7 +87,7 @@ public sealed class LocalJournalBridgeHandlerTests
         using var database = DesktopTestDatabase.Create();
         var handler = database.CreateHandler(enabled: true);
         var sessionId = await CreateSessionAsync(handler);
-        var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, "parking-readback"));
+        var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, ParkingSessionReadbackId));
 
         await SendAsync(
             handler,
@@ -93,7 +99,7 @@ public sealed class LocalJournalBridgeHandlerTests
             handler,
             LocalJournalBridgeCommand.ReadTenderByParkingSession,
             "corr-readback",
-            new { parkingSessionId = "parking-readback" });
+            new { parkingSessionId = ParkingSessionReadbackId });
 
         Assert.True(readback.RootElement.GetProperty("ok").GetBoolean());
         Assert.Equal(nameof(CashTenderState.CashReceived), readback.RootElement.GetProperty("payload").GetProperty("tender").GetProperty("currentLocalState").GetString());
@@ -137,8 +143,8 @@ public sealed class LocalJournalBridgeHandlerTests
                 authenticatedCashierSessionReference = "auth-bridge",
                 cashierShiftId = "shift-bridge",
                 terminalId = "terminal-bridge",
-                siteId = "site-bridge",
-                siteGroupId = "site-group-bridge",
+                siteId = SiteId,
+                siteGroupId = SiteGroupId,
                 posServerId = "pos-bridge",
                 openingCashAmount = 500m
             });
@@ -156,7 +162,7 @@ public sealed class LocalJournalBridgeHandlerTests
             {
                 cashCustodySessionId = sessionId,
                 parkingSessionId,
-                tariffSnapshotId = "tariff-bridge",
+                tariffSnapshotId = TariffSnapshotId,
                 currency = "PHP",
                 amountDue = 125m,
                 amountTendered = 150m,

@@ -10,26 +10,26 @@ internal static class TestRequests
             AuthenticatedCashierSessionReference: "auth-session-001",
             CashierShiftId: "shift-001",
             TerminalId: "terminal-001",
-            SiteId: "site-001",
-            SiteGroupId: "site-group-001",
+            SiteId: "11111111-1111-4111-8111-111111111111",
+            SiteGroupId: "22222222-2222-4222-8222-222222222222",
             PosServerId: "pos-server-001",
             OpeningCashAmount: 1_000m,
             OpenedAt: DateTimeOffset.Parse("2026-07-15T00:00:00Z"));
 
     public static StartCashTenderRequest StartTender(
         Guid cashCustodySessionId,
-        string parkingSessionId = "parking-session-001",
+        string parkingSessionId = "33333333-3333-4333-8333-333333333333",
         string localIdempotencyIdentity = "idem-001",
         decimal amountDue = 100m,
         decimal amountTendered = 100m) =>
         new(
             CashCustodySessionId: cashCustodySessionId,
             ParkingSessionId: parkingSessionId,
-            TariffSnapshotId: "tariff-snapshot-001",
+            TariffSnapshotId: "44444444-4444-4444-8444-444444444444",
             Currency: "PHP",
             AmountDue: amountDue,
             AmountTendered: amountTendered,
-            CorrelationId: $"corr-{Guid.NewGuid():N}",
+            CorrelationId: Guid.NewGuid().ToString("D"),
             LocalIdempotencyIdentity: localIdempotencyIdentity,
             StartedAt: DateTimeOffset.Parse("2026-07-15T00:01:00Z"));
 

@@ -8,8 +8,8 @@ var session = await RequireSuccess(service.CreateCashCustodySessionAsync(new Cre
     AuthenticatedCashierSessionReference: "proof-auth-session",
     CashierShiftId: "proof-shift",
     TerminalId: "proof-terminal",
-    SiteId: "proof-site",
-    SiteGroupId: "proof-site-group",
+    SiteId: "11111111-1111-4111-8111-111111111111",
+    SiteGroupId: "22222222-2222-4222-8222-222222222222",
     PosServerId: "proof-pos-server",
     OpeningCashAmount: 500m)));
 
@@ -17,12 +17,12 @@ Console.WriteLine($"cash-custody session created: {session.Id}");
 
 var tender = await RequireSuccess(service.StartCashTenderAsync(new StartCashTenderRequest(
     CashCustodySessionId: session.Id,
-    ParkingSessionId: "proof-parking-session",
-    TariffSnapshotId: "proof-tariff-snapshot",
+    ParkingSessionId: "33333333-3333-4333-8333-333333333333",
+    TariffSnapshotId: "44444444-4444-4444-8444-444444444444",
     Currency: "PHP",
     AmountDue: 120m,
     AmountTendered: 150m,
-    CorrelationId: "proof-correlation",
+    CorrelationId: "55555555-5555-4555-8555-555555555555",
     LocalIdempotencyIdentity: "proof-idempotency")));
 
 Console.WriteLine($"TENDER_STARTED recorded: {tender.Id}");
@@ -63,12 +63,12 @@ Console.WriteLine($"event history count: {events.Count}");
 
 var duplicate = await service.StartCashTenderAsync(new StartCashTenderRequest(
     CashCustodySessionId: session.Id,
-    ParkingSessionId: "proof-parking-session",
-    TariffSnapshotId: "proof-tariff-snapshot-duplicate",
+    ParkingSessionId: "33333333-3333-4333-8333-333333333333",
+    TariffSnapshotId: "66666666-6666-4666-8666-666666666666",
     Currency: "PHP",
     AmountDue: 120m,
     AmountTendered: 120m,
-    CorrelationId: "proof-correlation-duplicate",
+    CorrelationId: "77777777-7777-4777-8777-777777777777",
     LocalIdempotencyIdentity: "proof-idempotency-duplicate"));
 
 if (duplicate.IsSuccess || duplicate.Error?.Code != CashJournalErrorCode.DuplicateUnresolvedTender)

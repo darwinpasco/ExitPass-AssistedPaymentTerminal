@@ -28,7 +28,9 @@ public sealed record CommitCashReceivedRequest(
     Guid LocalCashTenderId,
     bool CashierAttested,
     IReadOnlyCollection<CashDenominationLine> Denominations,
-    DateTimeOffset? ReceivedAt = null);
+    DateTimeOffset? ReceivedAt = null,
+    string CentralPmsTarget = "UNCONFIGURED_CENTRAL_PMS",
+    bool SimulateOutboxCreationFailure = false);
 
 public sealed record CashDenominationLine(
     string DenominationCode,

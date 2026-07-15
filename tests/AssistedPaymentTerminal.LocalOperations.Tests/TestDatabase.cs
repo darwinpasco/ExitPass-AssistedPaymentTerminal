@@ -14,6 +14,9 @@ internal sealed class TestDatabase : IDisposable
 
     public string DatabasePath { get; }
 
+    public LocalOperationsDatabaseOptions Options =>
+        new(DatabasePath, CentralPmsBaseUrl: "https://central-pms.example.invalid");
+
     public static TestDatabase Create()
     {
         var directoryPath = Path.Combine(Path.GetTempPath(), "ExitPass.APT.LocalOperations.Tests", Guid.NewGuid().ToString("N"));
@@ -22,7 +25,7 @@ internal sealed class TestDatabase : IDisposable
     }
 
     public CashJournalService CreateService() =>
-        new(new LocalOperationsDatabaseOptions(DatabasePath));
+        new(Options);
 
     public void Dispose()
     {
