@@ -1,7 +1,6 @@
 import type { AptConfig } from "./config";
 
 export type TerminalContext = {
-  operatingMode: string;
   terminalId: string;
   terminalDisplayName: string;
   siteId: string;
@@ -17,7 +16,6 @@ export type TerminalContext = {
 
 export function buildTerminalContext(config: AptConfig): TerminalContext {
   return {
-    operatingMode: "Mode 1 - Cashier-Assisted Terminal",
     terminalId: config.terminalId,
     terminalDisplayName: config.terminalDisplayName,
     siteId: config.siteId,

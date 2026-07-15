@@ -4,7 +4,9 @@ import { loadAptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import { createCentralPmsClient } from "./api/clientFactory";
 import type { CentralPmsClient, CentralPmsResult, ResolveVendorParkingResponse } from "./api/centralPmsTypes";
+import { CashCapturePanel } from "./CashCapturePanel";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
+import type { LocalJournalBridge } from "./localJournalBridge";
 
 type LookupState =
   | { status: "idle" }
@@ -35,7 +37,15 @@ export function App() {
   return <TerminalShell config={configResult.config} client={createCentralPmsClient(configResult.config)} />;
 }
 
-export function TerminalShell({ config, client }: { config: AptConfig; client: CentralPmsClient }) {
+export function TerminalShell({
+  config,
+  client,
+  localJournalBridge,
+}: {
+  config: AptConfig;
+  client: CentralPmsClient;
+  localJournalBridge?: LocalJournalBridge;
+}) {
   const context = useMemo(() => buildTerminalContext(config), [config]);
   const [ticketReference, setTicketReference] = useState("");
   const [lookupState, setLookupState] = useState<LookupState>({ status: "idle" });
@@ -74,12 +84,10 @@ export function TerminalShell({ config, client }: { config: AptConfig; client: C
           <p className="eyebrow">ExitPass Assisted Payment Terminal</p>
           <h1>Cashier-Assisted Terminal</h1>
         </div>
-        <span className="mode-badge">Mode 1</span>
       </header>
 
-      <section className="workflow-grid">
-        <TerminalContextPanel context={context} />
-
+      <section className="workflow-stack">
+        <OperationalContextPanel context={context} />
         <section className="lookup-panel" aria-labelledby="ticket-lookup-heading">
           <div className="section-heading">
             <p className="eyebrow">Session resolution</p>
@@ -118,13 +126,24 @@ export function TerminalShell({ config, client }: { config: AptConfig; client: C
 
           {lookupState.status === "resolved" && (
             <>
-              <SessionSummary session={lookupState.session} recalculated={lookupState.recalculated} />
-              {tariffExpired ? (
-                <ExpiredTariffNotice session={lookupState.session} onRecalculate={() => void recalculateFee(lookupState.session)} />
-              ) : (
-                <ActiveTariffNotice session={lookupState.session} />
-              )}
-              <PaymentStage blockedByExpiredTariff={tariffExpired} />
+              <div className="resolved-workflow">
+                <div className="session-column">
+                  <SessionSummary session={lookupState.session} recalculated={lookupState.recalculated} />
+                  {tariffExpired ? (
+                    <ExpiredTariffNotice session={lookupState.session} onRecalculate={() => void recalculateFee(lookupState.session)} />
+                  ) : (
+                    <ActiveTariffNotice session={lookupState.session} />
+                  )}
+                </div>
+                <CashCapturePanel
+                  config={config}
+                  context={context}
+                  session={lookupState.session}
+                  tariffExpired={tariffExpired}
+                  bridge={localJournalBridge}
+                />
+              </div>
+              {!config.nonLiveCashCaptureEnabled && <PaymentStage blockedByExpiredTariff={tariffExpired} />}
             </>
           )}
         </section>
@@ -162,35 +181,46 @@ function StartupRefusal({ result }: { result: ConfigLoadResult & { ok: false } }
   );
 }
 
-function TerminalContextPanel({ context }: { context: TerminalContext }) {
-  const rows = [
-    ["Operating mode", context.operatingMode],
+function OperationalContextPanel({ context }: { context: TerminalContext }) {
+  const summaryRows = [
+    ["Site", context.siteName],
+    ["Cashier", context.cashierDisplayName],
+    ["Shift", context.shiftStatus],
+    ["Terminal", context.terminalDisplayName],
+    ["POS readiness", `Configured: ${context.posServerId}`],
+  ];
+
+  const detailRows = [
     ["Terminal ID", context.terminalId],
-    ["Terminal display name", context.terminalDisplayName],
     ["Site ID", context.siteId],
-    ["Site name", context.siteName],
     ["Site-group ID", context.siteGroupId],
-    ["POS Server", context.posServerId],
-    ["Cashier", `${context.cashierDisplayName} (${context.cashierId})`],
+    ["POS Server ID", context.posServerId],
+    ["Cashier ID", context.cashierId],
     ["Shift ID", context.shiftId],
-    ["Shift status", context.shiftStatus],
     ["Central PMS", context.centralPmsConnectionMode],
   ];
 
   return (
-    <aside className="context-panel" aria-label="Bound terminal context">
-      <div className="section-heading">
-        <p className="eyebrow">Bound context</p>
-        <h2>{context.terminalDisplayName}</h2>
-      </div>
-      <dl>
-        {rows.map(([label, value]) => (
-          <div key={label} className="context-row">
-            <dt>{label}</dt>
-            <dd>{value}</dd>
+    <aside className="context-panel compact" aria-label="Operational context">
+      <div className="context-summary-grid">
+        {summaryRows.map(([label, value]) => (
+          <div key={label} className="context-chip">
+            <span>{label}</span>
+            <strong>{value}</strong>
           </div>
         ))}
-      </dl>
+      </div>
+      <details className="terminal-details">
+        <summary>Terminal details</summary>
+        <dl>
+          {detailRows.map(([label, value]) => (
+            <div key={label} className="context-row">
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
     </aside>
   );
 }
@@ -200,17 +230,20 @@ function SessionSummary({ session, recalculated }: { session: ResolveVendorParki
     session.netPayableMinorUnits / 100,
   );
 
-  const rows = [
+  const primaryRows = [
     ["Parking session ID", session.parkingSessionId],
     ["Ticket reference", session.ticketReference ?? "Unavailable"],
+    ["Tariff snapshot ID", session.effectiveTariffSnapshotId ?? session.tariffSnapshotId],
+    ["Tariff expiry", formatDate(session.tariffExpiresAt)],
+    ["Payment status", session.paymentStatus],
+  ];
+
+  const secondaryRows = [
     ["Masked plate", maskPlate(session.plateNumber)],
     ["Site", session.siteName ?? session.siteId],
     ["Entry timestamp", formatDate(session.entryTime)],
     ["Currency", session.currency],
-    ["Tariff snapshot ID", session.effectiveTariffSnapshotId ?? session.tariffSnapshotId],
     ["Tariff calculated", formatDate(session.currentFeeCalculationTime)],
-    ["Tariff expiry", formatDate(session.tariffExpiresAt)],
-    ["Payment status", session.paymentStatus],
     ["Statutory discount", session.statutoryDiscountApplied ? "Applied" : "Not applied"],
     ["Correlation ID", session.correlationId],
   ];
@@ -224,14 +257,25 @@ function SessionSummary({ session, recalculated }: { session: ResolveVendorParki
         </div>
         <span className={recalculated ? "status-badge success" : "status-badge"}>{recalculated ? "Recalculated" : "Resolved"}</span>
       </div>
-      <dl>
-        {rows.map(([label, value]) => (
+      <dl className="summary-primary">
+        {primaryRows.map(([label, value]) => (
           <div key={label} className="summary-row">
             <dt>{label}</dt>
             <dd>{value}</dd>
           </div>
         ))}
       </dl>
+      <details className="session-details">
+        <summary>Session details</summary>
+        <dl>
+          {secondaryRows.map(([label, value]) => (
+            <div key={label} className="summary-row">
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
     </section>
   );
 }
@@ -240,8 +284,7 @@ function ActiveTariffNotice({ session }: { session: ResolveVendorParkingResponse
   const minutes = Math.max(0, Math.ceil((new Date(session.tariffExpiresAt).getTime() - Date.now()) / 60000));
   return (
     <StatusNotice tone="success" title="Payable basis is current">
-      The current tariff is valid for approximately {minutes} minute{minutes === 1 ? "" : "s"} and expires at{" "}
-      <strong>{formatDate(session.tariffExpiresAt)}</strong>.
+      Valid for about {minutes} minute{minutes === 1 ? "" : "s"}; expires <strong>{formatDate(session.tariffExpiresAt)}</strong>.
     </StatusNotice>
   );
 }
