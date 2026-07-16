@@ -1,0 +1,81 @@
+{
+  "contract": "Central PMS terminal cash-payment fiscal issuance command/readback",
+  "version": "1.0",
+  "sourceRepository": "D:\\SourceCodes\\ExitPass",
+  "sourceBranch": "dev",
+  "sourceCommit": "c924c5f6de4834b316e9012afe7280850847de7f",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/terminal-cash-payments/references/{terminalCashTenderId}/fiscal-issuance",
+      "requiredHeaders": ["Idempotency-Key", "X-Correlation-Id"],
+      "pathFields": ["terminalCashTenderId"],
+      "requestBody": {
+        "required": true,
+        "shape": "empty JSON object matching TerminalCashFiscalIssuanceRequest",
+        "fields": []
+      },
+      "successStatusCodes": [200],
+      "successFields": [
+        "terminalCashTenderId",
+        "paymentAttemptId",
+        "paymentConfirmationId",
+        "fiscalIssuanceReferenceId",
+        "fiscalIssuanceState",
+        "resultClassification",
+        "posFiscalDocumentId",
+        "fiscalDocumentNumber",
+        "fiscalNumberAssignedAt",
+        "semanticHashSourceVersion",
+        "createdAt",
+        "updatedAt",
+        "correlationId",
+        "safeErrorCode",
+        "safeErrorPosture",
+        "posServerCallAttempted",
+        "exitAuthorizationIssued",
+        "gateBehaviorTriggered"
+      ],
+      "errorOutcomes": {
+        "400": "missing request body, missing required headers, invalid terminal cash tender ID, missing idempotency key, missing correlation ID, or request-level deterministic rejection",
+        "404": "terminal cash payment not found",
+        "409": "terminal cash payment not confirmed, payment confirmation missing, POS Server binding missing, semantic conflict, or idempotency conflict",
+        "5xxOrTransportFailure": "unavailable or uncertain outcome; APT must read back before retry"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/terminal-cash-payments/references/{terminalCashTenderId}/fiscal-issuance",
+      "requiredHeaders": [],
+      "optionalHeaders": ["X-Correlation-Id"],
+      "pathFields": ["terminalCashTenderId"],
+      "successStatusCodes": [200],
+      "successFields": [
+        "terminalCashTenderId",
+        "paymentAttemptId",
+        "paymentConfirmationId",
+        "fiscalIssuanceReferenceId",
+        "fiscalIssuanceState",
+        "resultClassification",
+        "posFiscalDocumentId",
+        "fiscalDocumentNumber",
+        "fiscalNumberAssignedAt",
+        "semanticHashSourceVersion",
+        "createdAt",
+        "updatedAt",
+        "correlationId",
+        "safeErrorCode",
+        "safeErrorPosture",
+        "posServerCallAttempted",
+        "exitAuthorizationIssued",
+        "gateBehaviorTriggered"
+      ],
+      "errorOutcomes": {
+        "404": "TERMINAL_CASH_FISCAL_ISSUANCE_NOT_FOUND when no fiscal issuance has been prepared for the terminal cash tender",
+        "409": "semantic conflict if returned by Central PMS gateway",
+        "5xxOrTransportFailure": "unavailable or inconclusive readback"
+      }
+    }
+  ],
+  "authorityBoundary": "APT persists terminal-local fiscal command evidence and calls Central PMS only. Central PMS owns fiscal workflow orchestration. POS Server remains authoritative for fiscal document creation and numbering. APT must not call POS Server directly, render independent fiscal truth, issue exit authorization, or command gates."
+}

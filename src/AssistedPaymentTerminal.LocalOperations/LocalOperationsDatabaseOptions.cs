@@ -5,4 +5,5 @@ public sealed record LocalOperationsDatabaseOptions(
     bool CashDrawerEnabled = false,
     string CentralPmsBaseUrl = "UNCONFIGURED_CENTRAL_PMS",
     bool EnableCentralPmsCashSubmission = false,
+    bool EnableCentralPmsFiscalIssuance = false,
     int CentralPmsTimeoutSeconds = 10);
