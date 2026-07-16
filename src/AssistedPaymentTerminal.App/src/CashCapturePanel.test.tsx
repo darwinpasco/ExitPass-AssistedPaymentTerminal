@@ -8,6 +8,7 @@ import type {
   BridgeResult,
   CashCustodySessionSnapshot,
   CashTenderSnapshot,
+  CentralPmsCashFiscalStatus,
   CentralPmsCashSubmissionStatus,
   LocalJournalBridge,
   LocalJournalHealth,
@@ -244,6 +245,150 @@ describe("CashCapturePanel", () => {
     expect(bridge.startTender).not.toHaveBeenCalled();
     expect(bridge.getCentralPmsCashSubmissionStatus).toHaveBeenCalled();
   });
+
+  it("hides fiscal action when fiscal issuance is disabled", async () => {
+    renderPanel({ config: centralEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Central PMS fiscal issuance is disabled.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Issue / Check Fiscal Document" })).not.toBeInTheDocument();
+  });
+
+  it("shows fiscal unavailable state for invalid configuration and does not submit", async () => {
+    const bridge = new FakeBridge({ centralStatus: centralStatus("Confirmed") });
+    renderPanel({
+      config: enabledConfig({ centralPmsCashSubmissionEnabled: true, centralPmsFiscalIssuanceEnabled: true }),
+      bridge,
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("CENTRAL_PMS_BASE_URL is not configured for cash submission.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Central PMS fiscal issuance")).not.toBeInTheDocument();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+  });
+
+  it("does not show fiscal action before canonical payment confirmation", async () => {
+    renderPanel({ config: fiscalEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("Pending") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Canonical payment not yet confirmed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Issue / Check Fiscal Document" })).not.toBeInTheDocument();
+  });
+
+  it("renders pending fiscal status separately after canonical payment confirmation", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Pending") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Fiscal issuance pending")).toBeInTheDocument();
+    expect(screen.getByText("Receipt not rendered or printed. Exit authorization unavailable.")).toBeInTheDocument();
+  });
+
+  it("shows recorded fiscal status with identifiers", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Recorded") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
+    expect(screen.getByText("fiscal-reference-001")).toBeInTheDocument();
+    expect(screen.getByText("pos-fiscal-document-001")).toBeInTheDocument();
+    expect(screen.getByText("SI-000001")).toBeInTheDocument();
+  });
+
+  it("shows fiscal replay without duplicate-document wording", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded", { resultClassification: "IDEMPOTENT_REPLAY" }),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText(/Idempotent replay restored/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/duplicate invoice|duplicate charge/i);
+  });
+
+  it("shows fiscal conflict support-review guidance", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Conflict") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Fiscal conflict - support review required")).toBeInTheDocument();
+    expect(screen.getByText(/Supervisor or support review is required/)).toBeInTheDocument();
+  });
+
+  it("shows fiscal rejection while preserving canonical payment", async () => {
+    const bridge = new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Rejected") });
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge,
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
+    expect(await screen.findByText("Fiscal rejected - reconciliation required")).toBeInTheDocument();
+    expect(screen.getByText("Safe error code: CORRELATION_ID_REQUIRED")).toBeInTheDocument();
+    expect(screen.queryByText("Fiscal document recorded")).not.toBeInTheDocument();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+  });
+
+  it("never shows fiscal recorded for retry state", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("RetryPending") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Retry pending")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/Fiscal document recorded/);
+  });
+
+  it("explicit fiscal action invokes the fiscal bridge command", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Pending"),
+      fiscalSubmitStatus: fiscalStatus("Recorded"),
+    });
+    renderPanel({ config: fiscalEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "Issue / Check Fiscal Document" }));
+
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalled();
+    expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
+  });
+
+  it("status load does not automatically submit fiscal issuance", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+    });
+    renderPanel({ config: fiscalEnabledConfig(), bridge });
+
+    expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
+    expect(bridge.getCentralPmsCashFiscalStatus).toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+  });
 });
 
 function renderPanel({
@@ -285,6 +430,14 @@ function centralEnabledConfig(): AptConfig {
   });
 }
 
+function fiscalEnabledConfig(): AptConfig {
+  return enabledConfig({
+    centralPmsCashSubmissionEnabled: true,
+    centralPmsFiscalIssuanceEnabled: true,
+    centralPmsBaseUrl: "http://127.0.0.1:18080",
+  });
+}
+
 function activeSession(): ResolveVendorParkingResponse {
   const now = Date.now();
   return {
@@ -314,6 +467,8 @@ class FakeBridge implements LocalJournalBridge {
   private readonly duplicateOnStart: boolean;
   private readonly centralStatus: CentralPmsCashSubmissionStatus;
   private readonly submitStatus: CentralPmsCashSubmissionStatus;
+  private readonly fiscalStatus: CentralPmsCashFiscalStatus;
+  private readonly fiscalSubmitStatus: CentralPmsCashFiscalStatus;
   private readonly initialReadback: LocalTenderReadback;
 
   public health = vi.fn(async (correlationId: string): Promise<BridgeResult<LocalJournalHealth>> => ({
@@ -404,15 +559,33 @@ class FakeBridge implements LocalJournalBridge {
     payload: this.submitStatus,
   }));
 
+  public getCentralPmsCashFiscalStatus = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashFiscalStatus>> => ({
+    ok: true,
+    command: "centralPmsCashFiscal.getStatus",
+    correlationId,
+    payload: this.fiscalStatus,
+  }));
+
+  public submitOrReadbackCentralPmsCashFiscal = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashFiscalStatus>> => ({
+    ok: true,
+    command: "centralPmsCashFiscal.submitOrReadback",
+    correlationId,
+    payload: this.fiscalSubmitStatus,
+  }));
+
   public constructor(options: {
     duplicateOnStart?: boolean;
     centralStatus?: CentralPmsCashSubmissionStatus;
     submitStatus?: CentralPmsCashSubmissionStatus;
+    fiscalStatus?: CentralPmsCashFiscalStatus;
+    fiscalSubmitStatus?: CentralPmsCashFiscalStatus;
     initialReadback?: LocalTenderReadback;
   } = {}) {
     this.duplicateOnStart = options.duplicateOnStart ?? false;
     this.centralStatus = options.centralStatus ?? centralStatus("Pending");
     this.submitStatus = options.submitStatus ?? this.centralStatus;
+    this.fiscalStatus = options.fiscalStatus ?? fiscalStatus("Pending");
+    this.fiscalSubmitStatus = options.fiscalSubmitStatus ?? this.fiscalStatus;
     this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
 }
@@ -475,6 +648,49 @@ function centralStatus(
       nextRetryAt: status === "RetryPending" ? new Date().toISOString() : null,
       lastSafeHttpStatus: conflict ? 409 : rejected ? 400 : null,
       lastSafeErrorCode: conflict ? "DUPLICATE_CASH_TENDER" : rejected ? "INVALID_CASH_AMOUNTS" : null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...overrides,
+    },
+  };
+}
+
+function fiscalStatus(
+  status: CentralPmsCashFiscalStatus["command"] extends infer Command
+    ? Command extends { status: infer Status }
+      ? Status
+      : never
+    : never,
+  overrides: Partial<NonNullable<CentralPmsCashFiscalStatus["command"]>> = {},
+): CentralPmsCashFiscalStatus {
+  const recorded = status === "Recorded";
+  const rejected = status === "Rejected";
+  const conflict = status === "Conflict";
+  return {
+    enabled: true,
+    configurationValid: true,
+    configurationMessage: "Central PMS fiscal issuance is available.",
+    command: {
+      localFiscalCommandId: "fiscal-command-001",
+      terminalCashTenderId: "tender-001",
+      relatedCashPaymentOutboxCommandId: "command-001",
+      canonicalPaymentAttemptId: "payment-attempt-001",
+      canonicalPaymentConfirmationId: "payment-confirmation-001",
+      status,
+      statusLabel: status === "RetryPending" ? "Retry pending" : status,
+      attemptCount: status === "Pending" ? 0 : 1,
+      fiscalCorrelationId: "corr-fiscal",
+      resultClassification: recorded ? "NEWLY_CREATED" : conflict ? "CONFLICT" : rejected ? "REJECTED" : "UNCERTAIN",
+      fiscalIssuanceReferenceId: recorded ? "fiscal-reference-001" : null,
+      fiscalIssuanceState: recorded ? "FISCAL_ISSUANCE_RECORDED" : status === "Pending" ? "PENDING_FISCAL_ISSUANCE" : null,
+      posFiscalDocumentId: recorded ? "pos-fiscal-document-001" : null,
+      fiscalDocumentNumber: recorded ? "SI-000001" : null,
+      fiscalNumberAssignedAt: recorded ? new Date().toISOString() : null,
+      semanticHashSourceVersion: recorded ? "pos-server-semantic-hash:sha256:v1" : null,
+      recordedAt: recorded ? new Date().toISOString() : null,
+      nextRetryAt: status === "RetryPending" ? new Date().toISOString() : null,
+      lastSafeHttpStatus: conflict ? 409 : rejected ? 400 : null,
+      lastSafeErrorCode: conflict ? "TERMINAL_CASH_FISCAL_SEMANTIC_CONFLICT" : rejected ? "CORRELATION_ID_REQUIRED" : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       ...overrides,

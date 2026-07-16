@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AssistedPaymentTerminal.Desktop\AssistedPaymentTerminal.Desktop.csproj" />
+    <ProjectReference Include="..\..\src\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj" />
+  </ItemGroup>
+</Project>
