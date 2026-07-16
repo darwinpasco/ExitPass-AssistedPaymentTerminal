@@ -17,6 +17,10 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<TerminalCashPaymentSubmissionAttempt> TerminalCashPaymentSubmissionAttempts => Set<TerminalCashPaymentSubmissionAttempt>();
 
+    public DbSet<TerminalCashFiscalOutboxCommand> TerminalCashFiscalOutboxCommands => Set<TerminalCashFiscalOutboxCommand>();
+
+    public DbSet<TerminalCashFiscalAttempt> TerminalCashFiscalAttempts => Set<TerminalCashFiscalAttempt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
@@ -130,6 +134,54 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
                 .HasForeignKey(attempt => attempt.LocalCommandId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(attempt => new { attempt.LocalCommandId, attempt.AttemptSequence }).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashFiscalOutboxCommand>(entity =>
+        {
+            entity.ToTable("terminal_cash_fiscal_outbox_commands");
+            entity.HasKey(command => command.Id);
+            entity.Property(command => command.RequestRepresentationJson).IsRequired();
+            entity.Property(command => command.RequestHash).HasMaxLength(128).IsRequired();
+            entity.Property(command => command.FiscalIdempotencyKey).HasMaxLength(160).IsRequired();
+            entity.Property(command => command.FiscalCorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(command => command.CentralPmsTarget).HasMaxLength(512).IsRequired();
+            entity.Property(command => command.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(command => command.LastSafeErrorCode).HasMaxLength(128);
+            entity.Property(command => command.ResultClassification).HasMaxLength(128);
+            entity.Property(command => command.FiscalIssuanceState).HasMaxLength(128);
+            entity.Property(command => command.FiscalDocumentNumber).HasMaxLength(128);
+            entity.Property(command => command.SemanticHashSourceVersion).HasMaxLength(128);
+            entity.Property(command => command.FirstAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.LastAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.NextRetryAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.FiscalNumberAssignedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.RecordedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.UpdatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(command => command.RelatedCashPaymentOutboxCommand)
+                .WithMany()
+                .HasForeignKey(command => command.RelatedCashPaymentOutboxCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(command => command.TerminalCashTenderId).IsUnique();
+            entity.HasIndex(command => command.RelatedCashPaymentOutboxCommandId).IsUnique();
+            entity.HasIndex(command => command.FiscalIdempotencyKey).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashFiscalAttempt>(entity =>
+        {
+            entity.ToTable("terminal_cash_fiscal_attempts");
+            entity.HasKey(attempt => attempt.Id);
+            entity.Property(attempt => attempt.OperationType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(attempt => attempt.OutcomeClassification).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(attempt => attempt.SafeErrorCode).HasMaxLength(128);
+            entity.Property(attempt => attempt.CorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(attempt => attempt.StartedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(attempt => attempt.CompletedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(attempt => attempt.LocalFiscalCommand)
+                .WithMany(command => command.Attempts)
+                .HasForeignKey(attempt => attempt.LocalFiscalCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(attempt => new { attempt.LocalFiscalCommandId, attempt.AttemptSequence }).IsUnique();
         });
     }
 }

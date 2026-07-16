@@ -308,6 +308,7 @@ internal sealed class ProofScenario
     {
         return Json(HttpStatusCode.OK, new TerminalCashPaymentReadbackResponse(
             terminalCashTenderId,
+            _attemptId,
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),

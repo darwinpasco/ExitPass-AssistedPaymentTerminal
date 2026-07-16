@@ -31,8 +31,19 @@ public sealed class TerminalCashPaymentSubmissionService
             .SingleAsync(value => value.Id == localCommandId, cancellationToken)
             .ConfigureAwait(false);
 
-        if (command.Status is TerminalCashPaymentCommandStatus.Confirmed
-            or TerminalCashPaymentCommandStatus.Conflict
+        if (command.Status == TerminalCashPaymentCommandStatus.Confirmed)
+        {
+            await TerminalCashFiscalSubmissionService.EnsureCommandForConfirmedPaymentAsync(
+                    dbContext,
+                    command,
+                    DateTimeOffset.UtcNow,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return command;
+        }
+
+        if (command.Status is TerminalCashPaymentCommandStatus.Conflict
             or TerminalCashPaymentCommandStatus.Rejected)
         {
             return command;
@@ -107,6 +118,7 @@ public sealed class TerminalCashPaymentSubmissionService
         TerminalCashPaymentOutboxOperationType operationType,
         CentralPmsTerminalCashPaymentResult<T> result,
         CancellationToken cancellationToken)
+        where T : class
     {
         var now = DateTimeOffset.UtcNow;
         var lastSequence = await dbContext.TerminalCashPaymentSubmissionAttempts
@@ -138,10 +150,21 @@ public sealed class TerminalCashPaymentSubmissionService
         });
 
         ApplyResult(command, result);
+        if (command.Status == TerminalCashPaymentCommandStatus.Confirmed)
+        {
+            await TerminalCashFiscalSubmissionService.EnsureCommandForConfirmedPaymentAsync(
+                    dbContext,
+                    command,
+                    now,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void ApplyResult<T>(TerminalCashPaymentOutboxCommand command, CentralPmsTerminalCashPaymentResult<T> result)
+        where T : class
     {
         switch (result.Outcome)
         {
@@ -174,6 +197,7 @@ public sealed class TerminalCashPaymentSubmissionService
     }
 
     private static void ApplyConfirmed<T>(TerminalCashPaymentOutboxCommand command, T payload)
+        where T : class
     {
         command.Status = TerminalCashPaymentCommandStatus.Confirmed;
         command.ResultClassification = ReadProperty<string>(payload, "ResultClassification") ?? "CONFIRMED";

@@ -41,6 +41,7 @@ public sealed record TerminalCashPaymentResponse(
 
 public sealed record TerminalCashPaymentReadbackResponse(
     Guid TerminalCashTenderId,
+    Guid PaymentAttemptId,
     Guid CashCustodySessionId,
     Guid ParkingSessionId,
     Guid TariffSnapshotId,
@@ -64,6 +65,28 @@ public sealed record TerminalCashPaymentReadbackResponse(
     DateTimeOffset LastUpdatedAt,
     Guid CorrelationId,
     string FiscalStatus);
+
+public sealed record TerminalCashFiscalIssuanceRequest();
+
+public sealed record TerminalCashFiscalIssuanceResponse(
+    Guid TerminalCashTenderId,
+    Guid PaymentAttemptId,
+    Guid PaymentConfirmationId,
+    Guid FiscalIssuanceReferenceId,
+    string FiscalIssuanceState,
+    string? ResultClassification,
+    Guid? PosFiscalDocumentId,
+    string? FiscalDocumentNumber,
+    DateTimeOffset? FiscalNumberAssignedAt,
+    string? SemanticHashSourceVersion,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    Guid? CorrelationId,
+    string? SafeErrorCode,
+    string? SafeErrorPosture,
+    bool PosServerCallAttempted,
+    bool ExitAuthorizationIssued,
+    bool GateBehaviorTriggered);
 
 public sealed record CentralPmsSafeError(
     string ErrorCode,

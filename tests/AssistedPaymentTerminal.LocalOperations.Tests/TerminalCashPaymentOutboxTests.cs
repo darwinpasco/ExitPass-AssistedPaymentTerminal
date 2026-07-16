@@ -285,6 +285,7 @@ public sealed class TerminalCashPaymentOutboxTests
             TerminalCashPaymentPayloadFactory.JsonOptions)!;
         return new TerminalCashPaymentReadbackResponse(
             payload.TerminalCashTenderId,
+            Guid.NewGuid(),
             payload.CashCustodySessionId,
             payload.ParkingSessionId,
             payload.TariffSnapshotId,
