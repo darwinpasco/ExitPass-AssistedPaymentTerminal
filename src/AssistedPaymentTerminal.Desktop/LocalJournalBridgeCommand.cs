@@ -8,4 +8,6 @@ public static class LocalJournalBridgeCommand
     public const string StartTender = "localJournal.startTender";
     public const string RecordCashReceived = "localJournal.recordCashReceived";
     public const string ReadTenderByParkingSession = "localJournal.readTenderByParkingSession";
+    public const string CentralPmsCashSubmissionGetStatus = "centralPmsCashSubmission.getStatus";
+    public const string CentralPmsCashSubmissionSubmitOrReadback = "centralPmsCashSubmission.submitOrReadback";
 }

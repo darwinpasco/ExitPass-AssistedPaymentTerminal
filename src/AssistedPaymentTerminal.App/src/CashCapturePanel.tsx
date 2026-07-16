@@ -8,6 +8,7 @@ import {
   type BridgeError,
   type CashCustodySessionSnapshot,
   type CashTenderSnapshot,
+  type CentralPmsCashSubmissionStatus,
   type LocalJournalBridge,
   type LocalJournalHealth,
   type LocalTenderReadback,
@@ -20,6 +21,13 @@ type PanelStatus =
   | { kind: "success"; tender: CashTenderSnapshot; readback: LocalTenderReadback; correlationId: string }
   | { kind: "conflict"; existingTenderId?: string; existingState?: string; message: string; correlationId: string }
   | { kind: "error"; message: string };
+
+type CentralPmsPanelStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "unavailable"; message: string }
+  | { kind: "ready"; status: CentralPmsCashSubmissionStatus; correlationId: string }
+  | { kind: "error"; message: string; correlationId: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
 const denominations = [
@@ -51,6 +59,7 @@ export function CashCapturePanel({
   const [cashierAttested, setCashierAttested] = useState(false);
   const [denominationCounts, setDenominationCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<PanelStatus>({ kind: "idle" });
+  const [centralPmsStatus, setCentralPmsStatus] = useState<CentralPmsPanelStatus>({ kind: "idle" });
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -59,6 +68,7 @@ export function CashCapturePanel({
     setAmountTenderedText(amountDue.toFixed(2));
     setCashierAttested(false);
     setDenominationCounts({});
+    setCentralPmsStatus({ kind: "idle" });
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -114,7 +124,41 @@ export function CashCapturePanel({
     };
   }, [bridge, config.nonLiveCashCaptureEnabled, context, session.parkingSessionId, tariffExpired]);
 
-  const existingTender = status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender : null;
+  const existingTender =
+    status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender ?? status.tender : null;
+  const centralPmsConfig = centralPmsSubmissionConfig(config);
+
+  useEffect(() => {
+    if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
+      return;
+    }
+
+    if (!centralPmsConfig.valid) {
+      setCentralPmsStatus({ kind: "unavailable", message: centralPmsConfig.message });
+      return;
+    }
+
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+    setCentralPmsStatus({ kind: "loading", message: "Checking Central PMS status..." });
+
+    async function loadStatus() {
+      const result = await bridge.getCentralPmsCashSubmissionStatus(correlationId, existingTender!.id);
+      if (cancelled) return;
+
+      if (result.ok) {
+        setCentralPmsStatus({ kind: "ready", status: result.payload, correlationId });
+      } else {
+        setCentralPmsStatus({ kind: "error", message: result.error.message, correlationId });
+      }
+    }
+
+    void loadStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, centralPmsConfig.message, centralPmsConfig.valid, config.centralPmsCashSubmissionEnabled, existingTender?.id, existingTender?.currentLocalState]);
 
   const denominationPayload = useMemo(
     () =>
@@ -199,6 +243,27 @@ export function CashCapturePanel({
     });
   }
 
+  async function submitOrReadbackCentralPms() {
+    if (!existingTender) {
+      setCentralPmsStatus({ kind: "error", message: "Local CASH_RECEIVED tender is not available.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!centralPmsConfig.valid) {
+      setCentralPmsStatus({ kind: "unavailable", message: centralPmsConfig.message });
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    setCentralPmsStatus({ kind: "loading", message: "Submitting or checking Central PMS..." });
+    const result = await bridge.submitOrReadbackCentralPmsCashSubmission(correlationId, existingTender.id);
+    if (result.ok) {
+      setCentralPmsStatus({ kind: "ready", status: result.payload, correlationId });
+    } else {
+      setCentralPmsStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
   async function reloadLocalTender() {
     const readback = await bridge.readTenderByParkingSession(createCorrelationId(), session.parkingSessionId);
     if (!readback.ok) {
@@ -272,7 +337,7 @@ export function CashCapturePanel({
         </div>
       )}
 
-      {existingTender && (
+      {existingTender && status.kind !== "success" && (
         <div className="cash-readback">
           <h3>Existing local custody record</h3>
           <p>Local tender ID: {existingTender.id}</p>
@@ -353,6 +418,13 @@ export function CashCapturePanel({
         </div>
       )}
 
+      {config.centralPmsCashSubmissionEnabled && existingTender?.currentLocalState === "CashReceived" && (
+        <CentralPmsCanonicalPaymentPanel
+          centralPmsStatus={centralPmsStatus}
+          onSubmitOrReadback={() => void submitOrReadbackCentralPms()}
+        />
+      )}
+
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
         Reload local tender
       </button>
@@ -362,4 +434,145 @@ export function CashCapturePanel({
 
 function formatAmount(value: number): string {
   return value.toFixed(2);
+}
+
+function centralPmsSubmissionConfig(config: AptConfig): { valid: boolean; message: string } {
+  if (!config.centralPmsCashSubmissionEnabled) {
+    return { valid: false, message: "Central PMS cash submission is disabled." };
+  }
+
+  try {
+    const url = new URL(config.centralPmsBaseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.hostname.endsWith(".example.invalid")) {
+      return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for cash submission." };
+    }
+
+    return { valid: true, message: "Central PMS cash submission is available." };
+  } catch {
+    return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for cash submission." };
+  }
+}
+
+function CentralPmsCanonicalPaymentPanel({
+  centralPmsStatus,
+  onSubmitOrReadback,
+}: {
+  centralPmsStatus: CentralPmsPanelStatus;
+  onSubmitOrReadback: () => void;
+}) {
+  if (centralPmsStatus.kind === "unavailable") {
+    return (
+      <section className="central-pms-panel unavailable" aria-label="Central PMS canonical payment">
+        <h3>Central PMS canonical payment</h3>
+        <p>{centralPmsStatus.message}</p>
+        <p>Cash received locally. Canonical payment not yet confirmed. Fiscal issuance not started. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (centralPmsStatus.kind === "loading") {
+    return (
+      <section className="central-pms-panel" aria-label="Central PMS canonical payment">
+        <h3>Central PMS canonical payment</h3>
+        <p>{centralPmsStatus.message}</p>
+        <p>Cash received locally. Canonical payment not yet confirmed. Fiscal issuance not started. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (centralPmsStatus.kind === "error") {
+    return (
+      <section className="central-pms-panel blocked" aria-label="Central PMS canonical payment" role="alert">
+        <h3>Central PMS canonical payment</h3>
+        <p>{centralPmsStatus.message}</p>
+        <p>Cash received locally. Canonical payment not yet confirmed. Fiscal issuance not started. Exit authorization unavailable.</p>
+        <p>Correlation ID: {centralPmsStatus.correlationId}</p>
+        <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
+          Submit / Check Central PMS
+        </button>
+      </section>
+    );
+  }
+
+  const command = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
+  const status = command?.status ?? "Pending";
+  const confirmed = status === "Confirmed";
+  const conflict = status === "Conflict";
+  const rejected = status === "Rejected";
+  const retry =
+    status === "Pending" || status === "RetryPending" || status === "ReadbackRequired" || status === "Submitting" || !command;
+  const replay = command?.resultClassification === "IDEMPOTENT_REPLAY";
+
+  return (
+    <section
+      className={`central-pms-panel ${confirmed ? "confirmed" : conflict || rejected ? "blocked" : ""}`}
+      aria-label="Central PMS canonical payment"
+      role={conflict || rejected ? "alert" : "status"}
+    >
+      <div className="central-pms-status-row">
+        <h3>Central PMS canonical payment</h3>
+        <strong>{confirmed ? "Canonical payment confirmed" : conflict ? "Conflict - support review required" : rejected ? "Rejected - reconciliation required" : retry ? "Canonical payment not yet confirmed" : command?.statusLabel}</strong>
+      </div>
+
+      <p>Local cash custody: cash received locally.</p>
+      {confirmed ? (
+        <>
+          <p>{replay ? "Idempotent replay confirmed the existing command; no new charge was created." : "Central PMS accepted the persisted cash-payment command."}</p>
+          <dl className="central-pms-details">
+            <div>
+              <dt>Payment-attempt ID</dt>
+              <dd>{command?.canonicalPaymentAttemptId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Payment-confirmation ID</dt>
+              <dd>{command?.canonicalPaymentConfirmationId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Result classification</dt>
+              <dd>{command?.resultClassification ?? "CONFIRMED"}</dd>
+            </div>
+            <div>
+              <dt>Confirmation timestamp</dt>
+              <dd>{command?.confirmedAt ? formatDateTime(command.confirmedAt) : "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Correlation ID</dt>
+              <dd>{command?.originalCorrelationId ?? "Unavailable"}</dd>
+            </div>
+          </dl>
+        </>
+      ) : conflict ? (
+        <>
+          <p>Central PMS reported a semantic conflict. Supervisor or support review is required.</p>
+          <p>Existing local tender reference: {command?.terminalCashTenderId ?? "Unavailable"}</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "CONFLICT"}</p>
+        </>
+      ) : rejected ? (
+        <>
+          <p>Central PMS rejected the persisted command. Local CASH_RECEIVED evidence is retained.</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "REJECTED"}</p>
+          <p>Support or reconciliation handling is required.</p>
+        </>
+      ) : (
+        <>
+          <p>Status: {command?.statusLabel ?? "Pending"}</p>
+          <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted command to submit or check Central PMS."}</p>
+        </>
+      )}
+
+      <p>Fiscal issuance not started. Exit authorization unavailable.</p>
+      {!confirmed && !conflict && !rejected && (
+        <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
+          Submit / Check Central PMS
+        </button>
+      )}
+    </section>
+  );
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(value));
 }

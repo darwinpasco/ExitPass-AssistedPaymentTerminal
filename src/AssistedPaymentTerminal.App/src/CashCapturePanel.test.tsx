@@ -8,6 +8,7 @@ import type {
   BridgeResult,
   CashCustodySessionSnapshot,
   CashTenderSnapshot,
+  CentralPmsCashSubmissionStatus,
   LocalJournalBridge,
   LocalJournalHealth,
   LocalTenderReadback,
@@ -144,6 +145,105 @@ describe("CashCapturePanel", () => {
     expect(bridge.health).toHaveBeenCalled();
     expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
   });
+
+  it("hides Central PMS section when submission is disabled", async () => {
+    renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
+
+    await recordCashReceived();
+
+    expect(screen.queryByLabelText("Central PMS canonical payment")).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable state for invalid Central PMS configuration and does not submit", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({ config: enabledConfig({ centralPmsCashSubmissionEnabled: true }), bridge });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("CENTRAL_PMS_BASE_URL is not configured for cash submission.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Submit / Check Central PMS" })).not.toBeInTheDocument();
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
+  });
+
+  it("shows pending Central PMS command without canonical confirmation", async () => {
+    renderPanel({ config: centralEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("Pending") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Canonical payment not yet confirmed")).toBeInTheDocument();
+    expect(screen.getByText("Fiscal issuance not started. Exit authorization unavailable.")).toBeInTheDocument();
+  });
+
+  it("displays canonical confirmation IDs after submission", async () => {
+    renderPanel({
+      config: centralEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Pending"), submitStatus: centralStatus("Confirmed") }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "Submit / Check Central PMS" }));
+
+    expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
+    expect(screen.getByText("payment-attempt-001")).toBeInTheDocument();
+    expect(screen.getByText("payment-confirmation-001")).toBeInTheDocument();
+    expect(screen.getByText("Fiscal issuance not started. Exit authorization unavailable.")).toBeInTheDocument();
+  });
+
+  it("shows idempotent replay as confirmed without duplicate-payment wording", async () => {
+    renderPanel({
+      config: centralEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed", { resultClassification: "IDEMPOTENT_REPLAY" }) }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
+    expect(screen.getByText(/Idempotent replay confirmed/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/duplicate payment/i);
+  });
+
+  it("shows blocking support-review state for Central PMS conflict", async () => {
+    renderPanel({ config: centralEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("Conflict") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Conflict - support review required")).toBeInTheDocument();
+    expect(screen.getByText(/Supervisor or support review is required/)).toBeInTheDocument();
+  });
+
+  it("shows rejected safe error details while preserving local CASH_RECEIVED wording", async () => {
+    renderPanel({ config: centralEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("Rejected") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Rejected - reconciliation required")).toBeInTheDocument();
+    expect(screen.getByText("Safe error code: INVALID_CASH_AMOUNTS")).toBeInTheDocument();
+    expect(screen.getByText("Cash received locally")).toBeInTheDocument();
+  });
+
+  it("never displays confirmed wording for retry-pending Central PMS status", async () => {
+    renderPanel({ config: centralEnabledConfig(), bridge: new FakeBridge({ centralStatus: centralStatus("RetryPending") }) });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Canonical payment not yet confirmed")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/Canonical payment confirmed/);
+  });
+
+  it("renders restart-loaded confirmed status without creating another command", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+    });
+    renderPanel({ config: centralEnabledConfig(), bridge });
+
+    expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
+    expect(bridge.startTender).not.toHaveBeenCalled();
+    expect(bridge.getCentralPmsCashSubmissionStatus).toHaveBeenCalled();
+  });
 });
 
 function renderPanel({
@@ -174,17 +274,24 @@ async function recordCashReceived() {
   await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
 }
 
-function enabledConfig(): AptConfig {
-  return { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+function enabledConfig(overrides: Partial<AptConfig> = {}): AptConfig {
+  return { ...mode1Config(), nonLiveCashCaptureEnabled: true, ...overrides };
+}
+
+function centralEnabledConfig(): AptConfig {
+  return enabledConfig({
+    centralPmsCashSubmissionEnabled: true,
+    centralPmsBaseUrl: "http://127.0.0.1:18080",
+  });
 }
 
 function activeSession(): ResolveVendorParkingResponse {
   const now = Date.now();
   return {
-    parkingSessionId: "parking-session-ui-001",
-    tariffSnapshotId: "tariff-ui-001",
-    siteGroupId: "site-group-001",
-    siteId: "site-001",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+    tariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+    siteGroupId: "22222222-2222-4222-8222-222222222222",
+    siteId: "11111111-1111-4111-8111-111111111111",
     lookupOutcome: "resolved",
     plateNumber: "NCR-4421",
     ticketReference: "APT-ACTIVE-1001",
@@ -197,7 +304,7 @@ function activeSession(): ResolveVendorParkingResponse {
     parkingStatus: "Active",
     paymentStatus: "Not Started",
     statutoryDiscountApplied: false,
-    effectiveTariffSnapshotId: "tariff-ui-001",
+    effectiveTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
     vendorSystemId: "VENDOR-PMS-DEV",
     correlationId: "corr-session",
   };
@@ -205,6 +312,9 @@ function activeSession(): ResolveVendorParkingResponse {
 
 class FakeBridge implements LocalJournalBridge {
   private readonly duplicateOnStart: boolean;
+  private readonly centralStatus: CentralPmsCashSubmissionStatus;
+  private readonly submitStatus: CentralPmsCashSubmissionStatus;
+  private readonly initialReadback: LocalTenderReadback;
 
   public health = vi.fn(async (correlationId: string): Promise<BridgeResult<LocalJournalHealth>> => ({
     ok: true,
@@ -277,14 +387,33 @@ class FakeBridge implements LocalJournalBridge {
     ok: true,
     command: "localJournal.readTenderByParkingSession",
     correlationId,
-    payload: {
-      tender: null,
-      events: [],
-    },
+    payload: this.initialReadback,
   }));
 
-  public constructor(options: { duplicateOnStart?: boolean } = {}) {
+  public getCentralPmsCashSubmissionStatus = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashSubmissionStatus>> => ({
+    ok: true,
+    command: "centralPmsCashSubmission.getStatus",
+    correlationId,
+    payload: this.centralStatus,
+  }));
+
+  public submitOrReadbackCentralPmsCashSubmission = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashSubmissionStatus>> => ({
+    ok: true,
+    command: "centralPmsCashSubmission.submitOrReadback",
+    correlationId,
+    payload: this.submitStatus,
+  }));
+
+  public constructor(options: {
+    duplicateOnStart?: boolean;
+    centralStatus?: CentralPmsCashSubmissionStatus;
+    submitStatus?: CentralPmsCashSubmissionStatus;
+    initialReadback?: LocalTenderReadback;
+  } = {}) {
     this.duplicateOnStart = options.duplicateOnStart ?? false;
+    this.centralStatus = options.centralStatus ?? centralStatus("Pending");
+    this.submitStatus = options.submitStatus ?? this.centralStatus;
+    this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
 }
 
@@ -293,8 +422,8 @@ function tender({
   state,
   correlationId,
   cashCustodySessionId = "cash-session-001",
-  parkingSessionId = "parking-session-ui-001",
-  tariffSnapshotId = "tariff-ui-001",
+  parkingSessionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+  tariffSnapshotId = "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
   currency = "PHP",
   amountDue = 125,
   amountTendered = 150,
@@ -313,5 +442,42 @@ function tender({
     currentLocalState: state,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function centralStatus(
+  status: CentralPmsCashSubmissionStatus["command"] extends infer Command
+    ? Command extends { status: infer Status }
+      ? Status
+      : never
+    : never,
+  overrides: Partial<NonNullable<CentralPmsCashSubmissionStatus["command"]>> = {},
+): CentralPmsCashSubmissionStatus {
+  const confirmed = status === "Confirmed";
+  const rejected = status === "Rejected";
+  const conflict = status === "Conflict";
+  return {
+    enabled: true,
+    configurationValid: true,
+    configurationMessage: "Central PMS cash submission is available.",
+    command: {
+      localCommandId: "command-001",
+      terminalCashTenderId: "tender-001",
+      cashCustodySessionId: "cash-session-001",
+      status,
+      statusLabel: status === "RetryPending" ? "Retry pending" : status,
+      attemptCount: status === "Pending" ? 0 : 1,
+      originalCorrelationId: "corr-central-pms",
+      resultClassification: confirmed ? "CREATED" : conflict ? "CONFLICT" : rejected ? "REJECTED" : "UNCERTAIN",
+      canonicalPaymentAttemptId: confirmed ? "payment-attempt-001" : null,
+      canonicalPaymentConfirmationId: confirmed ? "payment-confirmation-001" : null,
+      confirmedAt: confirmed ? new Date().toISOString() : null,
+      nextRetryAt: status === "RetryPending" ? new Date().toISOString() : null,
+      lastSafeHttpStatus: conflict ? 409 : rejected ? 400 : null,
+      lastSafeErrorCode: conflict ? "DUPLICATE_CASH_TENDER" : rejected ? "INVALID_CASH_AMOUNTS" : null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...overrides,
+    },
   };
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -16,10 +17,19 @@ public partial class MainWindow : Window
     {
         _source = source;
         _options = options;
+        var localOptions = new AssistedPaymentTerminal.LocalOperations.LocalOperationsDatabaseOptions(
+            options.LocalDatabasePath,
+            CentralPmsBaseUrl: options.CentralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
+            EnableCentralPmsCashSubmission: options.EnableCentralPmsCashSubmission);
+        var journal = new AssistedPaymentTerminal.LocalOperations.CashJournalService(localOptions);
         _localJournalBridge = new LocalJournalBridgeHandler(
-            new AssistedPaymentTerminal.LocalOperations.CashJournalService(
-                new AssistedPaymentTerminal.LocalOperations.LocalOperationsDatabaseOptions(options.LocalDatabasePath)),
-            options.EnableNonLiveCashCapture);
+            journal,
+            options.EnableNonLiveCashCapture,
+            options.EnableCentralPmsCashSubmission,
+            options.CentralPmsBaseUrl,
+            new AssistedPaymentTerminal.LocalOperations.TerminalCashPaymentSubmissionService(
+                new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashPaymentClient(new HttpClient()),
+                localOptions));
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -194,7 +204,9 @@ public partial class MainWindow : Window
                 }
               };
               window.__APT_DESKTOP_FLAGS__ = {
-                APT_ENABLE_NON_LIVE_CASH_CAPTURE: "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__"
+                APT_ENABLE_NON_LIVE_CASH_CAPTURE: "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
+                APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION: "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
+                CENTRAL_PMS_BASE_URL: "__CENTRAL_PMS_BASE_URL__"
               };
               const originalError = console.error.bind(console);
               console.error = (...args) => {
@@ -210,8 +222,20 @@ public partial class MainWindow : Window
             })();
             """.Replace(
                 "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
-                _options.EnableNonLiveCashCapture ? "true" : "false"));
+                _options.EnableNonLiveCashCapture ? "true" : "false")
+            .Replace(
+                "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
+                _options.EnableCentralPmsCashSubmission ? "true" : "false")
+            .Replace(
+                "__CENTRAL_PMS_BASE_URL__",
+                JavaScriptStringEncode(_options.CentralPmsBaseUrl ?? "")));
     }
+
+    private static string JavaScriptStringEncode(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
 
     private async Task<bool> WaitForReadinessMarkerAsync(TimeSpan timeout)
     {
