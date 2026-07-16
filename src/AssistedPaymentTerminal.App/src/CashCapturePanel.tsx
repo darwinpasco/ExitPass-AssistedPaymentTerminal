@@ -8,6 +8,7 @@ import {
   type BridgeError,
   type CashCustodySessionSnapshot,
   type CashTenderSnapshot,
+  type CentralPmsCashFiscalStatus,
   type CentralPmsCashSubmissionStatus,
   type LocalJournalBridge,
   type LocalJournalHealth,
@@ -27,6 +28,13 @@ type CentralPmsPanelStatus =
   | { kind: "loading"; message: string }
   | { kind: "unavailable"; message: string }
   | { kind: "ready"; status: CentralPmsCashSubmissionStatus; correlationId: string }
+  | { kind: "error"; message: string; correlationId: string };
+
+type FiscalPanelStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "unavailable"; message: string }
+  | { kind: "ready"; status: CentralPmsCashFiscalStatus; correlationId: string }
   | { kind: "error"; message: string; correlationId: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
@@ -60,6 +68,7 @@ export function CashCapturePanel({
   const [denominationCounts, setDenominationCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<PanelStatus>({ kind: "idle" });
   const [centralPmsStatus, setCentralPmsStatus] = useState<CentralPmsPanelStatus>({ kind: "idle" });
+  const [fiscalStatus, setFiscalStatus] = useState<FiscalPanelStatus>({ kind: "idle" });
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -69,6 +78,7 @@ export function CashCapturePanel({
     setCashierAttested(false);
     setDenominationCounts({});
     setCentralPmsStatus({ kind: "idle" });
+    setFiscalStatus({ kind: "idle" });
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -127,6 +137,9 @@ export function CashCapturePanel({
   const existingTender =
     status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender ?? status.tender : null;
   const centralPmsConfig = centralPmsSubmissionConfig(config);
+  const fiscalConfig = centralPmsFiscalConfig(config);
+  const centralPmsCommand = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
+  const canonicalPaymentConfirmed = centralPmsCommand?.status === "Confirmed";
 
   useEffect(() => {
     if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
@@ -159,6 +172,52 @@ export function CashCapturePanel({
       cancelled = true;
     };
   }, [bridge, centralPmsConfig.message, centralPmsConfig.valid, config.centralPmsCashSubmissionEnabled, existingTender?.id, existingTender?.currentLocalState]);
+
+  useEffect(() => {
+    if (!existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed) {
+      setFiscalStatus({ kind: "idle" });
+      return;
+    }
+
+    if (!config.centralPmsFiscalIssuanceEnabled) {
+      setFiscalStatus({ kind: "idle" });
+      return;
+    }
+
+    if (!fiscalConfig.valid) {
+      setFiscalStatus({ kind: "unavailable", message: fiscalConfig.message });
+      return;
+    }
+
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+    setFiscalStatus({ kind: "loading", message: "Checking fiscal issuance status..." });
+
+    async function loadStatus() {
+      const result = await bridge.getCentralPmsCashFiscalStatus(correlationId, existingTender!.id);
+      if (cancelled) return;
+
+      if (result.ok) {
+        setFiscalStatus({ kind: "ready", status: result.payload, correlationId });
+      } else {
+        setFiscalStatus({ kind: "error", message: result.error.message, correlationId });
+      }
+    }
+
+    void loadStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bridge,
+    canonicalPaymentConfirmed,
+    config.centralPmsFiscalIssuanceEnabled,
+    existingTender?.id,
+    existingTender?.currentLocalState,
+    fiscalConfig.message,
+    fiscalConfig.valid,
+  ]);
 
   const denominationPayload = useMemo(
     () =>
@@ -261,6 +320,32 @@ export function CashCapturePanel({
       setCentralPmsStatus({ kind: "ready", status: result.payload, correlationId });
     } else {
       setCentralPmsStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
+  async function submitOrReadbackFiscal() {
+    if (!existingTender) {
+      setFiscalStatus({ kind: "error", message: "Local CASH_RECEIVED tender is not available.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!canonicalPaymentConfirmed) {
+      setFiscalStatus({ kind: "error", message: "Canonical payment must be confirmed before fiscal issuance.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!fiscalConfig.valid) {
+      setFiscalStatus({ kind: "unavailable", message: fiscalConfig.message });
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    setFiscalStatus({ kind: "loading", message: "Submitting or checking fiscal issuance..." });
+    const result = await bridge.submitOrReadbackCentralPmsCashFiscal(correlationId, existingTender.id);
+    if (result.ok) {
+      setFiscalStatus({ kind: "ready", status: result.payload, correlationId });
+    } else {
+      setFiscalStatus({ kind: "error", message: result.error.message, correlationId });
     }
   }
 
@@ -425,6 +510,14 @@ export function CashCapturePanel({
         />
       )}
 
+      {existingTender?.currentLocalState === "CashReceived" && canonicalPaymentConfirmed && (
+        <CentralPmsFiscalIssuancePanel
+          enabled={config.centralPmsFiscalIssuanceEnabled}
+          fiscalStatus={fiscalStatus}
+          onSubmitOrReadback={() => void submitOrReadbackFiscal()}
+        />
+      )}
+
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
         Reload local tender
       </button>
@@ -450,6 +543,23 @@ function centralPmsSubmissionConfig(config: AptConfig): { valid: boolean; messag
     return { valid: true, message: "Central PMS cash submission is available." };
   } catch {
     return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for cash submission." };
+  }
+}
+
+function centralPmsFiscalConfig(config: AptConfig): { valid: boolean; message: string } {
+  if (!config.centralPmsFiscalIssuanceEnabled) {
+    return { valid: false, message: "Central PMS fiscal issuance is disabled." };
+  }
+
+  try {
+    const url = new URL(config.centralPmsBaseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.hostname.endsWith(".example.invalid")) {
+      return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for fiscal issuance." };
+    }
+
+    return { valid: true, message: "Central PMS fiscal issuance is available." };
+  } catch {
+    return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for fiscal issuance." };
   }
 }
 
@@ -564,6 +674,154 @@ function CentralPmsCanonicalPaymentPanel({
       {!confirmed && !conflict && !rejected && (
         <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
           Submit / Check Central PMS
+        </button>
+      )}
+    </section>
+  );
+}
+
+function CentralPmsFiscalIssuancePanel({
+  enabled,
+  fiscalStatus,
+  onSubmitOrReadback,
+}: {
+  enabled: boolean;
+  fiscalStatus: FiscalPanelStatus;
+  onSubmitOrReadback: () => void;
+}) {
+  if (!enabled) {
+    return (
+      <section className="central-pms-panel fiscal unavailable" aria-label="Central PMS fiscal issuance">
+        <h3>Fiscal issuance</h3>
+        <p>Central PMS fiscal issuance is disabled.</p>
+        <p>Cash received locally. Canonical payment confirmed. Fiscal issuance not started. Receipt not rendered or printed. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (fiscalStatus.kind === "unavailable") {
+    return (
+      <section className="central-pms-panel fiscal unavailable" aria-label="Central PMS fiscal issuance">
+        <h3>Fiscal issuance</h3>
+        <p>{fiscalStatus.message}</p>
+        <p>Canonical payment remains confirmed. Fiscal issuance not completed. Receipt not rendered or printed. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (fiscalStatus.kind === "loading") {
+    return (
+      <section className="central-pms-panel fiscal" aria-label="Central PMS fiscal issuance">
+        <h3>Fiscal issuance</h3>
+        <p>{fiscalStatus.message}</p>
+        <p>Canonical payment confirmed. Fiscal issuance pending. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (fiscalStatus.kind === "error") {
+    return (
+      <section className="central-pms-panel fiscal blocked" aria-label="Central PMS fiscal issuance" role="alert">
+        <h3>Fiscal issuance</h3>
+        <p>{fiscalStatus.message}</p>
+        <p>Canonical payment remains confirmed. Fiscal issuance incomplete. Supervisor or support review is required.</p>
+        <p>Correlation ID: {fiscalStatus.correlationId}</p>
+        <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
+          Issue / Check Fiscal Document
+        </button>
+      </section>
+    );
+  }
+
+  const command = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
+  const recorded = command?.status === "Recorded";
+  const conflict = command?.status === "Conflict";
+  const rejected = command?.status === "Rejected";
+  const uncertain =
+    command?.status === "ReadbackRequired" || command?.status === "RetryPending" || command?.status === "Unknown";
+  const pending = !command || command.status === "Pending" || command.status === "Submitting" || uncertain;
+  const replay = command?.resultClassification === "IDEMPOTENT_REPLAY";
+
+  return (
+    <section
+      className={`central-pms-panel fiscal ${recorded ? "confirmed" : conflict || rejected ? "blocked" : ""}`}
+      aria-label="Central PMS fiscal issuance"
+      role={conflict || rejected ? "alert" : "status"}
+    >
+      <div className="central-pms-status-row">
+        <h3>Fiscal issuance</h3>
+        <strong>
+          {recorded
+            ? "Fiscal document recorded"
+            : conflict
+              ? "Fiscal conflict - support review required"
+              : rejected
+                ? "Fiscal rejected - reconciliation required"
+                : uncertain
+                  ? command?.statusLabel
+                  : "Fiscal issuance pending"}
+        </strong>
+      </div>
+
+      {recorded ? (
+        <>
+          <p>{replay ? "Idempotent replay restored the existing fiscal document; no duplicate document was created." : "Central PMS recorded the fiscal workflow result."}</p>
+          <dl className="central-pms-details">
+            <div>
+              <dt>Fiscal-issuance reference</dt>
+              <dd>{command?.fiscalIssuanceReferenceId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>POS fiscal-document ID</dt>
+              <dd>{command?.posFiscalDocumentId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Fiscal-document number</dt>
+              <dd>{command?.fiscalDocumentNumber ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Fiscal-number assigned</dt>
+              <dd>{command?.fiscalNumberAssignedAt ? formatDateTime(command.fiscalNumberAssignedAt) : "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Result classification</dt>
+              <dd>{command?.resultClassification ?? "RECORDED"}</dd>
+            </div>
+            <div>
+              <dt>Fiscal state</dt>
+              <dd>{command?.fiscalIssuanceState ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Correlation ID</dt>
+              <dd>{command?.fiscalCorrelationId ?? "Unavailable"}</dd>
+            </div>
+          </dl>
+        </>
+      ) : conflict ? (
+        <>
+          <p>Central PMS reported a fiscal conflict. Supervisor or support review is required.</p>
+          <p>Fiscal command reference: {command?.localFiscalCommandId ?? "Unavailable"}</p>
+          <p>Terminal cash tender: {command?.terminalCashTenderId ?? "Unavailable"}</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "CONFLICT"}</p>
+        </>
+      ) : rejected ? (
+        <>
+          <p>Central PMS rejected fiscal issuance. Canonical payment remains confirmed; fiscal issuance was not completed.</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "REJECTED"}</p>
+          <p>Support or reconciliation handling is required.</p>
+        </>
+      ) : (
+        <>
+          <p>{pending ? "Fiscal issuance pending." : `Fiscal status: ${command?.statusLabel}`}</p>
+          <p>{command?.fiscalIssuanceReferenceId ? `Fiscal reference: ${command.fiscalIssuanceReferenceId}` : "No fiscal document recorded yet."}</p>
+          <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted fiscal command to issue or check status."}</p>
+        </>
+      )}
+
+      <p>Receipt not rendered or printed. Exit authorization unavailable.</p>
+      {!recorded && !conflict && !rejected && (
+        <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
+          Issue / Check Fiscal Document
         </button>
       )}
     </section>

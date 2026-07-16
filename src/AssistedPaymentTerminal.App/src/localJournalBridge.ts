@@ -98,6 +98,38 @@ export type CentralPmsCashSubmissionStatus = {
   command: CentralPmsCashSubmissionCommand | null;
 };
 
+export type CentralPmsCashFiscalCommand = {
+  localFiscalCommandId: string;
+  terminalCashTenderId: string;
+  relatedCashPaymentOutboxCommandId: string;
+  canonicalPaymentAttemptId: string;
+  canonicalPaymentConfirmationId: string;
+  status: "Pending" | "Submitting" | "ReadbackRequired" | "RetryPending" | "Recorded" | "Conflict" | "Rejected" | "Unknown";
+  statusLabel: string;
+  attemptCount: number;
+  fiscalCorrelationId: string;
+  resultClassification: string | null;
+  fiscalIssuanceReferenceId: string | null;
+  fiscalIssuanceState: string | null;
+  posFiscalDocumentId: string | null;
+  fiscalDocumentNumber: string | null;
+  fiscalNumberAssignedAt: string | null;
+  semanticHashSourceVersion: string | null;
+  recordedAt: string | null;
+  nextRetryAt: string | null;
+  lastSafeHttpStatus: number | null;
+  lastSafeErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CentralPmsCashFiscalStatus = {
+  enabled: boolean;
+  configurationValid: boolean;
+  configurationMessage: string;
+  command: CentralPmsCashFiscalCommand | null;
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -146,6 +178,14 @@ export interface LocalJournalBridge {
     correlationId: string,
     localCashTenderId: string,
   ): Promise<BridgeResult<CentralPmsCashSubmissionStatus>>;
+  getCentralPmsCashFiscalStatus(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashFiscalStatus>>;
+  submitOrReadbackCentralPmsCashFiscal(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashFiscalStatus>>;
 }
 
 declare global {
@@ -173,6 +213,10 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashSubmission.getStatus", correlationId, { localCashTenderId }),
     submitOrReadbackCentralPmsCashSubmission: (correlationId, localCashTenderId) =>
       send("centralPmsCashSubmission.submitOrReadback", correlationId, { localCashTenderId }),
+    getCentralPmsCashFiscalStatus: (correlationId, localCashTenderId) =>
+      send("centralPmsCashFiscal.getStatus", correlationId, { localCashTenderId }),
+    submitOrReadbackCentralPmsCashFiscal: (correlationId, localCashTenderId) =>
+      send("centralPmsCashFiscal.submitOrReadback", correlationId, { localCashTenderId }),
   };
 }
 
