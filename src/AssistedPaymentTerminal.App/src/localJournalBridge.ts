@@ -72,6 +72,32 @@ export type LocalTenderReadback = {
   events: CashTenderEventSnapshot[];
 };
 
+export type CentralPmsCashSubmissionCommand = {
+  localCommandId: string;
+  terminalCashTenderId: string;
+  cashCustodySessionId: string;
+  status: "Pending" | "Submitting" | "ReadbackRequired" | "RetryPending" | "Confirmed" | "Conflict" | "Rejected";
+  statusLabel: string;
+  attemptCount: number;
+  originalCorrelationId: string;
+  resultClassification: string | null;
+  canonicalPaymentAttemptId: string | null;
+  canonicalPaymentConfirmationId: string | null;
+  confirmedAt: string | null;
+  nextRetryAt: string | null;
+  lastSafeHttpStatus: number | null;
+  lastSafeErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CentralPmsCashSubmissionStatus = {
+  enabled: boolean;
+  configurationValid: boolean;
+  configurationMessage: string;
+  command: CentralPmsCashSubmissionCommand | null;
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -112,6 +138,14 @@ export interface LocalJournalBridge {
   startTender(correlationId: string, payload: StartTenderPayload): Promise<BridgeResult<CashTenderSnapshot>>;
   recordCashReceived(correlationId: string, payload: RecordCashReceivedPayload): Promise<BridgeResult<CashTenderSnapshot>>;
   readTenderByParkingSession(correlationId: string, parkingSessionId: string): Promise<BridgeResult<LocalTenderReadback>>;
+  getCentralPmsCashSubmissionStatus(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashSubmissionStatus>>;
+  submitOrReadbackCentralPmsCashSubmission(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashSubmissionStatus>>;
 }
 
 declare global {
@@ -135,6 +169,10 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
     recordCashReceived: (correlationId, payload) => send("localJournal.recordCashReceived", correlationId, payload),
     readTenderByParkingSession: (correlationId, parkingSessionId) =>
       send("localJournal.readTenderByParkingSession", correlationId, { parkingSessionId }),
+    getCentralPmsCashSubmissionStatus: (correlationId, localCashTenderId) =>
+      send("centralPmsCashSubmission.getStatus", correlationId, { localCashTenderId }),
+    submitOrReadbackCentralPmsCashSubmission: (correlationId, localCashTenderId) =>
+      send("centralPmsCashSubmission.submitOrReadback", correlationId, { localCashTenderId }),
   };
 }
 

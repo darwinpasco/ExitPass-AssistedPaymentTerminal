@@ -8,7 +8,9 @@ public sealed record StartupOptions(
     bool SmokeCheckOnly,
     bool WebViewSmokeCheck = false,
     bool EnableNonLiveCashCapture = false,
-    string? LocalDatabasePath = null)
+    string? LocalDatabasePath = null,
+    bool EnableCentralPmsCashSubmission = false,
+    string? CentralPmsBaseUrl = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
     {
@@ -19,6 +21,8 @@ public sealed record StartupOptions(
         var webViewSmokeCheck = false;
         var enableNonLiveCashCapture = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_NON_LIVE_CASH_CAPTURE"));
         var localDatabasePath = Environment.GetEnvironmentVariable("APT_LOCAL_DB_PATH");
+        var enableCentralPmsCashSubmission = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION"));
+        var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
 
         foreach (var arg in args)
         {
@@ -51,6 +55,14 @@ public sealed record StartupOptions(
             {
                 localDatabasePath = arg["--local-db-path=".Length..];
             }
+            else if (arg.Equals("--enable-central-pms-cash-submission", StringComparison.OrdinalIgnoreCase))
+            {
+                enableCentralPmsCashSubmission = true;
+            }
+            else if (arg.StartsWith("--central-pms-base-url=", StringComparison.OrdinalIgnoreCase))
+            {
+                centralPmsBaseUrl = arg["--central-pms-base-url=".Length..];
+            }
         }
 
         return new StartupOptions(
@@ -61,7 +73,9 @@ public sealed record StartupOptions(
             smokeCheckOnly,
             webViewSmokeCheck,
             enableNonLiveCashCapture,
-            string.IsNullOrWhiteSpace(localDatabasePath) ? null : localDatabasePath);
+            string.IsNullOrWhiteSpace(localDatabasePath) ? null : localDatabasePath,
+            enableCentralPmsCashSubmission,
+            string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl);
     }
 
     private static bool IsTrue(string? value) =>

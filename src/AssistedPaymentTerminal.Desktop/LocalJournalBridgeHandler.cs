@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AssistedPaymentTerminal.LocalOperations;
@@ -13,16 +14,34 @@ public sealed class LocalJournalBridgeHandler
         LocalJournalBridgeCommand.CreateOrGetDevelopmentSession,
         LocalJournalBridgeCommand.StartTender,
         LocalJournalBridgeCommand.RecordCashReceived,
-        LocalJournalBridgeCommand.ReadTenderByParkingSession
+        LocalJournalBridgeCommand.ReadTenderByParkingSession,
+        LocalJournalBridgeCommand.CentralPmsCashSubmissionGetStatus,
+        LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback
     ];
 
     private readonly CashJournalService _journal;
     private readonly bool _enabled;
+    private readonly bool _centralPmsCashSubmissionEnabled;
+    private readonly string? _centralPmsBaseUrl;
+    private readonly TerminalCashPaymentSubmissionService _submissionService;
 
-    public LocalJournalBridgeHandler(CashJournalService journal, bool enabled)
+    public LocalJournalBridgeHandler(
+        CashJournalService journal,
+        bool enabled,
+        bool centralPmsCashSubmissionEnabled = false,
+        string? centralPmsBaseUrl = null,
+        TerminalCashPaymentSubmissionService? submissionService = null)
     {
         _journal = journal;
         _enabled = enabled;
+        _centralPmsCashSubmissionEnabled = centralPmsCashSubmissionEnabled;
+        _centralPmsBaseUrl = string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl.Trim();
+        _submissionService = submissionService ?? new TerminalCashPaymentSubmissionService(
+            new CentralPmsTerminalCashPaymentClient(new HttpClient()),
+            new LocalOperationsDatabaseOptions(
+                journal.DatabasePath,
+                CentralPmsBaseUrl: _centralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
+                EnableCentralPmsCashSubmission: centralPmsCashSubmissionEnabled));
     }
 
     private static JsonSerializerOptions CreateJsonOptions()
@@ -86,6 +105,8 @@ public sealed class LocalJournalBridgeHandler
                 LocalJournalBridgeCommand.StartTender => await StartTenderAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.RecordCashReceived => await RecordCashReceivedAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.ReadTenderByParkingSession => await ReadTenderByParkingSessionAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.CentralPmsCashSubmissionGetStatus => await GetCentralPmsCashSubmissionStatusAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback => await SubmitOrReadbackCentralPmsCashSubmissionAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => SerializeFailure(request.Command, request.CorrelationId, "unsupported_command", "Unsupported local journal bridge command.")
             };
         }
@@ -157,9 +178,94 @@ public sealed class LocalJournalBridgeHandler
                     denomination.DenominationCode,
                     denomination.DenominationValue,
                     denomination.Quantity))
-                .ToArray()), cancellationToken).ConfigureAwait(false);
+                .ToArray(),
+            CentralPmsTarget: CentralPmsConfigurationIsValid()
+                ? _centralPmsBaseUrl!
+                : "UNCONFIGURED_CENTRAL_PMS"), cancellationToken).ConfigureAwait(false);
 
         return BridgeResult(request, result);
+    }
+
+    private async Task<string> GetCentralPmsCashSubmissionStatusAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashSubmissionPayload>(request);
+        var configuration = CentralPmsConfiguration();
+
+        if (!_centralPmsCashSubmissionEnabled || !configuration.Valid)
+        {
+            return SerializeSuccess(
+                request.Command,
+                request.CorrelationId,
+                new CentralPmsCashSubmissionStatusResponse(
+                    _centralPmsCashSubmissionEnabled,
+                    configuration.Valid,
+                    configuration.Message,
+                    null));
+        }
+
+        var command = await _journal.GetTerminalCashPaymentOutboxCommandByTenderAsync(
+            payload.LocalCashTenderId,
+            cancellationToken).ConfigureAwait(false);
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            new CentralPmsCashSubmissionStatusResponse(
+                _centralPmsCashSubmissionEnabled,
+                configuration.Valid,
+                configuration.Message,
+                command is null ? null : CentralPmsCashSubmissionCommandSnapshot.FromEntity(command)));
+    }
+
+    private async Task<string> SubmitOrReadbackCentralPmsCashSubmissionAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashSubmissionPayload>(request);
+        var configuration = CentralPmsConfiguration();
+
+        if (!_centralPmsCashSubmissionEnabled)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "feature_disabled",
+                "Central PMS cash submission is disabled.");
+        }
+
+        if (!configuration.Valid)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "central_pms_configuration_invalid",
+                configuration.Message);
+        }
+
+        var command = await _journal.GetTerminalCashPaymentOutboxCommandByTenderAsync(
+            payload.LocalCashTenderId,
+            cancellationToken).ConfigureAwait(false);
+
+        if (command is null)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "outbox_command_not_found",
+                $"No Central PMS cash-payment outbox command exists for local tender '{payload.LocalCashTenderId}'.");
+        }
+
+        var submitted = await _submissionService.SubmitOrReadbackAsync(command.Id, cancellationToken).ConfigureAwait(false);
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            new CentralPmsCashSubmissionStatusResponse(
+                _centralPmsCashSubmissionEnabled,
+                configuration.Valid,
+                configuration.Message,
+                CentralPmsCashSubmissionCommandSnapshot.FromEntity(submitted)));
     }
 
     private async Task<string> ReadTenderByParkingSessionAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
@@ -209,6 +315,27 @@ public sealed class LocalJournalBridgeHandler
                 Payload: null,
                 Error: new LocalJournalBridgeError(code, message, detail)),
             JsonOptions);
+
+    private bool CentralPmsConfigurationIsValid() =>
+        CentralPmsConfiguration().Valid;
+
+    private (bool Valid, string Message) CentralPmsConfiguration()
+    {
+        if (!_centralPmsCashSubmissionEnabled)
+        {
+            return (false, "Central PMS cash submission is disabled.");
+        }
+
+        if (!Uri.TryCreate(_centralPmsBaseUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || string.IsNullOrWhiteSpace(uri.Host)
+            || uri.Host.EndsWith(".example.invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "CENTRAL_PMS_BASE_URL is not configured for Central PMS cash submission.");
+        }
+
+        return (true, "Central PMS cash submission is available.");
+    }
 }
 
 public sealed record LocalJournalBridgeRequest(
@@ -270,3 +397,59 @@ public sealed record ReadTenderByParkingSessionPayload(string ParkingSessionId);
 public sealed record LocalTenderReadbackResponse(
     CashTenderSnapshot? Tender,
     IReadOnlyList<CashTenderEventSnapshot> Events);
+
+public sealed record CentralPmsCashSubmissionPayload(Guid LocalCashTenderId);
+
+public sealed record CentralPmsCashSubmissionStatusResponse(
+    bool Enabled,
+    bool ConfigurationValid,
+    string ConfigurationMessage,
+    CentralPmsCashSubmissionCommandSnapshot? Command);
+
+public sealed record CentralPmsCashSubmissionCommandSnapshot(
+    Guid LocalCommandId,
+    Guid TerminalCashTenderId,
+    Guid CashCustodySessionId,
+    TerminalCashPaymentCommandStatus Status,
+    string StatusLabel,
+    int AttemptCount,
+    string OriginalCorrelationId,
+    string? ResultClassification,
+    Guid? CanonicalPaymentAttemptId,
+    Guid? CanonicalPaymentConfirmationId,
+    DateTimeOffset? ConfirmedAt,
+    DateTimeOffset? NextRetryAt,
+    int? LastSafeHttpStatus,
+    string? LastSafeErrorCode,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt)
+{
+    public static CentralPmsCashSubmissionCommandSnapshot FromEntity(TerminalCashPaymentOutboxCommand command) =>
+        new(
+            command.Id,
+            command.TerminalCashTenderId,
+            command.CashCustodySessionId,
+            command.Status,
+            command.Status switch
+            {
+                TerminalCashPaymentCommandStatus.Pending => "Pending",
+                TerminalCashPaymentCommandStatus.Submitting => "Submitting",
+                TerminalCashPaymentCommandStatus.ReadbackRequired => "Readback required",
+                TerminalCashPaymentCommandStatus.RetryPending => "Retry pending",
+                TerminalCashPaymentCommandStatus.Confirmed => "Confirmed",
+                TerminalCashPaymentCommandStatus.Conflict => "Conflict",
+                TerminalCashPaymentCommandStatus.Rejected => "Rejected",
+                _ => command.Status.ToString()
+            },
+            command.AttemptCount,
+            command.OriginalCorrelationId,
+            command.ResultClassification,
+            command.CanonicalPaymentAttemptId,
+            command.CanonicalPaymentConfirmationId,
+            command.ConfirmedAt,
+            command.NextRetryAt,
+            command.LastSafeHttpStatus,
+            command.LastSafeErrorCode,
+            command.CreatedAt,
+            command.UpdatedAt);
+}

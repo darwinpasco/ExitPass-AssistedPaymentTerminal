@@ -359,7 +359,8 @@ dl {
 .authority-warning,
 .cash-readback,
 .cash-success,
-.cash-error {
+.cash-error,
+.central-pms-panel {
   margin: 5px 0;
   border-radius: 6px;
   padding: 6px 7px;
@@ -386,6 +387,67 @@ dl {
   background: #fff1ef;
   border: 1px solid #e4a197;
   color: #8b2112;
+  font-weight: 800;
+}
+
+.central-pms-panel {
+  background: #f8fbfc;
+  border: 1px solid #c8dce6;
+}
+
+.central-pms-panel.confirmed {
+  background: #eef8f1;
+  border-color: #a7d3b8;
+}
+
+.central-pms-panel.blocked {
+  background: #fff1ef;
+  border-color: #e4a197;
+}
+
+.central-pms-panel.unavailable {
+  background: #fff8ed;
+  border-color: #d7b46a;
+}
+
+.central-pms-panel h3,
+.central-pms-panel p {
+  margin: 0 0 3px;
+}
+
+.central-pms-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.central-pms-status-row strong {
+  color: #19324d;
+  font-size: 12px;
+}
+
+.central-pms-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 8px;
+  margin: 3px 0;
+}
+
+.central-pms-details div {
+  min-width: 0;
+}
+
+.central-pms-details dt {
+  color: #5a6874;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.central-pms-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
   font-weight: 800;
 }
 
