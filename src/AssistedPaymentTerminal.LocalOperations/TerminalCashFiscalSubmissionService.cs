@@ -292,6 +292,16 @@ public sealed class TerminalCashFiscalSubmissionService
         });
 
         ApplyResult(command, operationType, result);
+        if (command.Status == TerminalCashFiscalCommandStatus.Recorded)
+        {
+            await TerminalCashReceiptRetrievalService.EnsureCommandForRecordedFiscalAsync(
+                    dbContext,
+                    command,
+                    now,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 

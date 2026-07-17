@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed record TerminalCashPaymentRequest(
@@ -87,6 +89,27 @@ public sealed record TerminalCashFiscalIssuanceResponse(
     bool PosServerCallAttempted,
     bool ExitAuthorizationIssued,
     bool GateBehaviorTriggered);
+
+public sealed record TerminalCashReceiptPresentationResponse(
+    Guid TerminalCashTenderId,
+    Guid PaymentAttemptId,
+    Guid PaymentConfirmationId,
+    Guid FiscalIssuanceReferenceId,
+    string FiscalIssuanceState,
+    Guid PosFiscalDocumentId,
+    string? FiscalDocumentNumber,
+    string? FiscalDocumentStatus,
+    string ReceiptAvailabilityState,
+    string? PresentationVersion,
+    string? TemplateVersion,
+    string? ContentType,
+    JsonElement AuthoritativePresentation,
+    string? VoidStatus,
+    string? VoidReasonCode,
+    DateTimeOffset? VoidedAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    Guid CorrelationId);
 
 public sealed record CentralPmsSafeError(
     string ErrorCode,
