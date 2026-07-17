@@ -1,0 +1,116 @@
+{
+  "contractVersion": "terminal-cash-receipt-presentation.v1",
+  "owner": "Central PMS",
+  "sourceRepository": "ExitPass-APT",
+  "sourceCommit": "14600a179ea709fe5d5aa626a16025ff610f24ff",
+  "method": "GET",
+  "route": "/v1/terminal-cash-payments/references/{terminalCashTenderId}/receipt-presentation",
+  "readOnly": true,
+  "requiredHeaders": [
+    {
+      "name": "X-Correlation-Id",
+      "value": "caller supplied GUID correlation id",
+      "required": true
+    }
+  ],
+  "responseFields": [
+    "terminalCashTenderId",
+    "paymentAttemptId",
+    "paymentConfirmationId",
+    "fiscalIssuanceReferenceId",
+    "fiscalIssuanceState",
+    "posFiscalDocumentId",
+    "fiscalDocumentNumber",
+    "fiscalDocumentStatus",
+    "receiptAvailabilityState",
+    "presentationVersion",
+    "templateVersion",
+    "contentType",
+    "authoritativePresentation",
+    "voidStatus",
+    "voidReasonCode",
+    "voidedAt",
+    "createdAt",
+    "updatedAt",
+    "correlationId"
+  ],
+  "authoritativePresentation": {
+    "owner": "POS Server",
+    "shape": "GetDigitalSalesInvoicePresentationResponse",
+    "transportedThrough": "Central PMS",
+    "persistencePosture": "APT stores the complete returned payload as an opaque authoritative snapshot for restart-safe downstream presentation.",
+    "notes": [
+      "APT must not reconstruct lines, totals, taxes, tenders, fiscal numbers, wording, template content, or presentation content.",
+      "APT must not mark the receipt rendered, printed, reprinted, emailed, or delivered in this slice."
+    ]
+  },
+  "posServerDelegation": {
+    "method": "GET",
+    "route": "/v1/fiscal-documents/{fiscalDocumentId}/digital-sales-invoice/presentation",
+    "contract": "fiscal-document-presentation.v1",
+    "contentType": "application/json",
+    "presentationVersion": "digital-sales-invoice-presentation-json-v1",
+    "templateVersion": "digital-sales-invoice-json-v1"
+  },
+  "statusCodes": [
+    {
+      "httpStatus": 200,
+      "meaning": "Authoritative POS Server receipt presentation returned."
+    },
+    {
+      "httpStatus": 400,
+      "code": "INVALID_REQUEST",
+      "meaning": "Required correlation header is missing or invalid."
+    },
+    {
+      "httpStatus": 404,
+      "code": "TERMINAL_CASH_PAYMENT_NOT_FOUND",
+      "meaning": "Terminal cash payment does not exist."
+    },
+    {
+      "httpStatus": 404,
+      "code": "TERMINAL_CASH_FISCAL_ISSUANCE_NOT_FOUND",
+      "meaning": "Fiscal issuance has not been created for the terminal cash tender."
+    },
+    {
+      "httpStatus": 409,
+      "code": "TERMINAL_CASH_PAYMENT_NOT_CONFIRMED",
+      "meaning": "Canonical Central PMS payment confirmation is not recorded."
+    },
+    {
+      "httpStatus": 409,
+      "code": "TERMINAL_CASH_RECEIPT_PRESENTATION_NOT_READY",
+      "meaning": "Fiscal issuance is pending, readback-required, retry-pending, or uncertain."
+    },
+    {
+      "httpStatus": 409,
+      "code": "POS_FISCAL_DOCUMENT_ID_MISSING",
+      "meaning": "Recorded fiscal issuance lacks a POS fiscal document id."
+    },
+    {
+      "httpStatus": 409,
+      "code": "POS_FISCAL_DOCUMENT_PRESENTATION_INCONSISTENT",
+      "meaning": "POS Server did not return the recorded fiscal document."
+    },
+    {
+      "httpStatus": 409,
+      "code": "POS_SERVER_RECEIPT_PRESENTATION_NOT_READY",
+      "meaning": "POS Server reports presentation is not safely ready."
+    },
+    {
+      "httpStatus": 503,
+      "code": "POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE",
+      "meaning": "POS Server presentation read path is unavailable."
+    }
+  ],
+  "sideEffectsProhibited": [
+    "call POS Server directly from APT",
+    "render receipt HTML or UI",
+    "print receipt",
+    "create print job",
+    "mark receipt printed",
+    "issue exit authorization",
+    "create gate command or event",
+    "invoke Payment Orchestrator"
+  ]
+}

@@ -21,6 +21,10 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<TerminalCashFiscalAttempt> TerminalCashFiscalAttempts => Set<TerminalCashFiscalAttempt>();
 
+    public DbSet<TerminalCashReceiptRetrievalCommand> TerminalCashReceiptRetrievalCommands => Set<TerminalCashReceiptRetrievalCommand>();
+
+    public DbSet<TerminalCashReceiptRetrievalAttempt> TerminalCashReceiptRetrievalAttempts => Set<TerminalCashReceiptRetrievalAttempt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
@@ -182,6 +186,60 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
                 .HasForeignKey(attempt => attempt.LocalFiscalCommandId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(attempt => new { attempt.LocalFiscalCommandId, attempt.AttemptSequence }).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashReceiptRetrievalCommand>(entity =>
+        {
+            entity.ToTable("terminal_cash_receipt_retrieval_commands");
+            entity.HasKey(command => command.Id);
+            entity.Property(command => command.RetrievalCorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(command => command.CentralPmsTarget).HasMaxLength(512).IsRequired();
+            entity.Property(command => command.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(command => command.LastSafeErrorCode).HasMaxLength(128);
+            entity.Property(command => command.ResultClassification).HasMaxLength(128);
+            entity.Property(command => command.ReceiptAvailabilityState).HasMaxLength(128);
+            entity.Property(command => command.FiscalDocumentNumber).HasMaxLength(128);
+            entity.Property(command => command.FiscalDocumentStatus).HasMaxLength(128);
+            entity.Property(command => command.PresentationVersion).HasMaxLength(128);
+            entity.Property(command => command.TemplateVersion).HasMaxLength(128);
+            entity.Property(command => command.ContentType).HasMaxLength(128);
+            entity.Property(command => command.AuthoritativePresentationJson);
+            entity.Property(command => command.AuthoritativePayloadHash).HasMaxLength(128);
+            entity.Property(command => command.VoidStatus).HasMaxLength(128);
+            entity.Property(command => command.VoidReasonCode).HasMaxLength(128);
+            entity.Property(command => command.FirstAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.LastAttemptedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.NextRetryAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.VoidedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.RetrievedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.UpdatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(command => command.RelatedCashPaymentOutboxCommand)
+                .WithMany()
+                .HasForeignKey(command => command.RelatedCashPaymentOutboxCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(command => command.RelatedFiscalCommand)
+                .WithMany()
+                .HasForeignKey(command => command.RelatedFiscalCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(command => command.TerminalCashTenderId).IsUnique();
+            entity.HasIndex(command => command.RelatedFiscalCommandId).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashReceiptRetrievalAttempt>(entity =>
+        {
+            entity.ToTable("terminal_cash_receipt_retrieval_attempts");
+            entity.HasKey(attempt => attempt.Id);
+            entity.Property(attempt => attempt.OutcomeClassification).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(attempt => attempt.SafeErrorCode).HasMaxLength(128);
+            entity.Property(attempt => attempt.CorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(attempt => attempt.StartedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(attempt => attempt.CompletedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(attempt => attempt.LocalReceiptRetrieval)
+                .WithMany(command => command.Attempts)
+                .HasForeignKey(attempt => attempt.LocalReceiptRetrievalId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(attempt => new { attempt.LocalReceiptRetrievalId, attempt.AttemptSequence }).IsUnique();
         });
     }
 }
