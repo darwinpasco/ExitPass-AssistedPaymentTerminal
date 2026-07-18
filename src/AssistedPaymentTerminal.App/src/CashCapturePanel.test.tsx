@@ -9,6 +9,7 @@ import type {
   CashCustodySessionSnapshot,
   CashTenderSnapshot,
   CentralPmsCashFiscalStatus,
+  CentralPmsCashReceiptPreview,
   CentralPmsCashReceiptStatus,
   CentralPmsCashSubmissionStatus,
   LocalJournalBridge,
@@ -602,6 +603,367 @@ describe("CashCapturePanel", () => {
     expect(bridge.getCentralPmsCashReceiptStatus).toHaveBeenCalled();
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
   });
+
+  it("hides receipt preview action when preview feature is disabled", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View Receipt Preview" })).not.toBeInTheDocument();
+  });
+
+  it("hides receipt preview action before receipt is available", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("NotReady"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation not ready")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View Receipt Preview" })).not.toBeInTheDocument();
+  });
+
+  it("opens a read-only receipt preview from authoritative data", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview(),
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(bridge.getCentralPmsCashReceiptPreview).toHaveBeenCalled();
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Receipt preview");
+    expect(screen.getByText("Read-only authoritative presentation")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("Not printed");
+    expect(document.body).toHaveTextContent("Exit authorization unavailable");
+    expect(document.body).toHaveTextContent("Paper width: 57 mm");
+    expect(screen.getByText("Configuration completeness: Incomplete")).toBeInTheDocument();
+    expect(screen.getByText(/Development preview: some Sales Invoice fields are placeholders/)).toBeInTheDocument();
+    expect(screen.getByText("SALES INVOICE")).toBeInTheDocument();
+    expect(screen.getByText("[REGISTERED BUSINESS NAME]")).toBeInTheDocument();
+    expect(screen.getByText("[REGISTERED BUSINESS ADDRESS]")).toBeInTheDocument();
+    expect(screen.getByText("[TIN]")).toBeInTheDocument();
+    expect(screen.getByText("[POS SERIAL NUMBER]")).toBeInTheDocument();
+    expect(screen.getByText("[MACHINE IDENTIFICATION NUMBER]")).toBeInTheDocument();
+    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
+    expect(screen.getByText("Qty")).toBeInTheDocument();
+    expect(screen.getByText("Unit price")).toBeInTheDocument();
+    expect(screen.getByText("[UNIT PRICE]")).toBeInTheDocument();
+    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
+    expect(screen.getByText("SALES INVOICE DETAILS")).toBeInTheDocument();
+    expect(screen.getByText("Sales Invoice No.")).toBeInTheDocument();
+    expect(screen.queryByText("Fiscal Identity")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fiscal document no.")).not.toBeInTheDocument();
+    expect(screen.getByText("PARKING DETAILS")).toBeInTheDocument();
+    expect(screen.getByText("[PLATE NUMBER]")).toBeInTheDocument();
+    expect(screen.getByText("[ENTRY TIME]")).toBeInTheDocument();
+    expect(screen.getByText("[EXIT TIME]")).toBeInTheDocument();
+    expect(screen.getByText("[DURATION]")).toBeInTheDocument();
+    expect(screen.getByText("VAT BREAKDOWN")).toBeInTheDocument();
+    expect(screen.getByText("[VATABLE SALES]")).toBeInTheDocument();
+    expect(screen.getByText("Output VAT")).toBeInTheDocument();
+    expect(screen.getAllByText("Subtotal").length).toBeGreaterThan(0);
+    expect(screen.getByText("[SUBTOTAL]")).toBeInTheDocument();
+    expect(screen.queryByText("grand_total")).not.toBeInTheDocument();
+    expect(screen.getByText("Payment method")).toBeInTheDocument();
+    expect(screen.getByText("CASH")).toBeInTheDocument();
+    expect(screen.getByText("Total Paid")).toBeInTheDocument();
+    expect(screen.getByText("Change")).toBeInTheDocument();
+    expect(screen.getByText("[SALES INVOICE LEGAL STATEMENT]")).toBeInTheDocument();
+    expect(screen.getByText("[SALES INVOICE FOOTER]")).toBeInTheDocument();
+    expect(screen.getByText("BIR ACCREDITATION AND PTU INFORMATION")).toBeInTheDocument();
+    expect(screen.getByText("[BIR ACCREDITATION NO.]")).toBeInTheDocument();
+    expect(screen.getByText("[BIR ACCREDITATION DATE ISSUED]")).toBeInTheDocument();
+    expect(screen.getByText("[BIR ACCREDITATION VALID UNTIL]")).toBeInTheDocument();
+    expect(screen.getByText("[PTU NO.]")).toBeInTheDocument();
+    expect(screen.getByText("[PTU DATE ISSUED]")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
+    expect(document.body.textContent ?? "").not.toMatch(/merchant Name|site Name|display Amount|total Type|tender Type|change Display|message|VAT REG TIN|Demo Corporation|Sample TIN/i);
+    expect(screen.queryByRole("button", { name: /Print|Reprint|Export|PDF|Email|SMS|Share/i })).not.toBeInTheDocument();
+  });
+
+  it("uses authoritative values instead of corresponding placeholders when supplied", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview({ complete: true }),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    await screen.findByText("GOVERNED REGISTERED BUSINESS NAME");
+    const body = screen.getByLabelText("Read-only receipt body");
+    expect(document.body).toHaveTextContent("Configuration completeness: Complete");
+    expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
+    expect(body.textContent ?? "").not.toMatch(/merchant Name|site Name|Fiscal Identity|fiscal Document Number|Fiscal document no\.|display Amount|total Type|tender Type|change Display|message/i);
+    expect(within(body).getAllByText("GOVERNED REGISTERED BUSINESS NAME")).toHaveLength(1);
+    expect(within(body).getAllByText("GOVERNED PARKING LOCATION")).toHaveLength(1);
+    expect(within(body).getAllByText("SI-000001")).toHaveLength(1);
+    expect(within(body).getByText("Sales Invoice No.")).toBeInTheDocument();
+    expect(screen.queryByText("[REGISTERED BUSINESS NAME]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[TIN]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[PLATE NUMBER]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[SALES INVOICE FOOTER]")).not.toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED TIN")).toBeInTheDocument();
+    expect(within(body).getByText("BIR Accr. No.")).toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED BIR ACCREDITATION NO.")).toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED BIR ACCREDITATION DATE ISSUED")).toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED BIR ACCREDITATION VALID UNTIL")).toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED PTU NO.")).toBeInTheDocument();
+    expect(within(body).getByText("GOVERNED PTU DATE ISSUED")).toBeInTheDocument();
+    expect(within(body).getAllByText("Date Issued")).toHaveLength(2);
+    expect(screen.queryByText("[BIR ACCREDITATION NO.]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[BIR ACCREDITATION DATE ISSUED]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[BIR ACCREDITATION VALID UNTIL]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[PTU DATE ISSUED]")).not.toBeInTheDocument();
+    expect(within(body).getByText("THIS SERVES AS YOUR SALES INVOICE")).toBeInTheDocument();
+    expect(within(body).getByText("THANK YOU FOR CHOOSING OUR SERVICE")).toBeInTheDocument();
+    expect(body.textContent ?? "").not.toMatch(/Demo Corporation|Sample TIN|ABC 1234|ACC-001|PTU-001/i);
+  });
+
+  it("collapses technical receipt metadata by default while keeping primary metadata visible", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview(),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Sales Invoice No. SI-000001")).toBeInTheDocument();
+    expect(screen.getByText("Paper width: 57 mm")).toBeInTheDocument();
+    expect(screen.getByText("Configuration completeness: Incomplete")).toBeInTheDocument();
+    expect(screen.getByText("Not printed")).toBeInTheDocument();
+    expect(screen.getByText("Exit authorization unavailable")).toBeInTheDocument();
+    const details = screen.getByText("Receipt technical details").closest("details");
+    expect(details).not.toHaveAttribute("open");
+  });
+
+  it("closes receipt preview and returns to the cashier workflow", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview(),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Close preview" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload local tender" })).toBeInTheDocument();
+  });
+
+  it("shows unsupported version guidance without rendering receipt body", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreviewFailure: { code: "receipt_preview_unsupported_version", message: "Unsupported receipt presentation version." },
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Unsupported receipt presentation version")).toBeInTheDocument();
+    expect(screen.getByText(/support review or application upgrade/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only receipt body")).not.toBeInTheDocument();
+  });
+
+  it("shows payload-integrity failure as a blocking support state", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreviewFailure: { code: "receipt_preview_integrity_failed", message: "Receipt payload integrity check failed." },
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Receipt payload integrity check failed")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only receipt body")).not.toBeInTheDocument();
+  });
+
+  it("shows malformed payload decode failure safely", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreviewFailure: { code: "receipt_preview_decode_failed", message: "Receipt presentation could not be safely decoded." },
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Receipt presentation could not be safely decoded")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only receipt body")).not.toBeInTheDocument();
+  });
+
+  it("renders voided preview with prominent void posture", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Voided"),
+        receiptPreview: receiptPreview({ voided: true }),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("VOIDED FISCAL DOCUMENT")).toBeInTheDocument();
+    expect(screen.getByText("Void reason: SUPERVISOR_VOID")).toBeInTheDocument();
+    expect(screen.getByText(/Not valid as an active receipt/)).toBeInTheDocument();
+  });
+
+  it.each([
+    [undefined, "57 mm"],
+    [57 as const, "57 mm"],
+    [58 as const, "58 mm"],
+    [80 as const, "80 mm"],
+  ])("displays active paper width %s", async (width, expectedText) => {
+    const preview = receiptPreview({ paperWidthMm: width ?? 57 });
+    renderPanel({
+      config: receiptPreviewEnabledConfig(width ? { receiptPaperWidthMm: width } : {}),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: preview,
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    await screen.findByText("Receipt preview");
+    expect(document.body).toHaveTextContent(`Paper width: ${expectedText}`);
+    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
+    expect(screen.getByText("Receipt technical details")).toBeInTheDocument();
+  });
+
+  it("displays invalid-width fallback warning and keeps receipt facts unchanged", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPaperWidthMm: 57,
+        receiptPaperWidthWarning: "Unsupported APT_RECEIPT_PAPER_WIDTH_MM value '99'. Falling back to 57 mm.",
+      }),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview({
+          paperWidthMm: 57,
+          paperWidthWarning: "Unsupported APT_RECEIPT_PAPER_WIDTH_MM value '99'. Falling back to 57 mm.",
+        }),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    await screen.findByText("Receipt preview");
+    expect(document.body).toHaveTextContent("Paper width: 57 mm");
+    expect(screen.getByText(/Falling back to 57 mm/)).toBeInTheDocument();
+    expect(screen.getAllByText("SI-000001").length).toBeGreaterThan(0);
+    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
+  });
+
+  it("preserves identical receipt facts across 57 58 and 80 mm profiles", async () => {
+    const factsByWidth: Array<string> = [];
+    for (const width of [57, 58, 80] as const) {
+      const bridge = new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview({ paperWidthMm: width }),
+      });
+      const { unmount } = renderPanel({ config: receiptPreviewEnabledConfig({ receiptPaperWidthMm: width }), bridge });
+
+      await recordCashReceived();
+      await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+      const receiptBody = await screen.findByLabelText("Read-only receipt body");
+      factsByWidth.push(receiptBody.textContent ?? "");
+      expect(screen.getByText(`Paper width: ${width} mm`)).toBeInTheDocument();
+      unmount();
+    }
+
+    expect(factsByWidth[1]).toBe(factsByWidth[0]);
+    expect(factsByWidth[2]).toBe(factsByWidth[0]);
+  });
+
+  it("restart-loaded available receipt can be previewed without retrieval", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview(),
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Receipt preview")).toBeInTheDocument();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("status loading does not automatically open or decode preview", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview(),
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    expect(bridge.getCentralPmsCashReceiptPreview).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Receipt preview")).not.toBeInTheDocument();
+  });
 });
 
 function renderPanel({
@@ -613,7 +975,7 @@ function renderPanel({
   tariffExpired?: boolean;
   bridge: LocalJournalBridge;
 }) {
-  render(
+  return render(
     <CashCapturePanel
       config={config}
       context={buildTerminalContext(config)}
@@ -660,6 +1022,16 @@ function receiptEnabledConfig(): AptConfig {
   });
 }
 
+function receiptPreviewEnabledConfig(overrides: Partial<AptConfig> = {}): AptConfig {
+  return {
+    ...receiptEnabledConfig(),
+    receiptPreviewEnabled: true,
+    receiptPaperWidthMm: 57,
+    receiptPaperWidthWarning: null,
+    ...overrides,
+  };
+}
+
 function activeSession(): ResolveVendorParkingResponse {
   const now = Date.now();
   return {
@@ -693,6 +1065,8 @@ class FakeBridge implements LocalJournalBridge {
   private readonly fiscalSubmitStatus: CentralPmsCashFiscalStatus;
   private readonly receiptStatus: CentralPmsCashReceiptStatus;
   private readonly receiptRetrieveStatus: CentralPmsCashReceiptStatus;
+  private readonly receiptPreview: CentralPmsCashReceiptPreview;
+  private readonly receiptPreviewFailure?: { code: string; message: string };
   private readonly initialReadback: LocalTenderReadback;
 
   public health = vi.fn(async (correlationId: string): Promise<BridgeResult<LocalJournalHealth>> => ({
@@ -811,6 +1185,32 @@ class FakeBridge implements LocalJournalBridge {
     payload: this.receiptRetrieveStatus,
   }));
 
+  public getCentralPmsCashReceiptPreview = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptPreview>> => {
+    if (this.receiptPreviewFailure) {
+      return {
+        ok: false,
+        command: "centralPmsCashReceipt.getPreview",
+        correlationId,
+        error: {
+          code: this.receiptPreviewFailure.code,
+          message: this.receiptPreviewFailure.message,
+          detail: {
+            command: this.receiptStatus.command ?? undefined,
+            paperProfile: this.receiptPreview.paperProfile,
+            paperWidthWarning: this.receiptPreview.paperWidthWarning,
+          },
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      command: "centralPmsCashReceipt.getPreview",
+      correlationId,
+      payload: this.receiptPreview,
+    };
+  });
+
   public constructor(options: {
     duplicateOnStart?: boolean;
     centralStatus?: CentralPmsCashSubmissionStatus;
@@ -819,6 +1219,8 @@ class FakeBridge implements LocalJournalBridge {
     fiscalSubmitStatus?: CentralPmsCashFiscalStatus;
     receiptStatus?: CentralPmsCashReceiptStatus;
     receiptRetrieveStatus?: CentralPmsCashReceiptStatus;
+    receiptPreview?: CentralPmsCashReceiptPreview;
+    receiptPreviewFailure?: { code: string; message: string };
     initialReadback?: LocalTenderReadback;
   } = {}) {
     this.duplicateOnStart = options.duplicateOnStart ?? false;
@@ -828,6 +1230,8 @@ class FakeBridge implements LocalJournalBridge {
     this.fiscalSubmitStatus = options.fiscalSubmitStatus ?? this.fiscalStatus;
     this.receiptStatus = options.receiptStatus ?? receiptStatus("Pending");
     this.receiptRetrieveStatus = options.receiptRetrieveStatus ?? this.receiptStatus;
+    this.receiptPreview = options.receiptPreview ?? receiptPreview();
+    this.receiptPreviewFailure = options.receiptPreviewFailure;
     this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
 }
@@ -989,4 +1393,207 @@ function receiptStatus(
       ...overrides,
     },
   };
+}
+
+function receiptPreview({
+  voided = false,
+  paperWidthMm = 57,
+  paperWidthWarning = null,
+  complete = false,
+}: {
+  voided?: boolean;
+  paperWidthMm?: 57 | 58 | 80;
+  paperWidthWarning?: string | null;
+  complete?: boolean;
+} = {}): CentralPmsCashReceiptPreview {
+  const profile = {
+    id: `receipt-paper-${paperWidthMm}` as "receipt-paper-57" | "receipt-paper-58" | "receipt-paper-80",
+    paperWidthMm,
+    printableWidthMm: paperWidthMm === 80 ? 70 : paperWidthMm === 58 ? 49 : 48,
+    innerMarginMm: paperWidthMm === 80 ? 5 : 4,
+    fontScale: paperWidthMm === 80 ? 1 : paperWidthMm === 58 ? 0.94 : 0.92,
+    monetaryColumnBehavior: paperWidthMm === 80 ? "wide-right-aligned" : "compact-right-aligned",
+    metadataDensity: paperWidthMm === 80 ? "standard" : "compact",
+  };
+  const command = receiptStatus(voided ? "Voided" : "Available").command!;
+  return {
+    enabled: true,
+    command,
+    paperProfile: profile,
+    paperWidthWarning,
+    preview: {
+      terminalCashTenderId: command.terminalCashTenderId,
+      localReceiptRetrievalId: command.localReceiptRetrievalId,
+      fiscalIssuanceReferenceId: command.fiscalIssuanceReferenceId,
+      posFiscalDocumentId: command.posFiscalDocumentId,
+      fiscalDocumentNumber: "SI-000001",
+      fiscalDocumentStatus: voided ? "VOIDED" : "RECORDED",
+      receiptAvailabilityState: "AVAILABLE",
+      presentationVersion: "digital-sales-invoice-presentation-json-v1",
+      templateVersion: "digital-sales-invoice-json-v1",
+      contentType: "application/json",
+      authoritativePayloadHash: "sha256:receipt-payload",
+      retrievedAt: new Date().toISOString(),
+      retrievalCorrelationId: "corr-receipt",
+      voided,
+      voidStatus: voided ? "voided" : null,
+      voidReasonCode: voided ? "SUPERVISOR_VOID" : null,
+      voidedAt: voided ? new Date().toISOString() : null,
+      paperProfile: profile,
+      hasPlaceholders: !complete,
+      configurationCompleteness: complete ? "Complete" : "Incomplete",
+      sections: [
+        {
+          title: "Sales Invoice Title",
+          fields: [field("Title", "SALES INVOICE")],
+          rows: [],
+        },
+        {
+          title: "Registered business and statutory header",
+          fields: complete
+            ? [
+                field("Registered business name", "GOVERNED REGISTERED BUSINESS NAME"),
+                field("Registered business address", "GOVERNED REGISTERED BUSINESS ADDRESS"),
+                field("TIN", "GOVERNED TIN", false, "tin"),
+                field("S/N", "GOVERNED POS SERIAL NUMBER"),
+                field("MIN", "GOVERNED MACHINE IDENTIFICATION NUMBER"),
+              ]
+            : [
+                field("Registered business name", "[REGISTERED BUSINESS NAME]", true),
+                field("Registered business address", "[REGISTERED BUSINESS ADDRESS]", true),
+                field("TIN", "[TIN]", true, "tin"),
+                field("S/N", "[POS SERIAL NUMBER]", true),
+                field("MIN", "[MACHINE IDENTIFICATION NUMBER]", true),
+              ],
+          rows: [],
+        },
+        {
+          title: "SITE AND TERMINAL INFORMATION",
+          fields: complete
+            ? [field("PARKING LOCATION", "GOVERNED PARKING LOCATION"), field("TERMINAL ID", "GOVERNED TERMINAL ID")]
+            : [field("PARKING LOCATION", "[PARKING LOCATION]", true), field("TERMINAL ID", "[TERMINAL ID]", true)],
+          rows: [],
+        },
+        {
+          title: "SALES INVOICE DETAILS",
+          fields: [
+            field("Sales Invoice No.", "SI-000001"),
+            complete ? field("Issued Date", "GOVERNED ISSUED DATE", false, "issuedDate") : field("Issued Date", "[ISSUED DATE]", true, "issuedDate"),
+          ],
+          rows: [],
+        },
+        {
+          title: "PARKING DETAILS",
+          fields: complete
+            ? [
+                field("Plate Number", "GOVERNED PLATE NUMBER"),
+                field("Entry Time", "GOVERNED ENTRY TIME"),
+                field("Exit Time", "GOVERNED EXIT TIME"),
+                field("Duration", "GOVERNED DURATION"),
+              ]
+            : [
+                field("Plate Number", "[PLATE NUMBER]", true),
+                field("Entry Time", "[ENTRY TIME]", true),
+                field("Exit Time", "[EXIT TIME]", true),
+                field("Duration", "[DURATION]", true),
+              ],
+          rows: [],
+        },
+        {
+          title: "ITEMS",
+          fields: [],
+          rows: [
+            {
+              fields: [
+                field("Description", "Parking fee - cash"),
+                field("Qty", "1"),
+                complete ? field("Unit price", "PHP 125.00") : field("Unit price", "[UNIT PRICE]", true),
+                field("Amount", "PHP 125.00"),
+              ],
+            },
+          ],
+        },
+        {
+          title: "SUBTOTAL",
+          fields: [complete ? field("Subtotal", "PHP 125.00") : field("Subtotal", "[SUBTOTAL]", true)],
+          rows: [],
+        },
+        {
+          title: "DISCOUNTS",
+          fields: [],
+          rows: [
+            {
+              fields: complete
+                ? [field("Discount Reason", "None"), field("Discount Amount", "PHP 0.00")]
+                : [field("Discount Reason", "[DISCOUNT REASON]", true), field("Discount Amount", "[DISCOUNT AMOUNT]", true)],
+            },
+          ],
+        },
+        {
+          title: "VAT BREAKDOWN",
+          fields: complete
+            ? [
+                field("VATable Sales", "PHP 125.00"),
+                field("Output VAT", "PHP 0.00"),
+                field("VAT Exempt", "PHP 0.00"),
+                field("Zero Rated", "PHP 0.00"),
+              ]
+            : [
+                field("VATable Sales", "[VATABLE SALES]", true),
+                field("Output VAT", "PHP 0.00"),
+                field("VAT Exempt", "[VAT EXEMPT SALES]", true),
+                field("Zero Rated", "[ZERO-RATED SALES]", true),
+              ],
+          rows: [],
+        },
+        {
+          title: "PAYMENT DETAILS",
+          fields: [
+            field("Payment method", "CASH"),
+            complete ? field("Provider", "Not applicable") : field("Provider", "[PAYMENT PROVIDER]", true),
+            field("Amount", "PHP 150.00"),
+          ],
+          rows: [],
+        },
+        {
+          title: "TOTAL PAID AND CHANGE",
+          fields: [field("Total Paid", "PHP 150.00"), field("Change", "PHP 25.00")],
+          rows: [],
+        },
+        {
+          title: "Sales Invoice legal statement",
+          fields: [complete ? field("Statement", "THIS SERVES AS YOUR SALES INVOICE") : field("Statement", "[SALES INVOICE LEGAL STATEMENT]", true)],
+          rows: [],
+        },
+        {
+          title: "Customer-service footer",
+          fields: [complete ? field("Footer", "THANK YOU FOR CHOOSING OUR SERVICE") : field("Footer", "[SALES INVOICE FOOTER]", true)],
+          rows: [],
+        },
+        {
+          title: "BIR ACCREDITATION AND PTU INFORMATION",
+          fields: complete
+            ? [
+                field("BIR Accr. No.", "GOVERNED BIR ACCREDITATION NO.", false, "birAccreditationNumber"),
+                field("Date Issued", "GOVERNED BIR ACCREDITATION DATE ISSUED", false, "birAccreditationIssuedDateDisplay"),
+                field("Valid Until", "GOVERNED BIR ACCREDITATION VALID UNTIL", false, "birAccreditationValidUntilDisplay"),
+                field("PTU No.", "GOVERNED PTU NO.", false, "ptuNumber"),
+                field("Date Issued", "GOVERNED PTU DATE ISSUED", false, "ptuIssuedDateDisplay"),
+              ]
+            : [
+                field("BIR Accr. No.", "[BIR ACCREDITATION NO.]", true, "birAccreditationNumber"),
+                field("Date Issued", "[BIR ACCREDITATION DATE ISSUED]", true, "birAccreditationIssuedDateDisplay"),
+                field("Valid Until", "[BIR ACCREDITATION VALID UNTIL]", true, "birAccreditationValidUntilDisplay"),
+                field("PTU No.", "[PTU NO.]", true, "ptuNumber"),
+                field("Date Issued", "[PTU DATE ISSUED]", true, "ptuIssuedDateDisplay"),
+              ],
+          rows: [],
+        },
+      ],
+    },
+  };
+}
+
+function field(label: string, value: string, isPlaceholder = false, key = label) {
+  return { key, label, value, isPlaceholder };
 }

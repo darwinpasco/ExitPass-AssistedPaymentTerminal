@@ -9,6 +9,7 @@ import {
   type CashCustodySessionSnapshot,
   type CashTenderSnapshot,
   type CentralPmsCashFiscalStatus,
+  type CentralPmsCashReceiptPreview,
   type CentralPmsCashReceiptStatus,
   type CentralPmsCashSubmissionStatus,
   type LocalJournalBridge,
@@ -45,6 +46,12 @@ type ReceiptPanelStatus =
   | { kind: "ready"; status: CentralPmsCashReceiptStatus; correlationId: string }
   | { kind: "error"; message: string; correlationId: string };
 
+type ReceiptPreviewStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "ready"; preview: CentralPmsCashReceiptPreview; correlationId: string }
+  | { kind: "blocked"; message: string; correlationId: string; code: string; detail?: BridgeError["detail"] };
+
 const defaultBridge = createWebViewLocalJournalBridge();
 const denominations = [
   { code: "PHP-1000", value: 1000 },
@@ -78,6 +85,7 @@ export function CashCapturePanel({
   const [centralPmsStatus, setCentralPmsStatus] = useState<CentralPmsPanelStatus>({ kind: "idle" });
   const [fiscalStatus, setFiscalStatus] = useState<FiscalPanelStatus>({ kind: "idle" });
   const [receiptStatus, setReceiptStatus] = useState<ReceiptPanelStatus>({ kind: "idle" });
+  const [receiptPreviewStatus, setReceiptPreviewStatus] = useState<ReceiptPreviewStatus>({ kind: "idle" });
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -89,6 +97,7 @@ export function CashCapturePanel({
     setCentralPmsStatus({ kind: "idle" });
     setFiscalStatus({ kind: "idle" });
     setReceiptStatus({ kind: "idle" });
+    setReceiptPreviewStatus({ kind: "idle" });
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -153,6 +162,8 @@ export function CashCapturePanel({
   const canonicalPaymentConfirmed = centralPmsCommand?.status === "Confirmed";
   const fiscalCommand = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
   const fiscalRecorded = fiscalCommand?.status === "Recorded";
+  const receiptCommand = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
+  const receiptPreviewEligible = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided";
 
   useEffect(() => {
     if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
@@ -235,6 +246,7 @@ export function CashCapturePanel({
   useEffect(() => {
     if (!existingTender || existingTender.currentLocalState !== "CashReceived" || !fiscalRecorded) {
       setReceiptStatus({ kind: "idle" });
+      setReceiptPreviewStatus({ kind: "idle" });
       return;
     }
 
@@ -429,8 +441,47 @@ export function CashCapturePanel({
     const result = await bridge.retrieveOrCheckCentralPmsCashReceipt(correlationId, existingTender.id);
     if (result.ok) {
       setReceiptStatus({ kind: "ready", status: result.payload, correlationId });
+      setReceiptPreviewStatus({ kind: "idle" });
     } else {
       setReceiptStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
+  async function viewReceiptPreview() {
+    if (!existingTender) {
+      setReceiptPreviewStatus({
+        kind: "blocked",
+        message: "Local CASH_RECEIVED tender is not available.",
+        code: "local_tender_unavailable",
+        correlationId: "unavailable",
+      });
+      return;
+    }
+
+    if (!receiptPreviewEligible) {
+      setReceiptPreviewStatus({
+        kind: "blocked",
+        message: "Receipt preview is available only after authoritative receipt presentation is available.",
+        code: "receipt_preview_not_available",
+        correlationId: "unavailable",
+      });
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    setReceiptPreviewStatus({ kind: "loading", message: "Loading read-only receipt preview..." });
+    const result = await bridge.getCentralPmsCashReceiptPreview(correlationId, existingTender.id);
+
+    if (result.ok) {
+      setReceiptPreviewStatus({ kind: "ready", preview: result.payload, correlationId });
+    } else {
+      setReceiptPreviewStatus({
+        kind: "blocked",
+        message: result.error.message,
+        code: result.error.code,
+        detail: result.error.detail,
+        correlationId,
+      });
     }
   }
 
@@ -606,10 +657,19 @@ export function CashCapturePanel({
       {existingTender?.currentLocalState === "CashReceived" && canonicalPaymentConfirmed && fiscalRecorded && (
         <CentralPmsReceiptAvailabilityPanel
           enabled={config.centralPmsReceiptRetrievalEnabled}
+          previewEnabled={config.receiptPreviewEnabled}
           receiptStatus={receiptStatus}
           onRetrieveOrCheck={() => void retrieveOrCheckReceipt()}
+          onViewPreview={() => void viewReceiptPreview()}
         />
       )}
+
+      <ReceiptPreviewSurface
+        status={receiptPreviewStatus}
+        configuredPaperWidthMm={config.receiptPaperWidthMm}
+        paperWidthWarning={config.receiptPaperWidthWarning}
+        onClose={() => setReceiptPreviewStatus({ kind: "idle" })}
+      />
 
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
         Reload local tender
@@ -940,12 +1000,16 @@ function CentralPmsFiscalIssuancePanel({
 
 function CentralPmsReceiptAvailabilityPanel({
   enabled,
+  previewEnabled,
   receiptStatus,
   onRetrieveOrCheck,
+  onViewPreview,
 }: {
   enabled: boolean;
+  previewEnabled: boolean;
   receiptStatus: ReceiptPanelStatus;
   onRetrieveOrCheck: () => void;
+  onViewPreview: () => void;
 }) {
   if (!enabled) {
     return (
@@ -1103,6 +1167,11 @@ function CentralPmsReceiptAvailabilityPanel({
       )}
 
       <p>Receipt not rendered or printed. Exit authorization unavailable.</p>
+      {previewEnabled && (available || voided) && (
+        <button className="secondary-action" type="button" onClick={onViewPreview}>
+          View Receipt Preview
+        </button>
+      )}
       {!available && !voided && !inconsistent && !rejected && (
         <button className="secondary-action" type="button" onClick={onRetrieveOrCheck}>
           Retrieve / Check Receipt
@@ -1110,6 +1179,263 @@ function CentralPmsReceiptAvailabilityPanel({
       )}
     </section>
   );
+}
+
+function ReceiptPreviewSurface({
+  status,
+  configuredPaperWidthMm,
+  paperWidthWarning,
+  onClose,
+}: {
+  status: ReceiptPreviewStatus;
+  configuredPaperWidthMm: 57 | 58 | 80;
+  paperWidthWarning: string | null;
+  onClose: () => void;
+}) {
+  if (status.kind === "idle") {
+    return null;
+  }
+
+  const preview = status.kind === "ready" ? status.preview.preview : null;
+  const blockedDetail = status.kind === "blocked" ? status.detail : undefined;
+  const profile = status.kind === "ready" ? status.preview.paperProfile : blockedDetail?.paperProfile;
+  const command = status.kind === "ready" ? status.preview.command : blockedDetail?.command;
+  const width = profile?.paperWidthMm ?? configuredPaperWidthMm;
+  const warning = status.kind === "ready" ? status.preview.paperWidthWarning : blockedDetail?.paperWidthWarning ?? paperWidthWarning;
+
+  return (
+    <section className="receipt-preview-overlay" aria-label="Receipt preview">
+      <div className="receipt-preview-shell" role={status.kind === "blocked" ? "alert" : "dialog"} aria-modal="false">
+        <div className="receipt-preview-header">
+          <div>
+            <p className="eyebrow">Receipt preview</p>
+            <h3>Read-only authoritative presentation</h3>
+          </div>
+          <button className="secondary-action" type="button" onClick={onClose}>
+            Close preview
+          </button>
+        </div>
+
+        <div className="receipt-preview-primary-meta">
+          <span>Sales Invoice No. {preview?.fiscalDocumentNumber ?? command?.fiscalDocumentNumber ?? "Unavailable"}</span>
+          <span>Status: {preview?.fiscalDocumentStatus ?? command?.fiscalDocumentStatus ?? "Unavailable"}</span>
+          <span>Paper width: {width} mm</span>
+          {preview && <span>Configuration completeness: {preview.configurationCompleteness}</span>}
+          <span>Not printed</span>
+          <span>Exit authorization unavailable</span>
+        </div>
+        {preview?.hasPlaceholders && (
+          <p className="receipt-preview-warning">
+            Development preview: some Sales Invoice fields are placeholders because the authoritative fiscal configuration is not yet defined.
+          </p>
+        )}
+        {warning && <p className="receipt-preview-warning">{warning}</p>}
+
+        {status.kind === "loading" && <p>{status.message}</p>}
+
+        {status.kind === "blocked" && (
+          <div className="receipt-preview-blocked">
+            <strong>{blockedTitle(status.code)}</strong>
+            <p>{status.message}</p>
+            <p>Support review or application upgrade is required. No receipt body was rendered.</p>
+            {command && (
+              <dl className="receipt-preview-metadata">
+                <PreviewMeta label="Sales Invoice No." value={command.fiscalDocumentNumber} />
+                <PreviewMeta label="Fiscal-document status" value={command.fiscalDocumentStatus} />
+                <PreviewMeta label="Receipt availability" value={command.receiptAvailabilityState} />
+                <PreviewMeta label="Presentation version" value={command.presentationVersion} />
+                <PreviewMeta label="Template version" value={command.templateVersion} />
+                <PreviewMeta label="Content type" value={command.contentType} />
+                <PreviewMeta label="Payload hash" value={command.authoritativePayloadHash} />
+                <PreviewMeta label="Correlation ID" value={command.retrievalCorrelationId} />
+              </dl>
+            )}
+          </div>
+        )}
+
+        {preview && (
+          <>
+            {preview.voided && (
+              <div className="receipt-preview-voided">
+                <strong>VOIDED FISCAL DOCUMENT</strong>
+                <p>Void reason: {preview.voidReasonCode ?? "Unavailable"}</p>
+                <p>Voided timestamp: {preview.voidedAt ? formatDateTime(preview.voidedAt) : "Unavailable"}</p>
+                <p>Not valid as an active receipt. Not printed. Exit authorization unavailable.</p>
+              </div>
+            )}
+
+            <details className="receipt-preview-technical">
+              <summary>Receipt technical details</summary>
+              <dl className="receipt-preview-metadata">
+                <PreviewMeta label="Receipt availability" value={preview.receiptAvailabilityState} />
+                <PreviewMeta label="Configuration completeness" value={preview.configurationCompleteness} />
+                <PreviewMeta label="Presentation version" value={preview.presentationVersion} />
+                <PreviewMeta label="Template version" value={preview.templateVersion} />
+                <PreviewMeta label="Content type" value={preview.contentType} />
+                <PreviewMeta label="Payload hash" value={preview.authoritativePayloadHash} />
+                <PreviewMeta label="Retrieval timestamp" value={preview.retrievedAt ? formatDateTime(preview.retrievedAt) : "Unavailable"} />
+                <PreviewMeta label="Correlation ID" value={preview.retrievalCorrelationId} />
+                {preview.voided && <PreviewMeta label="Void status" value={preview.voidStatus} />}
+              </dl>
+            </details>
+
+            <article className={`receipt-paper ${preview.paperProfile.id}`} aria-label="Read-only receipt body">
+              {preview.sections.map((section) => <ReceiptPaperSection key={section.title} section={section} />)}
+            </article>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+type ReceiptPreviewPaperField = {
+  key?: string;
+  label: string;
+  value: string;
+  isPlaceholder?: boolean;
+};
+
+function ReceiptPaperSection({
+  section,
+}: {
+  section: {
+    title: string;
+    fields: ReceiptPreviewPaperField[];
+    rows: Array<{ fields: ReceiptPreviewPaperField[] }>;
+  };
+}) {
+  if (section.title === "Sales Invoice Title") {
+    return (
+      <section className="receipt-paper-title">
+        <h4>{section.fields[0]?.value ?? "SALES INVOICE"}</h4>
+      </section>
+    );
+  }
+
+  if (section.title === "Registered business and statutory header") {
+    return (
+      <section className="receipt-paper-header">
+        {section.fields.slice(0, 2).map((field, index) => (
+          <p key={`${field.key ?? field.value}-${index}`} className={`${index === 0 ? "receipt-paper-merchant" : ""} ${field.isPlaceholder ? "receipt-placeholder" : ""}`.trim()}>
+            {field.value}
+          </p>
+        ))}
+        <ReceiptPreviewFields fields={section.fields.slice(2)} />
+      </section>
+    );
+  }
+
+  if (section.title === "Customer-service footer") {
+    return (
+      <section className="receipt-paper-footer">
+        {section.fields.map((field, index) => (
+          <p key={`${field.key ?? field.value}-${index}`} className={field.isPlaceholder ? "receipt-placeholder" : undefined}>
+            {field.value}
+          </p>
+        ))}
+      </section>
+    );
+  }
+
+  if (section.title === "ITEMS") {
+    return (
+      <section className="receipt-paper-section receipt-paper-lines">
+        <h4>ITEMS</h4>
+        {section.rows.map((row, index) => (
+          <ReceiptLineItem fields={row.fields} key={`${section.title}-${index}`} />
+        ))}
+      </section>
+    );
+  }
+
+  if (section.title === "SUBTOTAL" || section.title === "TOTAL PAID AND CHANGE") {
+    return (
+      <section className="receipt-paper-section receipt-paper-totals">
+        <h4>{section.title}</h4>
+        {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
+        {section.rows.map((row, index) => <ReceiptPreviewFields fields={row.fields} key={`${section.title}-${index}`} />)}
+      </section>
+    );
+  }
+
+  if (section.title === "PAYMENT DETAILS") {
+    return (
+      <section className="receipt-paper-section receipt-paper-payment">
+        <h4>PAYMENT DETAILS</h4>
+        {section.rows.map((row, index) => (
+          <ReceiptPreviewFields fields={row.fields} key={`${section.title}-${index}`} />
+        ))}
+        {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
+      </section>
+    );
+  }
+
+  return (
+    <section className="receipt-paper-section">
+      <h4>{section.title}</h4>
+      {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
+      {section.rows.map((row, index) => (
+        <div className="receipt-paper-row" key={`${section.title}-${index}`}>
+          <ReceiptPreviewFields fields={row.fields} />
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function ReceiptLineItem({ fields }: { fields: ReceiptPreviewPaperField[] }) {
+  const description = fields.find((field) => field.key === "description" || field.label === "Description");
+  const amount = fields.find((field) => field.key === "amount" || field.label === "Amount");
+  const supportingFields = fields.filter((field) => field !== description && field !== amount);
+
+  return (
+    <div className="receipt-line-item">
+      <div className="receipt-line-main">
+        <span className={description?.isPlaceholder ? "receipt-placeholder" : undefined}>{description?.value ?? "Line item"}</span>
+        {amount && <strong className={amount.isPlaceholder ? "receipt-placeholder" : undefined}>{amount.value}</strong>}
+      </div>
+      {supportingFields.length > 0 && <ReceiptPreviewFields fields={supportingFields} />}
+    </div>
+  );
+}
+
+function ReceiptPreviewFields({ fields }: { fields: ReceiptPreviewPaperField[] }) {
+  return (
+    <dl className="receipt-paper-fields">
+      {fields.map((field, index) => (
+        <div key={`${field.key ?? field.label}-${index}`} className={field.isPlaceholder ? "receipt-placeholder-row" : undefined}>
+          <dt>{field.label}</dt>
+          <dd className={field.isPlaceholder ? "receipt-placeholder" : undefined}>{field.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function PreviewMeta({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value || "Unavailable"}</dd>
+    </div>
+  );
+}
+
+function blockedTitle(code: string): string {
+  if (code === "receipt_preview_integrity_failed") {
+    return "Receipt payload integrity check failed";
+  }
+
+  if (code === "receipt_preview_decode_failed") {
+    return "Receipt presentation could not be safely decoded";
+  }
+
+  if (code === "receipt_preview_unsupported_version") {
+    return "Unsupported receipt presentation version";
+  }
+
+  return "Receipt preview unavailable";
 }
 
 function formatDateTime(value: string): string {

@@ -30,6 +30,8 @@ public partial class MainWindow : Window
             options.EnableCentralPmsCashSubmission,
             options.EnableCentralPmsFiscalIssuance,
             options.EnableCentralPmsReceiptRetrieval,
+            options.EnableReceiptPreview,
+            options.ReceiptPaperWidthMm,
             options.CentralPmsBaseUrl,
             new AssistedPaymentTerminal.LocalOperations.TerminalCashPaymentSubmissionService(
                 new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashPaymentClient(new HttpClient()),
@@ -218,6 +220,8 @@ public partial class MainWindow : Window
                 APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION: "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
                 APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE: "__APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE__",
                 APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL: "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
+                APT_ENABLE_RECEIPT_PREVIEW: "__APT_ENABLE_RECEIPT_PREVIEW__",
+                APT_RECEIPT_PAPER_WIDTH_MM: "__APT_RECEIPT_PAPER_WIDTH_MM__",
                 CENTRAL_PMS_BASE_URL: "__CENTRAL_PMS_BASE_URL__"
               };
               const originalError = console.error.bind(console);
@@ -244,6 +248,12 @@ public partial class MainWindow : Window
             .Replace(
                 "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
                 _options.EnableCentralPmsReceiptRetrieval ? "true" : "false")
+            .Replace(
+                "__APT_ENABLE_RECEIPT_PREVIEW__",
+                _options.EnableReceiptPreview ? "true" : "false")
+            .Replace(
+                "__APT_RECEIPT_PAPER_WIDTH_MM__",
+                JavaScriptStringEncode(_options.ReceiptPaperWidthMm ?? ""))
             .Replace(
                 "__CENTRAL_PMS_BASE_URL__",
                 JavaScriptStringEncode(_options.CentralPmsBaseUrl ?? "")));

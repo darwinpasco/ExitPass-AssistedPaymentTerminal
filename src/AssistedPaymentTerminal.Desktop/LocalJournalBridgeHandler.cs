@@ -1,7 +1,10 @@
 using System.Net.Http;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AssistedPaymentTerminal.LocalOperations;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 
 namespace AssistedPaymentTerminal.Desktop;
 
@@ -20,7 +23,8 @@ public sealed class LocalJournalBridgeHandler
         LocalJournalBridgeCommand.CentralPmsCashFiscalGetStatus,
         LocalJournalBridgeCommand.CentralPmsCashFiscalSubmitOrReadback,
         LocalJournalBridgeCommand.CentralPmsCashReceiptGetStatus,
-        LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck
+        LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck,
+        LocalJournalBridgeCommand.CentralPmsCashReceiptGetPreview
     ];
 
     private readonly CashJournalService _journal;
@@ -28,7 +32,9 @@ public sealed class LocalJournalBridgeHandler
     private readonly bool _centralPmsCashSubmissionEnabled;
     private readonly bool _centralPmsFiscalIssuanceEnabled;
     private readonly bool _centralPmsReceiptRetrievalEnabled;
+    private readonly bool _receiptPreviewEnabled;
     private readonly string? _centralPmsBaseUrl;
+    private readonly ReceiptPreviewPaperSelection _receiptPaperSelection;
     private readonly TerminalCashPaymentSubmissionService _submissionService;
     private readonly TerminalCashFiscalSubmissionService _fiscalService;
     private readonly TerminalCashReceiptRetrievalService _receiptService;
@@ -39,6 +45,8 @@ public sealed class LocalJournalBridgeHandler
         bool centralPmsCashSubmissionEnabled = false,
         bool centralPmsFiscalIssuanceEnabled = false,
         bool centralPmsReceiptRetrievalEnabled = false,
+        bool receiptPreviewEnabled = false,
+        string? receiptPaperWidthMm = null,
         string? centralPmsBaseUrl = null,
         TerminalCashPaymentSubmissionService? submissionService = null,
         TerminalCashFiscalSubmissionService? fiscalService = null,
@@ -49,6 +57,8 @@ public sealed class LocalJournalBridgeHandler
         _centralPmsCashSubmissionEnabled = centralPmsCashSubmissionEnabled;
         _centralPmsFiscalIssuanceEnabled = centralPmsFiscalIssuanceEnabled;
         _centralPmsReceiptRetrievalEnabled = centralPmsReceiptRetrievalEnabled;
+        _receiptPreviewEnabled = receiptPreviewEnabled;
+        _receiptPaperSelection = ReceiptPreviewPaperProfiles.Select(receiptPaperWidthMm);
         _centralPmsBaseUrl = string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl.Trim();
         var localOptions = new LocalOperationsDatabaseOptions(
             journal.DatabasePath,
@@ -134,12 +144,29 @@ public sealed class LocalJournalBridgeHandler
                 LocalJournalBridgeCommand.CentralPmsCashFiscalSubmitOrReadback => await SubmitOrReadbackCentralPmsCashFiscalAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashReceiptGetStatus => await GetCentralPmsCashReceiptStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck => await RetrieveOrCheckCentralPmsCashReceiptAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.CentralPmsCashReceiptGetPreview => await GetCentralPmsCashReceiptPreviewAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => SerializeFailure(request.Command, request.CorrelationId, "unsupported_command", "Unsupported local journal bridge command.")
             };
         }
         catch (JsonException)
         {
             return SerializeFailure(request.Command, request.CorrelationId, "malformed_payload", "Malformed local journal bridge payload.");
+        }
+        catch (LocalOperationsDatabaseConfigurationException)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "LOCAL_DATABASE_CONFIGURATION_INVALID",
+                "The configured local operational database path is invalid. Local cash actions are unavailable until the configuration is corrected.");
+        }
+        catch (Exception exception) when (IsLocalDatabaseUnavailable(exception))
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "LOCAL_DATABASE_UNAVAILABLE",
+                "The local operational database is unavailable. Local cash actions are blocked until database access is restored.");
         }
     }
 
@@ -528,6 +555,60 @@ public sealed class LocalJournalBridgeHandler
                 CentralPmsCashReceiptCommandSnapshot.FromEntity(retrieved)));
     }
 
+    private async Task<string> GetCentralPmsCashReceiptPreviewAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
+
+        if (!_receiptPreviewEnabled)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "feature_disabled",
+                "Receipt preview is disabled.");
+        }
+
+        var command = await _receiptService.GetReceiptRetrievalByTenderAsync(
+                payload.LocalCashTenderId,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (command is null)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "receipt_retrieval_not_found",
+                $"No durable receipt-retrieval record exists for local tender '{payload.LocalCashTenderId}'.");
+        }
+
+        var build = ReceiptPreviewBuilder.Build(command, _receiptPaperSelection.Profile);
+        if (!build.Success)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                build.ErrorCode!,
+                build.ErrorMessage!,
+                new CentralPmsCashReceiptPreviewBlockedDetail(
+                    CentralPmsCashReceiptCommandSnapshot.FromEntity(command),
+                    _receiptPaperSelection.Profile,
+                    _receiptPaperSelection.Warning));
+        }
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            new CentralPmsCashReceiptPreviewResponse(
+                _receiptPreviewEnabled,
+                CentralPmsCashReceiptCommandSnapshot.FromEntity(command),
+                build.Document!,
+                _receiptPaperSelection.Profile,
+                _receiptPaperSelection.Warning));
+    }
+
     private static T ReadPayload<T>(LocalJournalBridgeRequest request)
     {
         if (request.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
@@ -564,6 +645,22 @@ public sealed class LocalJournalBridgeHandler
                 Payload: null,
                 Error: new LocalJournalBridgeError(code, message, detail)),
             JsonOptions);
+
+    private static bool IsLocalDatabaseUnavailable(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SqliteException
+                or IOException
+                or UnauthorizedAccessException
+                or DbUpdateException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private bool CentralPmsConfigurationIsValid() =>
         CentralPmsConfiguration().Valid;
@@ -815,6 +912,18 @@ public sealed record CentralPmsCashReceiptStatusResponse(
     bool ConfigurationValid,
     string ConfigurationMessage,
     CentralPmsCashReceiptCommandSnapshot? Command);
+
+public sealed record CentralPmsCashReceiptPreviewResponse(
+    bool Enabled,
+    CentralPmsCashReceiptCommandSnapshot Command,
+    ReceiptPreviewDocument Preview,
+    ReceiptPreviewPaperProfile PaperProfile,
+    string? PaperWidthWarning);
+
+public sealed record CentralPmsCashReceiptPreviewBlockedDetail(
+    CentralPmsCashReceiptCommandSnapshot Command,
+    ReceiptPreviewPaperProfile PaperProfile,
+    string? PaperWidthWarning);
 
 public sealed record CentralPmsCashReceiptCommandSnapshot(
     Guid LocalReceiptRetrievalId,

@@ -12,17 +12,37 @@ public sealed class CashJournalService
     ];
 
     private readonly LocalOperationsDatabaseOptions _options;
+    private readonly LocalOperationsDatabaseConfigurationException? _configurationError;
 
     public CashJournalService(LocalOperationsDatabaseOptions? options = null)
     {
         _options = options ?? new LocalOperationsDatabaseOptions();
-        DatabasePath = LocalOperationsDatabasePath.Resolve(_options.DatabasePath);
+        try
+        {
+            DatabasePath = LocalOperationsDatabasePath.Resolve(_options.DatabasePath);
+        }
+        catch (LocalOperationsDatabaseConfigurationException exception)
+        {
+            DatabasePath = _options.DatabasePath ?? string.Empty;
+            _configurationError = exception;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            DatabasePath = _options.DatabasePath ?? string.Empty;
+            _configurationError = new LocalOperationsDatabaseConfigurationException(
+                "APT_LOCAL_DB_PATH is not a valid local database path.");
+        }
     }
 
     public string DatabasePath { get; }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        if (_configurationError is not null)
+        {
+            throw _configurationError;
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
 
         await using var dbContext = CreateDbContext();

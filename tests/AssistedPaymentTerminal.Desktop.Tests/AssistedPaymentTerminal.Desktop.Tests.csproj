@@ -11,6 +11,7 @@
     <ProjectReference Include="..\..\src\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj" />
     <ProjectReference Include="..\..\tools\AssistedPaymentTerminal.CentralPmsCashFiscalUiProof\AssistedPaymentTerminal.CentralPmsCashFiscalUiProof.csproj" />
     <ProjectReference Include="..\..\tools\AssistedPaymentTerminal.CentralPmsCashReceiptStatusUiProof\AssistedPaymentTerminal.CentralPmsCashReceiptStatusUiProof.csproj" />
+    <ProjectReference Include="..\..\tools\AssistedPaymentTerminal.CentralPmsCashReceiptPreviewUiProof\AssistedPaymentTerminal.CentralPmsCashReceiptPreviewUiProof.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
