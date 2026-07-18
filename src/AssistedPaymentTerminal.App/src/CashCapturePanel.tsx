@@ -9,6 +9,7 @@ import {
   type CashCustodySessionSnapshot,
   type CashTenderSnapshot,
   type CentralPmsCashFiscalStatus,
+  type CentralPmsCashReceiptStatus,
   type CentralPmsCashSubmissionStatus,
   type LocalJournalBridge,
   type LocalJournalHealth,
@@ -35,6 +36,13 @@ type FiscalPanelStatus =
   | { kind: "loading"; message: string }
   | { kind: "unavailable"; message: string }
   | { kind: "ready"; status: CentralPmsCashFiscalStatus; correlationId: string }
+  | { kind: "error"; message: string; correlationId: string };
+
+type ReceiptPanelStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "unavailable"; message: string }
+  | { kind: "ready"; status: CentralPmsCashReceiptStatus; correlationId: string }
   | { kind: "error"; message: string; correlationId: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
@@ -69,6 +77,7 @@ export function CashCapturePanel({
   const [status, setStatus] = useState<PanelStatus>({ kind: "idle" });
   const [centralPmsStatus, setCentralPmsStatus] = useState<CentralPmsPanelStatus>({ kind: "idle" });
   const [fiscalStatus, setFiscalStatus] = useState<FiscalPanelStatus>({ kind: "idle" });
+  const [receiptStatus, setReceiptStatus] = useState<ReceiptPanelStatus>({ kind: "idle" });
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -79,6 +88,7 @@ export function CashCapturePanel({
     setDenominationCounts({});
     setCentralPmsStatus({ kind: "idle" });
     setFiscalStatus({ kind: "idle" });
+    setReceiptStatus({ kind: "idle" });
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -138,8 +148,11 @@ export function CashCapturePanel({
     status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender ?? status.tender : null;
   const centralPmsConfig = centralPmsSubmissionConfig(config);
   const fiscalConfig = centralPmsFiscalConfig(config);
+  const receiptConfig = centralPmsReceiptConfig(config);
   const centralPmsCommand = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
   const canonicalPaymentConfirmed = centralPmsCommand?.status === "Confirmed";
+  const fiscalCommand = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
+  const fiscalRecorded = fiscalCommand?.status === "Recorded";
 
   useEffect(() => {
     if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
@@ -217,6 +230,52 @@ export function CashCapturePanel({
     existingTender?.currentLocalState,
     fiscalConfig.message,
     fiscalConfig.valid,
+  ]);
+
+  useEffect(() => {
+    if (!existingTender || existingTender.currentLocalState !== "CashReceived" || !fiscalRecorded) {
+      setReceiptStatus({ kind: "idle" });
+      return;
+    }
+
+    if (!config.centralPmsReceiptRetrievalEnabled) {
+      setReceiptStatus({ kind: "idle" });
+      return;
+    }
+
+    if (!receiptConfig.valid) {
+      setReceiptStatus({ kind: "unavailable", message: receiptConfig.message });
+      return;
+    }
+
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+    setReceiptStatus({ kind: "loading", message: "Checking receipt availability..." });
+
+    async function loadStatus() {
+      const result = await bridge.getCentralPmsCashReceiptStatus(correlationId, existingTender!.id);
+      if (cancelled) return;
+
+      if (result.ok) {
+        setReceiptStatus({ kind: "ready", status: result.payload, correlationId });
+      } else {
+        setReceiptStatus({ kind: "error", message: result.error.message, correlationId });
+      }
+    }
+
+    void loadStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bridge,
+    config.centralPmsReceiptRetrievalEnabled,
+    existingTender?.id,
+    existingTender?.currentLocalState,
+    fiscalRecorded,
+    receiptConfig.message,
+    receiptConfig.valid,
   ]);
 
   const denominationPayload = useMemo(
@@ -346,6 +405,32 @@ export function CashCapturePanel({
       setFiscalStatus({ kind: "ready", status: result.payload, correlationId });
     } else {
       setFiscalStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
+  async function retrieveOrCheckReceipt() {
+    if (!existingTender) {
+      setReceiptStatus({ kind: "error", message: "Local CASH_RECEIVED tender is not available.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!fiscalRecorded) {
+      setReceiptStatus({ kind: "error", message: "Fiscal document must be recorded before receipt retrieval.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!receiptConfig.valid) {
+      setReceiptStatus({ kind: "unavailable", message: receiptConfig.message });
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    setReceiptStatus({ kind: "loading", message: "Retrieving or checking receipt availability..." });
+    const result = await bridge.retrieveOrCheckCentralPmsCashReceipt(correlationId, existingTender.id);
+    if (result.ok) {
+      setReceiptStatus({ kind: "ready", status: result.payload, correlationId });
+    } else {
+      setReceiptStatus({ kind: "error", message: result.error.message, correlationId });
     }
   }
 
@@ -518,6 +603,14 @@ export function CashCapturePanel({
         />
       )}
 
+      {existingTender?.currentLocalState === "CashReceived" && canonicalPaymentConfirmed && fiscalRecorded && (
+        <CentralPmsReceiptAvailabilityPanel
+          enabled={config.centralPmsReceiptRetrievalEnabled}
+          receiptStatus={receiptStatus}
+          onRetrieveOrCheck={() => void retrieveOrCheckReceipt()}
+        />
+      )}
+
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
         Reload local tender
       </button>
@@ -560,6 +653,23 @@ function centralPmsFiscalConfig(config: AptConfig): { valid: boolean; message: s
     return { valid: true, message: "Central PMS fiscal issuance is available." };
   } catch {
     return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for fiscal issuance." };
+  }
+}
+
+function centralPmsReceiptConfig(config: AptConfig): { valid: boolean; message: string } {
+  if (!config.centralPmsReceiptRetrievalEnabled) {
+    return { valid: false, message: "Central PMS receipt retrieval is disabled." };
+  }
+
+  try {
+    const url = new URL(config.centralPmsBaseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.hostname.endsWith(".example.invalid")) {
+      return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for receipt retrieval." };
+    }
+
+    return { valid: true, message: "Central PMS receipt retrieval is available." };
+  } catch {
+    return { valid: false, message: "CENTRAL_PMS_BASE_URL is not configured for receipt retrieval." };
   }
 }
 
@@ -822,6 +932,180 @@ function CentralPmsFiscalIssuancePanel({
       {!recorded && !conflict && !rejected && (
         <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
           Issue / Check Fiscal Document
+        </button>
+      )}
+    </section>
+  );
+}
+
+function CentralPmsReceiptAvailabilityPanel({
+  enabled,
+  receiptStatus,
+  onRetrieveOrCheck,
+}: {
+  enabled: boolean;
+  receiptStatus: ReceiptPanelStatus;
+  onRetrieveOrCheck: () => void;
+}) {
+  if (!enabled) {
+    return (
+      <section className="central-pms-panel receipt unavailable" aria-label="Central PMS receipt availability">
+        <h3>Receipt availability</h3>
+        <p>Central PMS receipt retrieval is disabled.</p>
+        <p>Cash received locally. Canonical payment confirmed. Fiscal document recorded. Receipt not retrieved. Receipt not rendered or printed. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (receiptStatus.kind === "unavailable") {
+    return (
+      <section className="central-pms-panel receipt unavailable" aria-label="Central PMS receipt availability">
+        <h3>Receipt availability</h3>
+        <p>{receiptStatus.message}</p>
+        <p>Fiscal document remains recorded. Receipt retrieval not completed. Receipt not rendered or printed. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (receiptStatus.kind === "loading") {
+    return (
+      <section className="central-pms-panel receipt" aria-label="Central PMS receipt availability">
+        <h3>Receipt availability</h3>
+        <p>{receiptStatus.message}</p>
+        <p>Fiscal document recorded. Receipt presentation not yet available in the terminal. Exit authorization unavailable.</p>
+      </section>
+    );
+  }
+
+  if (receiptStatus.kind === "error") {
+    return (
+      <section className="central-pms-panel receipt blocked" aria-label="Central PMS receipt availability" role="alert">
+        <h3>Receipt availability</h3>
+        <p>{receiptStatus.message}</p>
+        <p>Fiscal document remains recorded. Receipt retrieval incomplete. Supervisor or support review is required.</p>
+        <p>Correlation ID: {receiptStatus.correlationId}</p>
+        <button className="secondary-action" type="button" onClick={onRetrieveOrCheck}>
+          Retrieve / Check Receipt
+        </button>
+      </section>
+    );
+  }
+
+  const command = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
+  const available = command?.status === "Available";
+  const voided = command?.status === "Voided";
+  const notReady = command?.status === "NotReady";
+  const retry = command?.status === "RetryPending" || command?.status === "Unavailable" || command?.status === "Retrieving";
+  const inconsistent = command?.status === "Inconsistent";
+  const rejected = command?.status === "Rejected";
+  const pending = !command || command.status === "Pending";
+
+  return (
+    <section
+      className={`central-pms-panel receipt ${available || voided ? "confirmed" : inconsistent || rejected ? "blocked" : ""}`}
+      aria-label="Central PMS receipt availability"
+      role={inconsistent || rejected ? "alert" : "status"}
+    >
+      <div className="central-pms-status-row">
+        <h3>Receipt availability</h3>
+        <strong>
+          {available
+            ? "Receipt presentation available"
+            : voided
+              ? "Receipt presentation available - fiscal document voided"
+              : inconsistent
+                ? "Receipt inconsistency - support review required"
+                : rejected
+                  ? "Receipt rejected - reconciliation required"
+                  : notReady
+                    ? "Receipt presentation not ready"
+                    : retry
+                      ? command?.statusLabel
+                      : "Receipt not yet retrieved"}
+        </strong>
+      </div>
+
+      {available || voided ? (
+        <>
+          <p>{voided ? "Authoritative POS Server presentation is available with void posture." : "Authoritative POS Server presentation metadata is available."}</p>
+          <dl className="central-pms-details">
+            <div>
+              <dt>Fiscal-document number</dt>
+              <dd>{command?.fiscalDocumentNumber ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Fiscal-document status</dt>
+              <dd>{command?.fiscalDocumentStatus ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Receipt availability</dt>
+              <dd>{command?.receiptAvailabilityState ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Presentation version</dt>
+              <dd>{command?.presentationVersion ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Template version</dt>
+              <dd>{command?.templateVersion ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Content type</dt>
+              <dd>{command?.contentType ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Retrieved timestamp</dt>
+              <dd>{command?.retrievedAt ? formatDateTime(command.retrievedAt) : "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Payload hash</dt>
+              <dd>{command?.authoritativePayloadHash ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Correlation ID</dt>
+              <dd>{command?.retrievalCorrelationId ?? "Unavailable"}</dd>
+            </div>
+            {voided && (
+              <>
+                <div>
+                  <dt>Void status</dt>
+                  <dd>{command?.voidStatus ?? "Unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Void reason</dt>
+                  <dd>{command?.voidReasonCode ?? "Unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Voided timestamp</dt>
+                  <dd>{command?.voidedAt ? formatDateTime(command.voidedAt) : "Unavailable"}</dd>
+                </div>
+              </>
+            )}
+          </dl>
+        </>
+      ) : inconsistent ? (
+        <>
+          <p>Central PMS reported conflicting terminal-cash, fiscal, or POS-document references. Supervisor or support review is required.</p>
+          <p>Receipt command reference: {command?.localReceiptRetrievalId ?? "Unavailable"}</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "INCONSISTENT"}</p>
+        </>
+      ) : rejected ? (
+        <>
+          <p>Central PMS rejected receipt retrieval. Canonical payment and fiscal recording are preserved; receipt retrieval did not complete.</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "REJECTED"}</p>
+          <p>Support or reconciliation handling is required.</p>
+        </>
+      ) : (
+        <>
+          <p>{notReady ? "Receipt presentation not ready." : pending ? "Receipt not yet retrieved." : `Receipt status: ${command?.statusLabel}`}</p>
+          <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted receipt command to retrieve or check availability."}</p>
+        </>
+      )}
+
+      <p>Receipt not rendered or printed. Exit authorization unavailable.</p>
+      {!available && !voided && !inconsistent && !rejected && (
+        <button className="secondary-action" type="button" onClick={onRetrieveOrCheck}>
+          Retrieve / Check Receipt
         </button>
       )}
     </section>

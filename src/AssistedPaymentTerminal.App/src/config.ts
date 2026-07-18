@@ -21,6 +21,7 @@ export type AptConfig = {
   nonLiveCashCaptureEnabled: boolean;
   centralPmsCashSubmissionEnabled: boolean;
   centralPmsFiscalIssuanceEnabled: boolean;
+  centralPmsReceiptRetrievalEnabled: boolean;
 };
 
 export type ConfigLoadResult =
@@ -113,6 +114,7 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       nonLiveCashCaptureEnabled: raw.APT_ENABLE_NON_LIVE_CASH_CAPTURE?.trim().toLowerCase() === "true",
       centralPmsCashSubmissionEnabled: raw.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION?.trim().toLowerCase() === "true",
       centralPmsFiscalIssuanceEnabled: raw.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE?.trim().toLowerCase() === "true",
+      centralPmsReceiptRetrievalEnabled: raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL?.trim().toLowerCase() === "true",
     },
   };
 }
@@ -162,6 +164,10 @@ function applyDesktopFlags(raw: RawAptConfig): void {
 
   if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE) {
     raw.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE;
+  }
+
+  if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL) {
+    raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL;
   }
 
   if (window.__APT_DESKTOP_FLAGS__.CENTRAL_PMS_BASE_URL) {

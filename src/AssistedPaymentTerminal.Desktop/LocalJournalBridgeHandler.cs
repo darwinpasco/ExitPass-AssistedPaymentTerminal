@@ -18,41 +18,52 @@ public sealed class LocalJournalBridgeHandler
         LocalJournalBridgeCommand.CentralPmsCashSubmissionGetStatus,
         LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback,
         LocalJournalBridgeCommand.CentralPmsCashFiscalGetStatus,
-        LocalJournalBridgeCommand.CentralPmsCashFiscalSubmitOrReadback
+        LocalJournalBridgeCommand.CentralPmsCashFiscalSubmitOrReadback,
+        LocalJournalBridgeCommand.CentralPmsCashReceiptGetStatus,
+        LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck
     ];
 
     private readonly CashJournalService _journal;
     private readonly bool _enabled;
     private readonly bool _centralPmsCashSubmissionEnabled;
     private readonly bool _centralPmsFiscalIssuanceEnabled;
+    private readonly bool _centralPmsReceiptRetrievalEnabled;
     private readonly string? _centralPmsBaseUrl;
     private readonly TerminalCashPaymentSubmissionService _submissionService;
     private readonly TerminalCashFiscalSubmissionService _fiscalService;
+    private readonly TerminalCashReceiptRetrievalService _receiptService;
 
     public LocalJournalBridgeHandler(
         CashJournalService journal,
         bool enabled,
         bool centralPmsCashSubmissionEnabled = false,
         bool centralPmsFiscalIssuanceEnabled = false,
+        bool centralPmsReceiptRetrievalEnabled = false,
         string? centralPmsBaseUrl = null,
         TerminalCashPaymentSubmissionService? submissionService = null,
-        TerminalCashFiscalSubmissionService? fiscalService = null)
+        TerminalCashFiscalSubmissionService? fiscalService = null,
+        TerminalCashReceiptRetrievalService? receiptService = null)
     {
         _journal = journal;
         _enabled = enabled;
         _centralPmsCashSubmissionEnabled = centralPmsCashSubmissionEnabled;
         _centralPmsFiscalIssuanceEnabled = centralPmsFiscalIssuanceEnabled;
+        _centralPmsReceiptRetrievalEnabled = centralPmsReceiptRetrievalEnabled;
         _centralPmsBaseUrl = string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl.Trim();
         var localOptions = new LocalOperationsDatabaseOptions(
             journal.DatabasePath,
             CentralPmsBaseUrl: _centralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
             EnableCentralPmsCashSubmission: centralPmsCashSubmissionEnabled,
-            EnableCentralPmsFiscalIssuance: centralPmsFiscalIssuanceEnabled);
+            EnableCentralPmsFiscalIssuance: centralPmsFiscalIssuanceEnabled,
+            EnableCentralPmsReceiptRetrieval: centralPmsReceiptRetrievalEnabled);
         _submissionService = submissionService ?? new TerminalCashPaymentSubmissionService(
             new CentralPmsTerminalCashPaymentClient(new HttpClient()),
             localOptions);
         _fiscalService = fiscalService ?? new TerminalCashFiscalSubmissionService(
             new CentralPmsTerminalCashFiscalClient(new HttpClient()),
+            localOptions);
+        _receiptService = receiptService ?? new TerminalCashReceiptRetrievalService(
+            new CentralPmsTerminalCashReceiptClient(new HttpClient()),
             localOptions);
     }
 
@@ -121,6 +132,8 @@ public sealed class LocalJournalBridgeHandler
                 LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback => await SubmitOrReadbackCentralPmsCashSubmissionAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashFiscalGetStatus => await GetCentralPmsCashFiscalStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashFiscalSubmitOrReadback => await SubmitOrReadbackCentralPmsCashFiscalAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.CentralPmsCashReceiptGetStatus => await GetCentralPmsCashReceiptStatusAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck => await RetrieveOrCheckCentralPmsCashReceiptAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => SerializeFailure(request.Command, request.CorrelationId, "unsupported_command", "Unsupported local journal bridge command.")
             };
         }
@@ -404,6 +417,117 @@ public sealed class LocalJournalBridgeHandler
                 CentralPmsCashFiscalCommandSnapshot.FromEntity(submitted)));
     }
 
+    private async Task<string> GetCentralPmsCashReceiptStatusAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
+        var configuration = CentralPmsReceiptConfiguration();
+
+        if (!_centralPmsReceiptRetrievalEnabled || !configuration.Valid)
+        {
+            return SerializeSuccess(
+                request.Command,
+                request.CorrelationId,
+                new CentralPmsCashReceiptStatusResponse(
+                    _centralPmsReceiptRetrievalEnabled,
+                    configuration.Valid,
+                    configuration.Message,
+                    null));
+        }
+
+        TerminalCashReceiptRetrievalCommand? command;
+        try
+        {
+            command = await _receiptService.GetReceiptRetrievalByTenderAsync(
+                    payload.LocalCashTenderId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (command is null)
+            {
+                command = await _receiptService.EnsureForRecordedFiscalAsync(
+                        payload.LocalCashTenderId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "receipt_retrieval_unavailable",
+                ex.Message);
+        }
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            new CentralPmsCashReceiptStatusResponse(
+                _centralPmsReceiptRetrievalEnabled,
+                configuration.Valid,
+                configuration.Message,
+                CentralPmsCashReceiptCommandSnapshot.FromEntity(command)));
+    }
+
+    private async Task<string> RetrieveOrCheckCentralPmsCashReceiptAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
+        var configuration = CentralPmsReceiptConfiguration();
+
+        if (!_centralPmsReceiptRetrievalEnabled)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "feature_disabled",
+                "Central PMS receipt retrieval is disabled.");
+        }
+
+        if (!configuration.Valid)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "central_pms_configuration_invalid",
+                configuration.Message);
+        }
+
+        TerminalCashReceiptRetrievalCommand command;
+        try
+        {
+            command = await _receiptService.GetReceiptRetrievalByTenderAsync(
+                    payload.LocalCashTenderId,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? await _receiptService.EnsureForRecordedFiscalAsync(
+                        payload.LocalCashTenderId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "receipt_retrieval_unavailable",
+                ex.Message);
+        }
+
+        var retrieved = await _receiptService.RetrieveReceiptAsync(command.Id, cancellationToken).ConfigureAwait(false);
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            new CentralPmsCashReceiptStatusResponse(
+                _centralPmsReceiptRetrievalEnabled,
+                configuration.Valid,
+                configuration.Message,
+                CentralPmsCashReceiptCommandSnapshot.FromEntity(retrieved)));
+    }
+
     private static T ReadPayload<T>(LocalJournalBridgeRequest request)
     {
         if (request.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
@@ -479,6 +603,24 @@ public sealed class LocalJournalBridgeHandler
 
         return (true, "Central PMS fiscal issuance is available.");
     }
+
+    private (bool Valid, string Message) CentralPmsReceiptConfiguration()
+    {
+        if (!_centralPmsReceiptRetrievalEnabled)
+        {
+            return (false, "Central PMS receipt retrieval is disabled.");
+        }
+
+        if (!Uri.TryCreate(_centralPmsBaseUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || string.IsNullOrWhiteSpace(uri.Host)
+            || uri.Host.EndsWith(".example.invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "CENTRAL_PMS_BASE_URL is not configured for receipt retrieval.");
+        }
+
+        return (true, "Central PMS receipt retrieval is available.");
+    }
 }
 
 public sealed record LocalJournalBridgeRequest(
@@ -544,6 +686,8 @@ public sealed record LocalTenderReadbackResponse(
 public sealed record CentralPmsCashSubmissionPayload(Guid LocalCashTenderId);
 
 public sealed record CentralPmsCashFiscalPayload(Guid LocalCashTenderId);
+
+public sealed record CentralPmsCashReceiptPayload(Guid LocalCashTenderId);
 
 public sealed record CentralPmsCashSubmissionStatusResponse(
     bool Enabled,
@@ -659,6 +803,88 @@ public sealed record CentralPmsCashFiscalCommandSnapshot(
             command.FiscalNumberAssignedAt,
             command.SemanticHashSourceVersion,
             command.RecordedAt,
+            command.NextRetryAt,
+            command.LastSafeHttpStatus,
+            command.LastSafeErrorCode,
+            command.CreatedAt,
+            command.UpdatedAt);
+}
+
+public sealed record CentralPmsCashReceiptStatusResponse(
+    bool Enabled,
+    bool ConfigurationValid,
+    string ConfigurationMessage,
+    CentralPmsCashReceiptCommandSnapshot? Command);
+
+public sealed record CentralPmsCashReceiptCommandSnapshot(
+    Guid LocalReceiptRetrievalId,
+    Guid TerminalCashTenderId,
+    Guid RelatedCashPaymentOutboxCommandId,
+    Guid RelatedFiscalCommandId,
+    Guid CanonicalPaymentAttemptId,
+    Guid CanonicalPaymentConfirmationId,
+    Guid FiscalIssuanceReferenceId,
+    Guid PosFiscalDocumentId,
+    TerminalCashReceiptRetrievalStatus Status,
+    string StatusLabel,
+    int AttemptCount,
+    string RetrievalCorrelationId,
+    string? ResultClassification,
+    string? ReceiptAvailabilityState,
+    string? FiscalDocumentNumber,
+    string? FiscalDocumentStatus,
+    string? PresentationVersion,
+    string? TemplateVersion,
+    string? ContentType,
+    string? AuthoritativePayloadHash,
+    string? VoidStatus,
+    string? VoidReasonCode,
+    DateTimeOffset? VoidedAt,
+    DateTimeOffset? RetrievedAt,
+    DateTimeOffset? NextRetryAt,
+    int? LastSafeHttpStatus,
+    string? LastSafeErrorCode,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt)
+{
+    public static CentralPmsCashReceiptCommandSnapshot FromEntity(TerminalCashReceiptRetrievalCommand command) =>
+        new(
+            command.Id,
+            command.TerminalCashTenderId,
+            command.RelatedCashPaymentOutboxCommandId,
+            command.RelatedFiscalCommandId,
+            command.CanonicalPaymentAttemptId,
+            command.CanonicalPaymentConfirmationId,
+            command.FiscalIssuanceReferenceId,
+            command.PosFiscalDocumentId,
+            command.Status,
+            command.Status switch
+            {
+                TerminalCashReceiptRetrievalStatus.Pending => "Pending",
+                TerminalCashReceiptRetrievalStatus.Retrieving => "Retrieving",
+                TerminalCashReceiptRetrievalStatus.NotReady => "Not ready",
+                TerminalCashReceiptRetrievalStatus.RetryPending => "Retry pending",
+                TerminalCashReceiptRetrievalStatus.Available => "Available",
+                TerminalCashReceiptRetrievalStatus.Voided => "Voided",
+                TerminalCashReceiptRetrievalStatus.Rejected => "Rejected",
+                TerminalCashReceiptRetrievalStatus.Inconsistent => "Inconsistent",
+                TerminalCashReceiptRetrievalStatus.Unavailable => "Unavailable",
+                _ => command.Status.ToString()
+            },
+            command.AttemptCount,
+            command.RetrievalCorrelationId,
+            command.ResultClassification,
+            command.ReceiptAvailabilityState,
+            command.FiscalDocumentNumber,
+            command.FiscalDocumentStatus,
+            command.PresentationVersion,
+            command.TemplateVersion,
+            command.ContentType,
+            command.AuthoritativePayloadHash,
+            command.VoidStatus,
+            command.VoidReasonCode,
+            command.VoidedAt,
+            command.RetrievedAt,
             command.NextRetryAt,
             command.LastSafeHttpStatus,
             command.LastSafeErrorCode,

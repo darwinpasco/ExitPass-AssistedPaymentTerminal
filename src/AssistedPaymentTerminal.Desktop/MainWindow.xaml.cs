@@ -21,19 +21,24 @@ public partial class MainWindow : Window
             options.LocalDatabasePath,
             CentralPmsBaseUrl: options.CentralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
             EnableCentralPmsCashSubmission: options.EnableCentralPmsCashSubmission,
-            EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance);
+            EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance,
+            EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
         var journal = new AssistedPaymentTerminal.LocalOperations.CashJournalService(localOptions);
         _localJournalBridge = new LocalJournalBridgeHandler(
             journal,
             options.EnableNonLiveCashCapture,
             options.EnableCentralPmsCashSubmission,
             options.EnableCentralPmsFiscalIssuance,
+            options.EnableCentralPmsReceiptRetrieval,
             options.CentralPmsBaseUrl,
             new AssistedPaymentTerminal.LocalOperations.TerminalCashPaymentSubmissionService(
                 new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashPaymentClient(new HttpClient()),
                 localOptions),
             new AssistedPaymentTerminal.LocalOperations.TerminalCashFiscalSubmissionService(
                 new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashFiscalClient(new HttpClient()),
+                localOptions),
+            new AssistedPaymentTerminal.LocalOperations.TerminalCashReceiptRetrievalService(
+                new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashReceiptClient(new HttpClient()),
                 localOptions));
         InitializeComponent();
         Loaded += OnLoaded;
@@ -212,6 +217,7 @@ public partial class MainWindow : Window
                 APT_ENABLE_NON_LIVE_CASH_CAPTURE: "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
                 APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION: "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
                 APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE: "__APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE__",
+                APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL: "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
                 CENTRAL_PMS_BASE_URL: "__CENTRAL_PMS_BASE_URL__"
               };
               const originalError = console.error.bind(console);
@@ -235,6 +241,9 @@ public partial class MainWindow : Window
             .Replace(
                 "__APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE__",
                 _options.EnableCentralPmsFiscalIssuance ? "true" : "false")
+            .Replace(
+                "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
+                _options.EnableCentralPmsReceiptRetrieval ? "true" : "false")
             .Replace(
                 "__CENTRAL_PMS_BASE_URL__",
                 JavaScriptStringEncode(_options.CentralPmsBaseUrl ?? "")));

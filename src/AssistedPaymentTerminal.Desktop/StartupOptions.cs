@@ -11,6 +11,7 @@ public sealed record StartupOptions(
     string? LocalDatabasePath = null,
     bool EnableCentralPmsCashSubmission = false,
     bool EnableCentralPmsFiscalIssuance = false,
+    bool EnableCentralPmsReceiptRetrieval = false,
     string? CentralPmsBaseUrl = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
@@ -24,6 +25,7 @@ public sealed record StartupOptions(
         var localDatabasePath = Environment.GetEnvironmentVariable("APT_LOCAL_DB_PATH");
         var enableCentralPmsCashSubmission = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION"));
         var enableCentralPmsFiscalIssuance = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE"));
+        var enableCentralPmsReceiptRetrieval = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL"));
         var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
 
         foreach (var arg in args)
@@ -65,6 +67,10 @@ public sealed record StartupOptions(
             {
                 enableCentralPmsFiscalIssuance = true;
             }
+            else if (arg.Equals("--enable-central-pms-receipt-retrieval", StringComparison.OrdinalIgnoreCase))
+            {
+                enableCentralPmsReceiptRetrieval = true;
+            }
             else if (arg.StartsWith("--central-pms-base-url=", StringComparison.OrdinalIgnoreCase))
             {
                 centralPmsBaseUrl = arg["--central-pms-base-url=".Length..];
@@ -82,6 +88,7 @@ public sealed record StartupOptions(
             string.IsNullOrWhiteSpace(localDatabasePath) ? null : localDatabasePath,
             enableCentralPmsCashSubmission,
             enableCentralPmsFiscalIssuance,
+            enableCentralPmsReceiptRetrieval,
             string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl);
     }
 
