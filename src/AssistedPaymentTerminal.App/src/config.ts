@@ -22,6 +22,9 @@ export type AptConfig = {
   centralPmsCashSubmissionEnabled: boolean;
   centralPmsFiscalIssuanceEnabled: boolean;
   centralPmsReceiptRetrievalEnabled: boolean;
+  receiptPreviewEnabled: boolean;
+  receiptPaperWidthMm: 57 | 58 | 80;
+  receiptPaperWidthWarning: string | null;
 };
 
 export type ConfigLoadResult =
@@ -115,7 +118,26 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       centralPmsCashSubmissionEnabled: raw.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION?.trim().toLowerCase() === "true",
       centralPmsFiscalIssuanceEnabled: raw.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE?.trim().toLowerCase() === "true",
       centralPmsReceiptRetrievalEnabled: raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL?.trim().toLowerCase() === "true",
+      receiptPreviewEnabled: raw.APT_ENABLE_RECEIPT_PREVIEW?.trim().toLowerCase() === "true",
+      receiptPaperWidthMm: parseReceiptPaperWidth(raw.APT_RECEIPT_PAPER_WIDTH_MM).width,
+      receiptPaperWidthWarning: parseReceiptPaperWidth(raw.APT_RECEIPT_PAPER_WIDTH_MM).warning,
     },
+  };
+}
+
+function parseReceiptPaperWidth(rawValue: string | undefined): { width: 57 | 58 | 80; warning: string | null } {
+  const value = rawValue?.trim();
+  if (!value) {
+    return { width: 57, warning: null };
+  }
+
+  if (value === "57" || value === "58" || value === "80") {
+    return { width: Number(value) as 57 | 58 | 80, warning: null };
+  }
+
+  return {
+    width: 57,
+    warning: `Unsupported APT_RECEIPT_PAPER_WIDTH_MM value '${value}'. Falling back to 57 mm.`,
   };
 }
 
@@ -168,6 +190,14 @@ function applyDesktopFlags(raw: RawAptConfig): void {
 
   if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL) {
     raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL;
+  }
+
+  if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_RECEIPT_PREVIEW) {
+    raw.APT_ENABLE_RECEIPT_PREVIEW = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_RECEIPT_PREVIEW;
+  }
+
+  if (window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PAPER_WIDTH_MM !== undefined) {
+    raw.APT_RECEIPT_PAPER_WIDTH_MM = window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PAPER_WIDTH_MM;
   }
 
   if (window.__APT_DESKTOP_FLAGS__.CENTRAL_PMS_BASE_URL) {

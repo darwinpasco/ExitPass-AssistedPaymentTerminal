@@ -328,7 +328,7 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
 
     private string DatabasePath { get; }
 
-    private LocalOperationsDatabaseOptions Options =>
+    internal LocalOperationsDatabaseOptions OptionsForPreviewTests =>
         new(
             DatabasePath,
             CentralPmsBaseUrl: CentralPmsCashReceiptBridgeHandlerTests.BaseUrl,
@@ -346,7 +346,9 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
     public LocalJournalBridgeHandler CreateHandler(
         ScriptedCentralPmsReceiptClient receiptClient,
         bool receiptEnabled = true,
-        string centralPmsBaseUrl = CentralPmsCashReceiptBridgeHandlerTests.BaseUrl)
+        string centralPmsBaseUrl = CentralPmsCashReceiptBridgeHandlerTests.BaseUrl,
+        bool receiptPreviewEnabled = false,
+        string? receiptPaperWidthMm = null)
     {
         var options = new LocalOperationsDatabaseOptions(
             DatabasePath,
@@ -361,6 +363,8 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
             centralPmsCashSubmissionEnabled: true,
             centralPmsFiscalIssuanceEnabled: true,
             centralPmsReceiptRetrievalEnabled: receiptEnabled,
+            receiptPreviewEnabled: receiptPreviewEnabled,
+            receiptPaperWidthMm: receiptPaperWidthMm,
             centralPmsBaseUrl: centralPmsBaseUrl,
             submissionService: new TerminalCashPaymentSubmissionService(new ScriptedCentralPmsClient(), options),
             fiscalService: new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), options),
@@ -371,13 +375,13 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
     {
         var fiscal = await CreateConfirmedPaymentWithPendingFiscalAsync();
         await MarkFiscalRecordedAsync(fiscal);
-        return await new TerminalCashReceiptRetrievalService(new ScriptedCentralPmsReceiptClient(), Options)
+        return await new TerminalCashReceiptRetrievalService(new ScriptedCentralPmsReceiptClient(), OptionsForPreviewTests)
             .EnsureForRecordedFiscalAsync(fiscal.TerminalCashTenderId);
     }
 
     public async Task<TerminalCashFiscalOutboxCommand> CreateConfirmedPaymentWithPendingFiscalAsync()
     {
-        var service = new CashJournalService(Options);
+        var service = new CashJournalService(OptionsForPreviewTests);
         var session = await service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
             CashierId: $"cashier-{Guid.NewGuid():N}",
             AuthenticatedCashierSessionReference: $"auth-{Guid.NewGuid():N}",
@@ -426,15 +430,15 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
                 "NOT_STARTED_IN_THIS_SLICE"),
             201));
 
-        await new TerminalCashPaymentSubmissionService(cashClient, Options).SubmitOrReadbackAsync(paymentCommand.Id);
-        return await new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), Options)
+        await new TerminalCashPaymentSubmissionService(cashClient, OptionsForPreviewTests).SubmitOrReadbackAsync(paymentCommand.Id);
+        return await new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), OptionsForPreviewTests)
             .GetFiscalCommandByTenderAsync(paymentCommand.TerminalCashTenderId)
             ?? throw new InvalidOperationException("Fiscal command was not created.");
     }
 
     private async Task MarkFiscalRecordedAsync(TerminalCashFiscalOutboxCommand fiscal)
     {
-        await using var dbContext = new CashJournalService(Options).CreateDbContext();
+        await using var dbContext = new CashJournalService(OptionsForPreviewTests).CreateDbContext();
         var command = await dbContext.TerminalCashFiscalOutboxCommands
             .SingleAsync(value => value.Id == fiscal.Id);
         command.Status = TerminalCashFiscalCommandStatus.Recorded;
@@ -451,7 +455,7 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
 
     public async Task DeleteReceiptCommandAsync(Guid terminalCashTenderId)
     {
-        await using var dbContext = new CashJournalService(Options).CreateDbContext();
+        await using var dbContext = new CashJournalService(OptionsForPreviewTests).CreateDbContext();
         var command = await dbContext.TerminalCashReceiptRetrievalCommands
             .SingleAsync(value => value.TerminalCashTenderId == terminalCashTenderId);
         dbContext.TerminalCashReceiptRetrievalCommands.Remove(command);
@@ -460,7 +464,7 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
 
     public async Task<int> CountReceiptCommandsAsync(Guid terminalCashTenderId)
     {
-        await using var dbContext = new CashJournalService(Options).CreateDbContext();
+        await using var dbContext = new CashJournalService(OptionsForPreviewTests).CreateDbContext();
         return await dbContext.TerminalCashReceiptRetrievalCommands
             .CountAsync(command => command.TerminalCashTenderId == terminalCashTenderId);
     }

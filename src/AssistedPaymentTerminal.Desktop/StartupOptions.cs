@@ -12,6 +12,8 @@ public sealed record StartupOptions(
     bool EnableCentralPmsCashSubmission = false,
     bool EnableCentralPmsFiscalIssuance = false,
     bool EnableCentralPmsReceiptRetrieval = false,
+    bool EnableReceiptPreview = false,
+    string? ReceiptPaperWidthMm = null,
     string? CentralPmsBaseUrl = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
@@ -26,6 +28,8 @@ public sealed record StartupOptions(
         var enableCentralPmsCashSubmission = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION"));
         var enableCentralPmsFiscalIssuance = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE"));
         var enableCentralPmsReceiptRetrieval = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL"));
+        var enableReceiptPreview = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_RECEIPT_PREVIEW"));
+        var receiptPaperWidthMm = Environment.GetEnvironmentVariable("APT_RECEIPT_PAPER_WIDTH_MM");
         var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
 
         foreach (var arg in args)
@@ -71,6 +75,14 @@ public sealed record StartupOptions(
             {
                 enableCentralPmsReceiptRetrieval = true;
             }
+            else if (arg.Equals("--enable-receipt-preview", StringComparison.OrdinalIgnoreCase))
+            {
+                enableReceiptPreview = true;
+            }
+            else if (arg.StartsWith("--receipt-paper-width-mm=", StringComparison.OrdinalIgnoreCase))
+            {
+                receiptPaperWidthMm = arg["--receipt-paper-width-mm=".Length..];
+            }
             else if (arg.StartsWith("--central-pms-base-url=", StringComparison.OrdinalIgnoreCase))
             {
                 centralPmsBaseUrl = arg["--central-pms-base-url=".Length..];
@@ -89,6 +101,8 @@ public sealed record StartupOptions(
             enableCentralPmsCashSubmission,
             enableCentralPmsFiscalIssuance,
             enableCentralPmsReceiptRetrieval,
+            enableReceiptPreview,
+            string.IsNullOrWhiteSpace(receiptPaperWidthMm) ? null : receiptPaperWidthMm,
             string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl);
     }
 

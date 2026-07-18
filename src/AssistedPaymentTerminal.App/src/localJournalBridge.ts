@@ -8,6 +8,9 @@ export type BridgeError = {
   detail?: {
     existingCashTenderId?: string;
     existingCashTenderState?: string;
+    command?: CentralPmsCashReceiptCommand;
+    paperProfile?: ReceiptPreviewPaperProfile;
+    paperWidthWarning?: string | null;
   };
 };
 
@@ -178,6 +181,65 @@ export type CentralPmsCashReceiptStatus = {
   command: CentralPmsCashReceiptCommand | null;
 };
 
+export type ReceiptPreviewPaperProfile = {
+  id: "receipt-paper-57" | "receipt-paper-58" | "receipt-paper-80";
+  paperWidthMm: 57 | 58 | 80;
+  printableWidthMm: number;
+  innerMarginMm: number;
+  fontScale: number;
+  monetaryColumnBehavior: string;
+  metadataDensity: string;
+};
+
+export type ReceiptPreviewField = {
+  key: string;
+  label: string;
+  value: string;
+  isPlaceholder: boolean;
+};
+
+export type ReceiptPreviewRow = {
+  fields: ReceiptPreviewField[];
+};
+
+export type ReceiptPreviewSection = {
+  title: string;
+  fields: ReceiptPreviewField[];
+  rows: ReceiptPreviewRow[];
+};
+
+export type ReceiptPreviewDocument = {
+  terminalCashTenderId: string;
+  localReceiptRetrievalId: string;
+  fiscalIssuanceReferenceId: string;
+  posFiscalDocumentId: string;
+  fiscalDocumentNumber: string | null;
+  fiscalDocumentStatus: string | null;
+  receiptAvailabilityState: string | null;
+  presentationVersion: string | null;
+  templateVersion: string | null;
+  contentType: string | null;
+  authoritativePayloadHash: string | null;
+  retrievedAt: string | null;
+  retrievalCorrelationId: string;
+  voided: boolean;
+  voidStatus: string | null;
+  voidReasonCode: string | null;
+  voidedAt: string | null;
+  paperProfile: ReceiptPreviewPaperProfile;
+  hasPlaceholders: boolean;
+  configurationCompleteness: "Incomplete" | "Complete";
+  sections: ReceiptPreviewSection[];
+};
+
+export type CentralPmsCashReceiptPreview = {
+  enabled: boolean;
+  command: CentralPmsCashReceiptCommand;
+  preview: ReceiptPreviewDocument;
+  paperProfile: ReceiptPreviewPaperProfile;
+  paperWidthWarning: string | null;
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -242,6 +304,10 @@ export interface LocalJournalBridge {
     correlationId: string,
     localCashTenderId: string,
   ): Promise<BridgeResult<CentralPmsCashReceiptStatus>>;
+  getCentralPmsCashReceiptPreview(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashReceiptPreview>>;
 }
 
 declare global {
@@ -277,6 +343,8 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashReceipt.getStatus", correlationId, { localCashTenderId }),
     retrieveOrCheckCentralPmsCashReceipt: (correlationId, localCashTenderId) =>
       send("centralPmsCashReceipt.retrieveOrCheck", correlationId, { localCashTenderId }),
+    getCentralPmsCashReceiptPreview: (correlationId, localCashTenderId) =>
+      send("centralPmsCashReceipt.getPreview", correlationId, { localCashTenderId }),
   };
 }
 

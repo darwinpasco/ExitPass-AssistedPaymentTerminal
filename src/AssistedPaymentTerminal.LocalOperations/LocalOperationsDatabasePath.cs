@@ -8,6 +8,12 @@ public static class LocalOperationsDatabasePath
     {
         if (!string.IsNullOrWhiteSpace(overridePath))
         {
+            if (ContainsUnresolvedPlaceholder(overridePath))
+            {
+                throw new LocalOperationsDatabaseConfigurationException(
+                    "APT_LOCAL_DB_PATH contains an unresolved placeholder value.");
+            }
+
             return Path.GetFullPath(overridePath);
         }
 
@@ -18,4 +24,11 @@ public static class LocalOperationsDatabasePath
 
         return Path.Combine(root, "LocalOperations", DefaultDatabaseFileName);
     }
+
+    private static bool ContainsUnresolvedPlaceholder(string path) =>
+        path.Contains('<', StringComparison.Ordinal)
+        || path.Contains('>', StringComparison.Ordinal)
+        || path.Contains("${", StringComparison.Ordinal)
+        || path.Contains("$env:", StringComparison.OrdinalIgnoreCase)
+        || path.Contains("%APT_", StringComparison.OrdinalIgnoreCase);
 }
