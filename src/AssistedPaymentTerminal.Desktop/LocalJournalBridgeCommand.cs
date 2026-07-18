@@ -12,4 +12,6 @@ public static class LocalJournalBridgeCommand
     public const string CentralPmsCashSubmissionSubmitOrReadback = "centralPmsCashSubmission.submitOrReadback";
     public const string CentralPmsCashFiscalGetStatus = "centralPmsCashFiscal.getStatus";
     public const string CentralPmsCashFiscalSubmitOrReadback = "centralPmsCashFiscal.submitOrReadback";
+    public const string CentralPmsCashReceiptGetStatus = "centralPmsCashReceipt.getStatus";
+    public const string CentralPmsCashReceiptRetrieveOrCheck = "centralPmsCashReceipt.retrieveOrCheck";
 }

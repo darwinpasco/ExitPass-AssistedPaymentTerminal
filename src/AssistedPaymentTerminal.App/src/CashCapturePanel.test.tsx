@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CashCapturePanel } from "./CashCapturePanel";
@@ -9,6 +9,7 @@ import type {
   CashCustodySessionSnapshot,
   CashTenderSnapshot,
   CentralPmsCashFiscalStatus,
+  CentralPmsCashReceiptStatus,
   CentralPmsCashSubmissionStatus,
   LocalJournalBridge,
   LocalJournalHealth,
@@ -389,6 +390,218 @@ describe("CashCapturePanel", () => {
     expect(bridge.getCentralPmsCashFiscalStatus).toHaveBeenCalled();
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
   });
+
+  it("hides receipt action when receipt retrieval is disabled", async () => {
+    renderPanel({
+      config: fiscalEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Recorded") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Central PMS receipt retrieval is disabled.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retrieve / Check Receipt" })).not.toBeInTheDocument();
+  });
+
+  it("shows receipt unavailable state for invalid configuration and does not retrieve", async () => {
+    const bridge = new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Recorded") });
+    renderPanel({
+      config: enabledConfig({
+        centralPmsCashSubmissionEnabled: true,
+        centralPmsFiscalIssuanceEnabled: true,
+        centralPmsReceiptRetrievalEnabled: true,
+      }),
+      bridge,
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("CENTRAL_PMS_BASE_URL is not configured for cash submission.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Central PMS receipt availability")).not.toBeInTheDocument();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("does not show receipt action before fiscal recording", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Pending") }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Fiscal issuance pending")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retrieve / Check Receipt" })).not.toBeInTheDocument();
+  });
+
+  it("renders recorded fiscal state with pending receipt separately", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Pending"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt not yet retrieved")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Central PMS receipt availability")).getByText("Receipt not rendered or printed. Exit authorization unavailable.")).toBeInTheDocument();
+  });
+
+  it("shows available receipt metadata and payload hash without raw payload", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    const receiptPanel = within(screen.getByLabelText("Central PMS receipt availability"));
+    expect(receiptPanel.getByText("SI-000001")).toBeInTheDocument();
+    expect(receiptPanel.getByText("RECORDED")).toBeInTheDocument();
+    expect(receiptPanel.getByText("dsi-presentation-v1")).toBeInTheDocument();
+    expect(receiptPanel.getByText("template-v1")).toBeInTheDocument();
+    expect(receiptPanel.getByText("application/vnd.exitpass.digital-sales-invoice+json")).toBeInTheDocument();
+    expect(receiptPanel.getByText("sha256:receipt-payload")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|receiptLine|taxes|totals|merchantHeader/i);
+  });
+
+  it("not-ready receipt state does not claim availability", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("NotReady"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation not ready")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/Receipt presentation available/);
+  });
+
+  it("retry or unavailable receipt state does not claim successful retrieval", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("RetryPending"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Retry pending")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/Receipt presentation available/);
+  });
+
+  it("shows receipt inconsistency support-review guidance", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Inconsistent"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt inconsistency - support review required")).toBeInTheDocument();
+    expect(screen.getByText(/Supervisor or support review is required/)).toBeInTheDocument();
+  });
+
+  it("shows receipt rejection while preserving fiscal recording", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Rejected"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
+    expect(await screen.findByText("Receipt rejected - reconciliation required")).toBeInTheDocument();
+    expect(screen.getByText("Safe error code: RECEIPT_PRESENTATION_REJECTED")).toBeInTheDocument();
+  });
+
+  it("shows voided receipt posture separately from active printable receipt", async () => {
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Voided"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation available - fiscal document voided")).toBeInTheDocument();
+    expect(screen.getByText("voided")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/active printable receipt/i);
+  });
+
+  it("restart-loaded available receipt renders without another retrieval", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+    });
+
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    expect(bridge.getCentralPmsCashReceiptStatus).toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("explicit receipt action invokes the receipt bridge command", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Pending"),
+      receiptRetrieveStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "Retrieve / Check Receipt" }));
+
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).toHaveBeenCalled();
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+  });
+
+  it("status loading does not automatically retrieve receipt", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Receipt presentation available")).toBeInTheDocument();
+    expect(bridge.getCentralPmsCashReceiptStatus).toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
 });
 
 function renderPanel({
@@ -438,6 +651,15 @@ function fiscalEnabledConfig(): AptConfig {
   });
 }
 
+function receiptEnabledConfig(): AptConfig {
+  return enabledConfig({
+    centralPmsCashSubmissionEnabled: true,
+    centralPmsFiscalIssuanceEnabled: true,
+    centralPmsReceiptRetrievalEnabled: true,
+    centralPmsBaseUrl: "http://127.0.0.1:18080",
+  });
+}
+
 function activeSession(): ResolveVendorParkingResponse {
   const now = Date.now();
   return {
@@ -469,6 +691,8 @@ class FakeBridge implements LocalJournalBridge {
   private readonly submitStatus: CentralPmsCashSubmissionStatus;
   private readonly fiscalStatus: CentralPmsCashFiscalStatus;
   private readonly fiscalSubmitStatus: CentralPmsCashFiscalStatus;
+  private readonly receiptStatus: CentralPmsCashReceiptStatus;
+  private readonly receiptRetrieveStatus: CentralPmsCashReceiptStatus;
   private readonly initialReadback: LocalTenderReadback;
 
   public health = vi.fn(async (correlationId: string): Promise<BridgeResult<LocalJournalHealth>> => ({
@@ -573,12 +797,28 @@ class FakeBridge implements LocalJournalBridge {
     payload: this.fiscalSubmitStatus,
   }));
 
+  public getCentralPmsCashReceiptStatus = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptStatus>> => ({
+    ok: true,
+    command: "centralPmsCashReceipt.getStatus",
+    correlationId,
+    payload: this.receiptStatus,
+  }));
+
+  public retrieveOrCheckCentralPmsCashReceipt = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptStatus>> => ({
+    ok: true,
+    command: "centralPmsCashReceipt.retrieveOrCheck",
+    correlationId,
+    payload: this.receiptRetrieveStatus,
+  }));
+
   public constructor(options: {
     duplicateOnStart?: boolean;
     centralStatus?: CentralPmsCashSubmissionStatus;
     submitStatus?: CentralPmsCashSubmissionStatus;
     fiscalStatus?: CentralPmsCashFiscalStatus;
     fiscalSubmitStatus?: CentralPmsCashFiscalStatus;
+    receiptStatus?: CentralPmsCashReceiptStatus;
+    receiptRetrieveStatus?: CentralPmsCashReceiptStatus;
     initialReadback?: LocalTenderReadback;
   } = {}) {
     this.duplicateOnStart = options.duplicateOnStart ?? false;
@@ -586,6 +826,8 @@ class FakeBridge implements LocalJournalBridge {
     this.submitStatus = options.submitStatus ?? this.centralStatus;
     this.fiscalStatus = options.fiscalStatus ?? fiscalStatus("Pending");
     this.fiscalSubmitStatus = options.fiscalSubmitStatus ?? this.fiscalStatus;
+    this.receiptStatus = options.receiptStatus ?? receiptStatus("Pending");
+    this.receiptRetrieveStatus = options.receiptRetrieveStatus ?? this.receiptStatus;
     this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
 }
@@ -691,6 +933,57 @@ function fiscalStatus(
       nextRetryAt: status === "RetryPending" ? new Date().toISOString() : null,
       lastSafeHttpStatus: conflict ? 409 : rejected ? 400 : null,
       lastSafeErrorCode: conflict ? "TERMINAL_CASH_FISCAL_SEMANTIC_CONFLICT" : rejected ? "CORRELATION_ID_REQUIRED" : null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...overrides,
+    },
+  };
+}
+
+function receiptStatus(
+  status: CentralPmsCashReceiptStatus["command"] extends infer Command
+    ? Command extends { status: infer Status }
+      ? Status
+      : never
+    : never,
+  overrides: Partial<NonNullable<CentralPmsCashReceiptStatus["command"]>> = {},
+): CentralPmsCashReceiptStatus {
+  const available = status === "Available";
+  const voided = status === "Voided";
+  const rejected = status === "Rejected";
+  const inconsistent = status === "Inconsistent";
+  return {
+    enabled: true,
+    configurationValid: true,
+    configurationMessage: "Central PMS receipt retrieval is available.",
+    command: {
+      localReceiptRetrievalId: "receipt-command-001",
+      terminalCashTenderId: "tender-001",
+      relatedCashPaymentOutboxCommandId: "command-001",
+      relatedFiscalCommandId: "fiscal-command-001",
+      canonicalPaymentAttemptId: "payment-attempt-001",
+      canonicalPaymentConfirmationId: "payment-confirmation-001",
+      fiscalIssuanceReferenceId: "fiscal-reference-001",
+      posFiscalDocumentId: "pos-fiscal-document-001",
+      status,
+      statusLabel: status === "NotReady" ? "Not ready" : status === "RetryPending" ? "Retry pending" : status,
+      attemptCount: status === "Pending" ? 0 : 1,
+      retrievalCorrelationId: "corr-receipt",
+      resultClassification: available || voided ? "AVAILABLE" : inconsistent ? "INCONSISTENT" : rejected ? "REJECTED" : "PENDING",
+      receiptAvailabilityState: available || voided ? "AVAILABLE" : null,
+      fiscalDocumentNumber: available || voided ? "SI-000001" : null,
+      fiscalDocumentStatus: available ? "RECORDED" : voided ? "VOIDED" : null,
+      presentationVersion: available || voided ? "dsi-presentation-v1" : null,
+      templateVersion: available || voided ? "template-v1" : null,
+      contentType: available || voided ? "application/vnd.exitpass.digital-sales-invoice+json" : null,
+      authoritativePayloadHash: available || voided ? "sha256:receipt-payload" : null,
+      voidStatus: voided ? "voided" : null,
+      voidReasonCode: voided ? "SUPERVISOR_VOID" : null,
+      voidedAt: voided ? new Date().toISOString() : null,
+      retrievedAt: available || voided ? new Date().toISOString() : null,
+      nextRetryAt: status === "RetryPending" || status === "NotReady" ? new Date().toISOString() : null,
+      lastSafeHttpStatus: inconsistent ? 409 : rejected ? 400 : null,
+      lastSafeErrorCode: inconsistent ? "RECEIPT_REFERENCE_MISMATCH" : rejected ? "RECEIPT_PRESENTATION_REJECTED" : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       ...overrides,

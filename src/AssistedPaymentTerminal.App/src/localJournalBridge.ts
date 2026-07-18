@@ -130,6 +130,54 @@ export type CentralPmsCashFiscalStatus = {
   command: CentralPmsCashFiscalCommand | null;
 };
 
+export type CentralPmsCashReceiptCommand = {
+  localReceiptRetrievalId: string;
+  terminalCashTenderId: string;
+  relatedCashPaymentOutboxCommandId: string;
+  relatedFiscalCommandId: string;
+  canonicalPaymentAttemptId: string;
+  canonicalPaymentConfirmationId: string;
+  fiscalIssuanceReferenceId: string;
+  posFiscalDocumentId: string;
+  status:
+    | "Pending"
+    | "Retrieving"
+    | "NotReady"
+    | "RetryPending"
+    | "Available"
+    | "Voided"
+    | "Rejected"
+    | "Inconsistent"
+    | "Unavailable";
+  statusLabel: string;
+  attemptCount: number;
+  retrievalCorrelationId: string;
+  resultClassification: string | null;
+  receiptAvailabilityState: string | null;
+  fiscalDocumentNumber: string | null;
+  fiscalDocumentStatus: string | null;
+  presentationVersion: string | null;
+  templateVersion: string | null;
+  contentType: string | null;
+  authoritativePayloadHash: string | null;
+  voidStatus: string | null;
+  voidReasonCode: string | null;
+  voidedAt: string | null;
+  retrievedAt: string | null;
+  nextRetryAt: string | null;
+  lastSafeHttpStatus: number | null;
+  lastSafeErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CentralPmsCashReceiptStatus = {
+  enabled: boolean;
+  configurationValid: boolean;
+  configurationMessage: string;
+  command: CentralPmsCashReceiptCommand | null;
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -186,6 +234,14 @@ export interface LocalJournalBridge {
     correlationId: string,
     localCashTenderId: string,
   ): Promise<BridgeResult<CentralPmsCashFiscalStatus>>;
+  getCentralPmsCashReceiptStatus(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashReceiptStatus>>;
+  retrieveOrCheckCentralPmsCashReceipt(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashReceiptStatus>>;
 }
 
 declare global {
@@ -217,6 +273,10 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashFiscal.getStatus", correlationId, { localCashTenderId }),
     submitOrReadbackCentralPmsCashFiscal: (correlationId, localCashTenderId) =>
       send("centralPmsCashFiscal.submitOrReadback", correlationId, { localCashTenderId }),
+    getCentralPmsCashReceiptStatus: (correlationId, localCashTenderId) =>
+      send("centralPmsCashReceipt.getStatus", correlationId, { localCashTenderId }),
+    retrieveOrCheckCentralPmsCashReceipt: (correlationId, localCashTenderId) =>
+      send("centralPmsCashReceipt.retrieveOrCheck", correlationId, { localCashTenderId }),
   };
 }
 
