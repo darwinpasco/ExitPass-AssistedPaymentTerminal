@@ -70,12 +70,14 @@ export function CashCapturePanel({
   session,
   tariffExpired,
   bridge = defaultBridge,
+  developmentFixtureLocalCashTenderId,
 }: {
   config: AptConfig;
   context: TerminalContext;
   session: ResolveVendorParkingResponse;
   tariffExpired: boolean;
   bridge?: LocalJournalBridge;
+  developmentFixtureLocalCashTenderId?: string;
 }) {
   const amountDue = session.netPayableMinorUnits / 100;
   const [amountTenderedText, setAmountTenderedText] = useState(amountDue.toFixed(2));
@@ -339,6 +341,7 @@ export function CashCapturePanel({
     const correlationId = createCorrelationId();
     const tariffSnapshotId = session.effectiveTariffSnapshotId ?? session.tariffSnapshotId;
     const started = await bridge.startTender(correlationId, {
+      ...(developmentFixtureLocalCashTenderId ? { localCashTenderId: developmentFixtureLocalCashTenderId } : {}),
       cashCustodySessionId: cashSession.id,
       parkingSessionId: session.parkingSessionId,
       tariffSnapshotId,
@@ -543,7 +546,7 @@ export function CashCapturePanel({
       </div>
 
       <div className="authority-warning" role="status">
-        <strong>Local cash only.</strong> Canonical payment not submitted. Fiscal issuance not started. Exit authorization unavailable.
+        <strong>State at local cash capture:</strong> Cash received locally. At this checkpoint, canonical payment had not yet been submitted and fiscal issuance had not yet started. Exit authorization was unavailable.
       </div>
 
       {status.kind === "checking" && <p className="support-line">{status.message}</p>}
@@ -1062,13 +1065,16 @@ function CentralPmsReceiptAvailabilityPanel({
   const retry = command?.status === "RetryPending" || command?.status === "Unavailable" || command?.status === "Retrieving";
   const inconsistent = command?.status === "Inconsistent";
   const rejected = command?.status === "Rejected";
+  const unsupported = command?.status === "Unsupported";
+  const malformed = command?.status === "Malformed";
+  const terminalFailure = inconsistent || rejected || unsupported || malformed;
   const pending = !command || command.status === "Pending";
 
   return (
     <section
-      className={`central-pms-panel receipt ${available || voided ? "confirmed" : inconsistent || rejected ? "blocked" : ""}`}
+      className={`central-pms-panel receipt ${available || voided ? "confirmed" : terminalFailure ? "blocked" : ""}`}
       aria-label="Central PMS receipt availability"
-      role={inconsistent || rejected ? "alert" : "status"}
+      role={terminalFailure ? "alert" : "status"}
     >
       <div className="central-pms-status-row">
         <h3>Receipt availability</h3>
@@ -1081,6 +1087,10 @@ function CentralPmsReceiptAvailabilityPanel({
                 ? "Receipt inconsistency - support review required"
                 : rejected
                   ? "Receipt rejected - reconciliation required"
+                  : unsupported
+                    ? "Sales Invoice format is not supported"
+                    : malformed
+                      ? "Sales Invoice response could not be read"
                   : notReady
                     ? "Receipt presentation not ready"
                     : retry
@@ -1093,6 +1103,18 @@ function CentralPmsReceiptAvailabilityPanel({
         <>
           <p>{voided ? "Authoritative POS Server presentation is available with void posture." : "Authoritative POS Server presentation metadata is available."}</p>
           <dl className="central-pms-details">
+            <div>
+              <dt>Canonical payment status</dt>
+              <dd>{command?.canonicalPaymentStatus ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Fiscal issuance reference</dt>
+              <dd>{command?.fiscalIssuanceReferenceId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>POS fiscal-document ID</dt>
+              <dd>{command?.posFiscalDocumentId ?? "Unavailable"}</dd>
+            </div>
             <div>
               <dt>Fiscal-document number</dt>
               <dd>{command?.fiscalDocumentNumber ?? "Unavailable"}</dd>
@@ -1126,8 +1148,28 @@ function CentralPmsReceiptAvailabilityPanel({
               <dd>{command?.authoritativePayloadHash ?? "Unavailable"}</dd>
             </div>
             <div>
+              <dt>Semantic hash</dt>
+              <dd>{command?.semanticRequestHash ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Semantic hash version</dt>
+              <dd>{command?.semanticRequestHashVersion ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Semantic hash status</dt>
+              <dd>{command?.semanticRequestHashStatus ?? "Unavailable"}</dd>
+            </div>
+            <div>
               <dt>Correlation ID</dt>
               <dd>{command?.retrievalCorrelationId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Central PMS correlation ID</dt>
+              <dd>{command?.lastCentralPmsCorrelationId ?? "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Last Central PMS update</dt>
+              <dd>{command?.lastUpdatedFromCentralPms ? formatDateTime(command.lastUpdatedFromCentralPms) : "Unavailable"}</dd>
             </div>
             {voided && (
               <>
@@ -1159,10 +1201,25 @@ function CentralPmsReceiptAvailabilityPanel({
           <p>Safe error code: {command?.lastSafeErrorCode ?? "REJECTED"}</p>
           <p>Support or reconciliation handling is required.</p>
         </>
+      ) : unsupported ? (
+        <>
+          <p>Central PMS reported a Sales Invoice presentation format this terminal does not support. No local fiscal receipt was created.</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED"}</p>
+          <p>Support or application upgrade is required.</p>
+        </>
+      ) : malformed ? (
+        <>
+          <p>Central PMS returned a receipt presentation response that could not be safely read. No local fiscal receipt was created.</p>
+          <p>Safe error code: {command?.lastSafeErrorCode ?? "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED"}</p>
+          <p>Support review is required.</p>
+        </>
       ) : (
         <>
           <p>{notReady ? "Receipt presentation not ready." : pending ? "Receipt not yet retrieved." : `Receipt status: ${command?.statusLabel}`}</p>
           <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted receipt command to retrieve or check availability."}</p>
+          {command?.lastRetryable !== null && command?.lastRetryable !== undefined && (
+            <p>{command.lastRetryable ? "Retry receipt retrieval when eligible." : "Automatic retry is stopped for this receipt state."}</p>
+          )}
         </>
       )}
 
@@ -1172,7 +1229,7 @@ function CentralPmsReceiptAvailabilityPanel({
           View Receipt Preview
         </button>
       )}
-      {!available && !voided && !inconsistent && !rejected && (
+      {!available && !voided && !terminalFailure && (
         <button className="secondary-action" type="button" onClick={onRetrieveOrCheck}>
           Retrieve / Check Receipt
         </button>
@@ -1196,16 +1253,19 @@ function ReceiptPreviewSurface({
     return null;
   }
 
-  const preview = status.kind === "ready" ? status.preview.preview : null;
+  const rawPreview = status.kind === "ready" ? status.preview.preview : null;
+  const placeholderBlocked = rawPreview?.hasPlaceholders === true;
+  const preview = placeholderBlocked ? null : rawPreview;
   const blockedDetail = status.kind === "blocked" ? status.detail : undefined;
   const profile = status.kind === "ready" ? status.preview.paperProfile : blockedDetail?.paperProfile;
   const command = status.kind === "ready" ? status.preview.command : blockedDetail?.command;
   const width = profile?.paperWidthMm ?? configuredPaperWidthMm;
   const warning = status.kind === "ready" ? status.preview.paperWidthWarning : blockedDetail?.paperWidthWarning ?? paperWidthWarning;
+  const blockedCode = placeholderBlocked ? "receipt_preview_incomplete_authoritative_payload" : status.kind === "blocked" ? status.code : "";
 
   return (
     <section className="receipt-preview-overlay" aria-label="Receipt preview">
-      <div className="receipt-preview-shell" role={status.kind === "blocked" ? "alert" : "dialog"} aria-modal="false">
+      <div className="receipt-preview-shell" role={status.kind === "blocked" || placeholderBlocked ? "alert" : "dialog"} aria-modal="false">
         <div className="receipt-preview-header">
           <div>
             <p className="eyebrow">Receipt preview</p>
@@ -1224,19 +1284,14 @@ function ReceiptPreviewSurface({
           <span>Not printed</span>
           <span>Exit authorization unavailable</span>
         </div>
-        {preview?.hasPlaceholders && (
-          <p className="receipt-preview-warning">
-            Development preview: some Sales Invoice fields are placeholders because the authoritative fiscal configuration is not yet defined.
-          </p>
-        )}
         {warning && <p className="receipt-preview-warning">{warning}</p>}
 
         {status.kind === "loading" && <p>{status.message}</p>}
 
-        {status.kind === "blocked" && (
+        {(status.kind === "blocked" || placeholderBlocked) && (
           <div className="receipt-preview-blocked">
-            <strong>{blockedTitle(status.code)}</strong>
-            <p>{status.message}</p>
+            <strong>{blockedTitle(blockedCode)}</strong>
+            <p>{placeholderBlocked ? "Receipt presentation is missing required authoritative display fields. No local placeholders were rendered." : status.kind === "blocked" ? status.message : ""}</p>
             <p>Support review or application upgrade is required. No receipt body was rendered.</p>
             {command && (
               <dl className="receipt-preview-metadata">
@@ -1247,7 +1302,11 @@ function ReceiptPreviewSurface({
                 <PreviewMeta label="Template version" value={command.templateVersion} />
                 <PreviewMeta label="Content type" value={command.contentType} />
                 <PreviewMeta label="Payload hash" value={command.authoritativePayloadHash} />
+                <PreviewMeta label="Semantic hash" value={command.semanticRequestHash} />
+                <PreviewMeta label="Semantic hash version" value={command.semanticRequestHashVersion} />
+                <PreviewMeta label="Semantic hash status" value={command.semanticRequestHashStatus} />
                 <PreviewMeta label="Correlation ID" value={command.retrievalCorrelationId} />
+                <PreviewMeta label="Central PMS correlation ID" value={command.lastCentralPmsCorrelationId} />
               </dl>
             )}
           </div>
@@ -1273,8 +1332,12 @@ function ReceiptPreviewSurface({
                 <PreviewMeta label="Template version" value={preview.templateVersion} />
                 <PreviewMeta label="Content type" value={preview.contentType} />
                 <PreviewMeta label="Payload hash" value={preview.authoritativePayloadHash} />
+                <PreviewMeta label="Semantic hash" value={preview.semanticRequestHash} />
+                <PreviewMeta label="Semantic hash version" value={preview.semanticRequestHashVersion} />
+                <PreviewMeta label="Semantic hash status" value={preview.semanticRequestHashStatus} />
                 <PreviewMeta label="Retrieval timestamp" value={preview.retrievedAt ? formatDateTime(preview.retrievedAt) : "Unavailable"} />
                 <PreviewMeta label="Correlation ID" value={preview.retrievalCorrelationId} />
+                <PreviewMeta label="Central PMS correlation ID" value={preview.centralPmsCorrelationId} />
                 {preview.voided && <PreviewMeta label="Void status" value={preview.voidStatus} />}
               </dl>
             </details>
@@ -1433,6 +1496,10 @@ function blockedTitle(code: string): string {
 
   if (code === "receipt_preview_unsupported_version") {
     return "Unsupported receipt presentation version";
+  }
+
+  if (code === "receipt_preview_incomplete_authoritative_payload") {
+    return "Receipt presentation is incomplete";
   }
 
   return "Receipt preview unavailable";

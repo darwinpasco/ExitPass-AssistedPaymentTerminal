@@ -78,7 +78,8 @@ public sealed class CentralPmsCashReceiptStatusUiProofHostTests
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
-        Assert.Equal("RECEIPT_PRESENTATION_NOT_READY", error!.ErrorCode);
+        Assert.Equal("TERMINAL_CASH_RECEIPT_PRESENTATION_NOT_READY", error!.ErrorCode);
+        Assert.True(error.Retryable);
     }
 
     [Fact]
@@ -89,6 +90,7 @@ public sealed class CentralPmsCashReceiptStatusUiProofHostTests
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
         Assert.Equal("TERMINAL_CASH_RECEIPT_REFERENCE_CONFLICT", error!.ErrorCode);
+        Assert.False(error.Retryable);
     }
 
     [Fact]
@@ -98,7 +100,21 @@ public sealed class CentralPmsCashReceiptStatusUiProofHostTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
-        Assert.Equal("RECEIPT_PRESENTATION_REJECTED", error!.ErrorCode);
+        Assert.Equal("INVALID_REQUEST", error!.ErrorCode);
+        Assert.False(error.Retryable);
+    }
+
+    [Theory]
+    [InlineData(ReceiptStatusUiProofScenario.Unsupported, "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED")]
+    [InlineData(ReceiptStatusUiProofScenario.Malformed, "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED")]
+    public async Task TerminalPresentationFailuresMapDistinctSafeCodes(ReceiptStatusUiProofScenario scenario, string expectedCode)
+    {
+        using var response = await ExecuteReceiptGetResponseAsync(scenario);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
+        Assert.Equal(expectedCode, error!.ErrorCode);
+        Assert.False(error.Retryable);
     }
 
     [Fact]
@@ -119,6 +135,70 @@ public sealed class CentralPmsCashReceiptStatusUiProofHostTests
             .Where(entry => entry.Operation == "terminal-cash-receipt-presentation")
             .Select(entry => entry.Method)
             .ToArray());
+    }
+
+    [Theory]
+    [InlineData("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2001", HttpStatusCode.ServiceUnavailable, "POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE")]
+    [InlineData("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2003", HttpStatusCode.Conflict, "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED")]
+    public async Task VisualMatrixMapsControlledParkingSessionToSafeReceiptState(
+        string parkingSessionId,
+        HttpStatusCode expectedStatus,
+        string expectedCode)
+    {
+        await using var host = await StartHostAsync(ReceiptStatusUiProofScenario.VisualMatrix);
+        using var client = new HttpClient { BaseAddress = host.BaseUrl };
+        var request = PaymentRequest(Guid.Parse(parkingSessionId));
+        await PostCashPaymentAsync(client, request);
+        await PostFiscalAsync(client, request.TerminalCashTenderId);
+
+        using var response = await GetReceiptAsync(client, request.TerminalCashTenderId);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
+        Assert.Equal(expectedCode, error!.ErrorCode);
+        Assert.Contains(host.RequestLog, entry =>
+            entry.Operation == "terminal-cash-receipt-presentation"
+            && entry.Method == "GET"
+            && entry.Scenario == ReceiptStatusUiProofScenario.VisualMatrix);
+    }
+
+    [Fact]
+    public async Task VisualMatrixRestartReadbackMapsDeterministicUnavailableTenderWithoutPaymentResubmission()
+    {
+        await using var host = await StartHostAsync(ReceiptStatusUiProofScenario.VisualMatrix);
+        using var client = new HttpClient { BaseAddress = host.BaseUrl };
+        var terminalCashTenderId = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2001");
+
+        using var response = await GetReceiptAsync(client, terminalCashTenderId);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>();
+        Assert.Equal("POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE", error!.ErrorCode);
+        Assert.True(error.Retryable);
+        Assert.NotEqual("TERMINAL_CASH_PAYMENT_NOT_FOUND", error.ErrorCode);
+        Assert.Equal(["terminal-cash-receipt-presentation"], host.RequestLog.Select(entry => entry.Operation).ToArray());
+        Assert.DoesNotContain(host.RequestLog, entry => entry.Operation == "terminal-cash-payment");
+        Assert.DoesNotContain(host.RequestLog, entry => entry.Operation == "terminal-cash-fiscal-issuance");
+    }
+
+    [Theory]
+    [InlineData("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2002", true)]
+    [InlineData("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2005", false)]
+    public async Task VisualMatrixReturnsCompleteOrIncompleteAuthoritativePresentation(string parkingSessionId, bool expectGovernedValues)
+    {
+        await using var host = await StartHostAsync(ReceiptStatusUiProofScenario.VisualMatrix);
+        using var client = new HttpClient { BaseAddress = host.BaseUrl };
+        var request = PaymentRequest(Guid.Parse(parkingSessionId));
+        await PostCashPaymentAsync(client, request);
+        await PostFiscalAsync(client, request.TerminalCashTenderId);
+
+        using var response = await GetReceiptAsync(client, request.TerminalCashTenderId);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipt = await response.Content.ReadFromJsonAsync<TerminalCashReceiptPresentationResponse>();
+        var presentation = receipt!.AuthoritativePresentation.GetRawText();
+        Assert.Equal(expectGovernedValues, presentation.Contains("GOVERNED REGISTERED BUSINESS NAME", StringComparison.Ordinal));
+        Assert.DoesNotContain("[REGISTERED BUSINESS NAME]", presentation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -203,11 +283,11 @@ public sealed class CentralPmsCashReceiptStatusUiProofHostTests
         return client.SendAsync(message);
     }
 
-    private static TerminalCashPaymentRequest PaymentRequest() =>
+    private static TerminalCashPaymentRequest PaymentRequest(Guid? parkingSessionId = null) =>
         new(
             Guid.Parse("11111111-1111-4111-8111-111111111111"),
             Guid.Parse("22222222-2222-4222-8222-222222222222"),
-            Guid.Parse("33333333-3333-4333-8333-333333333333"),
+            parkingSessionId ?? Guid.Parse("33333333-3333-4333-8333-333333333333"),
             Guid.Parse("44444444-4444-4444-8444-444444444444"),
             "cashier-proof",
             "cashier-session-proof",

@@ -14,8 +14,12 @@ public enum ReceiptStatusUiProofScenario
     RetryPending,
     Inconsistent,
     Rejected,
+    Unsupported,
+    Malformed,
+    IncompleteConfiguration,
     Voided,
-    UnavailableThenAvailable
+    UnavailableThenAvailable,
+    VisualMatrix
 }
 
 public sealed record ReceiptProofHostRequestLogEntry(
@@ -180,20 +184,75 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
         Log("terminal-cash-receipt-presentation", terminalCashTenderId, request.Method);
         if (!_payments.TryGetValue(terminalCashTenderId, out var payment))
         {
-            return HttpProofResponse.Json(HttpStatusCode.NotFound, SafeError("TERMINAL_CASH_PAYMENT_NOT_FOUND", request.CorrelationId));
+            if (Scenario != ReceiptStatusUiProofScenario.VisualMatrix
+                || !TryCreateVisualMatrixRestartPayment(terminalCashTenderId, request.CorrelationId, out payment))
+            {
+                return HttpProofResponse.Json(HttpStatusCode.NotFound, SafeError("TERMINAL_CASH_PAYMENT_NOT_FOUND", request.CorrelationId));
+            }
         }
 
-        return Scenario switch
+        var scenario = Scenario == ReceiptStatusUiProofScenario.VisualMatrix
+            ? ScenarioForVisualMatrix(payment)
+            : Scenario;
+
+        return scenario switch
         {
-            ReceiptStatusUiProofScenario.NotReady => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("RECEIPT_PRESENTATION_NOT_READY", request.CorrelationId)),
-            ReceiptStatusUiProofScenario.RetryPending => HttpProofResponse.Json(HttpStatusCode.ServiceUnavailable, SafeError("CENTRAL_PMS_UNAVAILABLE", request.CorrelationId)),
-            ReceiptStatusUiProofScenario.Inconsistent => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("TERMINAL_CASH_RECEIPT_REFERENCE_CONFLICT", request.CorrelationId)),
-            ReceiptStatusUiProofScenario.Rejected => HttpProofResponse.Json(HttpStatusCode.BadRequest, SafeError("RECEIPT_PRESENTATION_REJECTED", request.CorrelationId)),
+            ReceiptStatusUiProofScenario.NotReady => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("TERMINAL_CASH_RECEIPT_PRESENTATION_NOT_READY", request.CorrelationId, retryable: true)),
+            ReceiptStatusUiProofScenario.RetryPending => HttpProofResponse.Json(HttpStatusCode.ServiceUnavailable, SafeError("POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE", request.CorrelationId, retryable: true)),
+            ReceiptStatusUiProofScenario.Inconsistent => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("TERMINAL_CASH_RECEIPT_REFERENCE_CONFLICT", request.CorrelationId, retryable: false)),
+            ReceiptStatusUiProofScenario.Rejected => HttpProofResponse.Json(HttpStatusCode.BadRequest, SafeError("INVALID_REQUEST", request.CorrelationId, retryable: false)),
+            ReceiptStatusUiProofScenario.Unsupported => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED", request.CorrelationId, retryable: false)),
+            ReceiptStatusUiProofScenario.Malformed => HttpProofResponse.Json(HttpStatusCode.Conflict, SafeError("POS_SERVER_RECEIPT_PRESENTATION_MALFORMED", request.CorrelationId, retryable: false)),
             ReceiptStatusUiProofScenario.UnavailableThenAvailable when Interlocked.Increment(ref _unavailableReceiptGetCount) == 1 =>
-                HttpProofResponse.Json(HttpStatusCode.ServiceUnavailable, SafeError("CENTRAL_PMS_UNAVAILABLE", request.CorrelationId)),
+                HttpProofResponse.Json(HttpStatusCode.ServiceUnavailable, SafeError("POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE", request.CorrelationId, retryable: true)),
+            ReceiptStatusUiProofScenario.IncompleteConfiguration => HttpProofResponse.Json(HttpStatusCode.OK, ReceiptResponse(payment, request.CorrelationId, voided: false, complete: false)),
             ReceiptStatusUiProofScenario.Voided => HttpProofResponse.Json(HttpStatusCode.OK, ReceiptResponse(payment, request.CorrelationId, voided: true)),
-            _ => HttpProofResponse.Json(HttpStatusCode.OK, ReceiptResponse(payment, request.CorrelationId, voided: false))
+            _ => HttpProofResponse.Json(HttpStatusCode.OK, ReceiptResponse(payment, request.CorrelationId, voided: false, complete: true))
         };
+    }
+
+    private static ReceiptStatusUiProofScenario ScenarioForVisualMatrix(PaymentRecord payment) =>
+        payment.ParkingSessionId switch
+        {
+            var id when id == ReceiptVisualSmokeParkingSessions.TemporarilyUnavailable => ReceiptStatusUiProofScenario.RetryPending,
+            var id when id == ReceiptVisualSmokeParkingSessions.Available => ReceiptStatusUiProofScenario.Available,
+            var id when id == ReceiptVisualSmokeParkingSessions.TerminalFailure => ReceiptStatusUiProofScenario.Unsupported,
+            var id when id == ReceiptVisualSmokeParkingSessions.RestartRecovery => ReceiptStatusUiProofScenario.Available,
+            var id when id == ReceiptVisualSmokeParkingSessions.IncompleteConfiguration => ReceiptStatusUiProofScenario.IncompleteConfiguration,
+            _ => ReceiptStatusUiProofScenario.Available
+        };
+
+    private static bool TryCreateVisualMatrixRestartPayment(
+        Guid terminalCashTenderId,
+        Guid? correlationId,
+        out PaymentRecord payment)
+    {
+        var scenario = ReceiptVisualSmokeTenders.ScenarioFor(terminalCashTenderId);
+        if (scenario is null)
+        {
+            payment = default!;
+            return false;
+        }
+
+        payment = new PaymentRecord(
+            terminalCashTenderId,
+            Guid.Parse("33333333-3333-4333-8333-333333333333"),
+            Guid.Parse("44444444-4444-4444-8444-444444444444"),
+            Guid.Parse("cccccccc-cccc-4ccc-8ccc-cccccccc2000"),
+            ReceiptVisualSmokeParkingSessions.For(scenario.Value),
+            Guid.Parse("dddddddd-dddd-4ddd-8ddd-dddddddd2001"),
+            "APT-DEV-001",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            "POS-DEV-001",
+            "CASHIER-DEV-001",
+            "SHIFT-DEV-20260714-A",
+            "PHP",
+            12500,
+            15000,
+            2500,
+            correlationId ?? Guid.Parse("77777777-7777-4777-8777-777777777777"));
+        return true;
     }
 
     private static TerminalCashFiscalIssuanceResponse RecordedFiscalResponse(PaymentRecord payment, Guid? correlationId) =>
@@ -217,13 +276,18 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
             false,
             false);
 
-    private static TerminalCashReceiptPresentationResponse ReceiptResponse(PaymentRecord payment, Guid? correlationId, bool voided)
+    private static TerminalCashReceiptPresentationResponse ReceiptResponse(
+        PaymentRecord payment,
+        Guid? correlationId,
+        bool voided,
+        bool complete = true)
     {
-        using var document = JsonDocument.Parse(voided ? VoidedPresentationJson : AvailablePresentationJson);
+        using var document = JsonDocument.Parse(voided ? VoidedPresentationJson : complete ? CompletePresentationJson : IncompletePresentationJson);
         return new TerminalCashReceiptPresentationResponse(
             payment.TerminalCashTenderId,
             payment.PaymentAttemptId,
             payment.PaymentConfirmationId,
+            "CONFIRMED",
             FiscalIssuanceReferenceId,
             "FISCAL_ISSUANCE_RECORDED",
             PosFiscalDocumentId,
@@ -232,6 +296,9 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
             voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
             "digital-sales-invoice-presentation-json-v1",
             "digital-sales-invoice-json-v1",
+            "sha256:fiscal-semantic",
+            "pos-server-semantic-hash:sha256:v1",
+            "MATCHED",
             "application/json",
             document.RootElement.Clone(),
             voided ? "voided" : null,
@@ -242,8 +309,8 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
             correlationId ?? payment.CorrelationId);
     }
 
-    private static CentralPmsSafeError SafeError(string code, Guid? correlationId) =>
-        new(code, code.Replace('_', ' '), correlationId ?? Guid.Empty, Retryable: true);
+    private static CentralPmsSafeError SafeError(string code, Guid? correlationId, bool retryable = false) =>
+        new(code, code.Replace('_', ' '), correlationId ?? Guid.Empty, retryable);
 
     private void Log(string operation, Guid terminalCashTenderId, string method)
     {
@@ -258,8 +325,12 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
         Console.WriteLine($"{entry.Sequence}: {entry.Operation} {entry.Method} tender={entry.TerminalCashTenderId:D} scenario={entry.Scenario}");
     }
 
-    private const string AvailablePresentationJson = """
+    private const string IncompletePresentationJson = """
     {"presentation":{"presentationVersion":"digital-sales-invoice-presentation-json-v1","lines":[{"description":"Parking fee - cash","amountMinorUnits":12500}],"taxes":[{"taxType":"VAT","amountMinorUnits":0}],"totals":[{"totalType":"grand_total","amountMinorUnits":12500}],"tenders":[{"tenderType":"CASH","amountMinorUnits":15000}]},"fiscalDocumentNumber":"SI-000001","contentType":"application/json"}
+    """;
+
+    private const string CompletePresentationJson = """
+    {"presentation":{"registeredBusinessName":"GOVERNED REGISTERED BUSINESS NAME","registeredBusinessAddress":"GOVERNED REGISTERED BUSINESS ADDRESS","tin":"GOVERNED TIN","posSerialNumber":"GOVERNED POS SERIAL NUMBER","machineIdentificationNumber":"GOVERNED MACHINE IDENTIFICATION NUMBER","parkingLocation":"GOVERNED PARKING LOCATION","terminalId":"GOVERNED TERMINAL ID","fiscalDocumentNumber":"SI-000001","issuedAt":"GOVERNED ISSUED DATE","plateNumber":"GOVERNED PLATE NUMBER","entryTime":"GOVERNED ENTRY TIME","exitTime":"GOVERNED EXIT TIME","durationDisplay":"GOVERNED DURATION","lines":[{"description":"Parking fee - cash","quantity":"1","unitPriceDisplay":"PHP 125.00","displayAmount":"PHP 125.00"}],"subtotalDisplay":"PHP 125.00","discounts":[{"description":"None","displayAmount":"PHP 0.00"}],"vatableSalesDisplay":"PHP 125.00","outputVatDisplay":"PHP 0.00","vatExemptSalesDisplay":"PHP 0.00","zeroRatedSalesDisplay":"PHP 0.00","tenders":[{"tenderType":"CASH","provider":"not_applicable","displayAmount":"PHP 150.00","changeDisplay":"PHP 25.00"}],"salesInvoiceStatement":"THIS SERVES AS YOUR SALES INVOICE","footer":{"message":"THANK YOU FOR CHOOSING OUR SERVICE"},"birAccreditationNumber":"GOVERNED BIR ACCREDITATION NO.","birAccreditationIssuedDateDisplay":"GOVERNED BIR ACCREDITATION DATE ISSUED","birAccreditationValidUntilDisplay":"GOVERNED BIR ACCREDITATION VALID UNTIL","ptuNumber":"GOVERNED PTU NO.","ptuIssuedDateDisplay":"GOVERNED PTU DATE ISSUED"},"fiscalDocumentNumber":"SI-000001","contentType":"application/json"}
     """;
 
     private const string VoidedPresentationJson = """
@@ -311,6 +382,45 @@ public sealed class InteractiveCentralPmsReceiptProofHost : IAsyncDisposable
         public TerminalCashPaymentReadbackResponse ToReadbackResponse() =>
             new(TerminalCashTenderId, PaymentAttemptId, CashCustodySessionId, ParkingSessionId, TariffSnapshotId, TerminalId, SiteId, SiteGroupId, PosServerId, CashierId, CashierShiftId, Currency, AmountDueMinorUnits, AmountTenderedMinorUnits, ChangeDueMinorUnits, "CONFIRMED", PaymentConfirmationId, "CREATED", "terminal-cash-payment", "terminal-cash-payment:sha256:v1", CreatedAt, UpdatedAt, UpdatedAt, CorrelationId, "NOT_STARTED_IN_THIS_SLICE");
     }
+}
+
+internal static class ReceiptVisualSmokeParkingSessions
+{
+    public static readonly Guid TemporarilyUnavailable = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2001");
+    public static readonly Guid Available = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2002");
+    public static readonly Guid TerminalFailure = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2003");
+    public static readonly Guid RestartRecovery = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2004");
+    public static readonly Guid IncompleteConfiguration = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2005");
+
+    public static Guid For(ReceiptStatusUiProofScenario scenario) =>
+        scenario switch
+        {
+            ReceiptStatusUiProofScenario.RetryPending => TemporarilyUnavailable,
+            ReceiptStatusUiProofScenario.Available => Available,
+            ReceiptStatusUiProofScenario.Unsupported => TerminalFailure,
+            ReceiptStatusUiProofScenario.IncompleteConfiguration => IncompleteConfiguration,
+            _ => Available
+        };
+}
+
+internal static class ReceiptVisualSmokeTenders
+{
+    public static readonly Guid TemporarilyUnavailable = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2001");
+    public static readonly Guid Available = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2002");
+    public static readonly Guid TerminalFailure = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2003");
+    public static readonly Guid RestartRecovery = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2004");
+    public static readonly Guid IncompleteConfiguration = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2005");
+
+    public static ReceiptStatusUiProofScenario? ScenarioFor(Guid terminalCashTenderId) =>
+        terminalCashTenderId switch
+        {
+            var id when id == TemporarilyUnavailable => ReceiptStatusUiProofScenario.RetryPending,
+            var id when id == Available => ReceiptStatusUiProofScenario.Available,
+            var id when id == TerminalFailure => ReceiptStatusUiProofScenario.Unsupported,
+            var id when id == RestartRecovery => ReceiptStatusUiProofScenario.Available,
+            var id when id == IncompleteConfiguration => ReceiptStatusUiProofScenario.IncompleteConfiguration,
+            _ => null
+        };
 }
 
 internal sealed record HttpProofRequest(string Method, string Path, string Body, Guid? CorrelationId)

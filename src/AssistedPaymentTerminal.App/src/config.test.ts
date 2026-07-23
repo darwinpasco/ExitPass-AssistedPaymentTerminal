@@ -3,7 +3,7 @@ import { parseAptConfig, usesPackagedFallbackConfig } from "./config";
 import { rawMode1Config } from "./test/testConfig";
 
 describe("parseAptConfig", () => {
-  it("builds terminal context settings for supported Mode 1", () => {
+  it("builds terminal context settings for the cashier-assisted terminal", () => {
     const result = parseAptConfig(rawMode1Config);
 
     expect(result.ok).toBe(true);

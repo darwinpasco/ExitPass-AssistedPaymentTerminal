@@ -18,9 +18,27 @@ describe("App startup and terminal workflow", () => {
   it("displays Cashier-Assisted Terminal without numbered-mode wording", () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
-    expect(screen.getByTestId("apt-mode1-shell")).toHaveAttribute("data-app-ready", "true");
+    expect(screen.getByTestId("apt-terminal-shell")).toHaveAttribute("data-app-ready", "true");
     expect(screen.getByRole("heading", { name: "Cashier-Assisted Terminal" })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/Mode 1|Mode 2|Mode1|Mode2/);
+  });
+
+  it("mounts the receipt visual-smoke surface from the development query flag", async () => {
+    window.__APT_CONFIG__ = rawMode1Config;
+    window.history.replaceState({}, "", "/?receiptVisualSmoke=1");
+
+    render(<App />);
+
+    const shell = await screen.findByTestId("apt-terminal-shell");
+    expect(shell).toHaveAttribute("data-app-ready", "true");
+    expect(shell).toHaveAttribute("data-surface", "receipt-visual-smoke");
+    expect(screen.getByText("Development-only")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Temporarily unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Available" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Terminal failure" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Incomplete configuration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart-recovery setup" })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/Mode 1|React Mode 1|apt-mode1-shell/);
   });
 
   it("displays compact operational context", () => {

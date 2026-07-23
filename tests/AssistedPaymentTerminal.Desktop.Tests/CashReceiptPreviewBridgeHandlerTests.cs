@@ -23,7 +23,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     }
 
     [Fact]
-    public async Task PreviewCommandReturnsGovernedPreviewDataForAvailableReceipt()
+    public async Task PreviewCommandBlocksIncompleteAuthoritativePayloadWithoutPlaceholders()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
         var receipt = await StoreAvailableReceiptAsync(database);
@@ -32,67 +32,12 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
 
         using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-preview");
 
-        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
-        Assert.Equal("corr-preview", response.RootElement.GetProperty("correlationId").GetString());
-        var payload = response.RootElement.GetProperty("payload");
-        Assert.Equal("receipt-paper-57", payload.GetProperty("paperProfile").GetProperty("id").GetString());
-        var preview = payload.GetProperty("preview");
-        Assert.Equal("SI-000001", preview.GetProperty("fiscalDocumentNumber").GetString());
-        Assert.Equal("digital-sales-invoice-presentation-json-v1", preview.GetProperty("presentationVersion").GetString());
-        Assert.Equal("digital-sales-invoice-json-v1", preview.GetProperty("templateVersion").GetString());
-        Assert.Equal("application/json", preview.GetProperty("contentType").GetString());
-        Assert.True(preview.GetProperty("hasPlaceholders").GetBoolean());
-        Assert.Equal("Incomplete", preview.GetProperty("configurationCompleteness").GetString());
-        Assert.Contains(preview.GetProperty("sections").EnumerateArray(), section => section.GetProperty("title").GetString() == "Sales Invoice Title");
-        Assert.Contains(preview.GetProperty("sections").EnumerateArray(), section => section.GetProperty("title").GetString() == "Registered business and statutory header");
-        Assert.Contains(preview.GetProperty("sections").EnumerateArray(), section => section.GetProperty("title").GetString() == "SALES INVOICE DETAILS");
-        Assert.Contains(preview.GetProperty("sections").EnumerateArray(), section => section.GetProperty("title").GetString() == "PARKING DETAILS");
-        Assert.Contains(preview.GetProperty("sections").EnumerateArray(), section => section.GetProperty("title").GetString() == "ITEMS");
-        var sectionText = preview.GetProperty("sections").GetRawText();
-        Assert.Contains("SALES INVOICE", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[REGISTERED BUSINESS NAME]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[REGISTERED BUSINESS ADDRESS]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[TIN]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[POS SERIAL NUMBER]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[MACHINE IDENTIFICATION NUMBER]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[PARKING LOCATION]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[TERMINAL ID]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("Sales Invoice No.", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[PLATE NUMBER]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[ENTRY TIME]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[EXIT TIME]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[DURATION]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("Parking fee - cash", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Qty\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[UNIT PRICE]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Amount\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Subtotal\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[SUBTOTAL]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Output VAT\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Payment method\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Total Paid\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"label\":\"Change\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[SALES INVOICE LEGAL STATEMENT]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[SALES INVOICE FOOTER]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("BIR ACCREDITATION AND PTU INFORMATION", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[BIR ACCREDITATION NO.]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[BIR ACCREDITATION DATE ISSUED]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[BIR ACCREDITATION VALID UNTIL]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[PTU NO.]", sectionText, StringComparison.Ordinal);
-        Assert.Contains("[PTU DATE ISSUED]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("merchant Name", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("site Name", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Fiscal Identity", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Fiscal document no.", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("display Amount", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("total Type", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("tender Type", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("change Display", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("VAT REG TIN", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("grand_total", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("ExitPass Demo Parking", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Main Garage", sectionText, StringComparison.OrdinalIgnoreCase);
-        Assert.False(preview.TryGetProperty("authoritativePresentationJson", out _));
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("receipt_preview_incomplete_authoritative_payload", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        var serialized = response.RootElement.GetRawText();
+        Assert.DoesNotContain("[REGISTERED BUSINESS NAME]", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("[TIN]", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("authoritativePresentationJson", serialized, StringComparison.Ordinal);
         Assert.Empty(client.Operations);
         Assert.Equal(1, await database.CountReceiptCommandsAsync(receipt.TerminalCashTenderId));
     }
@@ -142,7 +87,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         string expectedCode)
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         await MutateReceiptAsync(database, receipt.TerminalCashTenderId, command =>
         {
             command.PresentationVersion = presentationVersion;
@@ -161,7 +106,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     public async Task PayloadHashMismatchBlocksPreview()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         await MutateReceiptAsync(database, receipt.TerminalCashTenderId, command => command.AuthoritativePayloadHash = "sha256:tampered");
         var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: true);
 
@@ -224,7 +169,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     public async Task VoidedPresentationIncludesExplicitVoidPosture()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database, voided: true);
+        var receipt = await StoreAvailableReceiptAsync(database, voided: true, complete: true);
         var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: true);
 
         using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-voided");
@@ -240,7 +185,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     public async Task FeatureDisabledBlocksPreviewWithoutMutation()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: false);
 
         using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-disabled");
@@ -262,7 +207,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         int expectedWidth)
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         var hashBefore = receipt.AuthoritativePayloadHash;
         var handler = database.CreateHandler(
             new ScriptedCentralPmsReceiptClient(),
@@ -283,7 +228,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     public async Task PreviewDoesNotIntroducePrintExitProviderOrPosServerBehavior()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: true);
 
         using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-boundary");
@@ -337,7 +282,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     public async Task ValidExistingSeededDatabaseStillInitializes()
     {
         using var database = ReceiptBridgeTestDatabase.Create();
-        var receipt = await StoreAvailableReceiptAsync(database);
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
         var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: true);
 
         using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-valid-existing");
@@ -430,6 +375,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
             command.TerminalCashTenderId,
             command.CanonicalPaymentAttemptId,
             command.CanonicalPaymentConfirmationId,
+            "CONFIRMED",
             command.FiscalIssuanceReferenceId,
             "FISCAL_ISSUANCE_RECORDED",
             command.PosFiscalDocumentId,
@@ -438,6 +384,9 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
             voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
             ReceiptPreviewContract.PresentationVersion,
             ReceiptPreviewContract.TemplateVersion,
+            "sha256:fiscal-semantic",
+            "pos-server-semantic-hash:sha256:v1",
+            "MATCHED",
             ReceiptPreviewContract.ContentType,
             document.RootElement.Clone(),
             voided ? "voided" : null,

@@ -116,7 +116,10 @@ public sealed class TerminalCashReceiptRetrievalTests
         using var database = TestDatabase.Create();
         var receipt = await CreateReceiptRetrievalAsync(database);
         var client = new ScriptedCentralPmsReceiptClient();
-        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(Available(receipt), 200));
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt),
+            200,
+            Guid.Parse(receipt.RetrievalCorrelationId)));
 
         await new TerminalCashReceiptRetrievalService(client, database.Options).RetrieveReceiptAsync(receipt.Id);
 
@@ -132,7 +135,10 @@ public sealed class TerminalCashReceiptRetrievalTests
         using var database = TestDatabase.Create();
         var receipt = await CreateReceiptRetrievalAsync(database);
         var client = new ScriptedCentralPmsReceiptClient();
-        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(Available(receipt), 200));
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt),
+            200,
+            Guid.Parse(receipt.RetrievalCorrelationId)));
 
         var result = await new TerminalCashReceiptRetrievalService(client, database.Options).RetrieveReceiptAsync(receipt.Id);
 
@@ -142,7 +148,14 @@ public sealed class TerminalCashReceiptRetrievalTests
         Assert.Equal("SI-000001", result.FiscalDocumentNumber);
         Assert.Equal("digital-sales-invoice-presentation-json-v1", result.PresentationVersion);
         Assert.Equal("digital-sales-invoice-json-v1", result.TemplateVersion);
+        Assert.Equal("CONFIRMED", result.CanonicalPaymentStatus);
+        Assert.Equal("sha256:fiscal-semantic", result.SemanticRequestHash);
+        Assert.Equal("pos-server-semantic-hash:sha256:v1", result.SemanticRequestHashVersion);
+        Assert.Equal("MATCHED", result.SemanticRequestHashStatus);
         Assert.Equal("application/json", result.ContentType);
+        Assert.False(result.LastRetryable);
+        Assert.Equal(result.RetrievalCorrelationId, result.LastCentralPmsCorrelationId);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-15T00:05:00Z"), result.LastUpdatedFromCentralPms);
         Assert.Contains("\"tenderType\":\"CASH\"", result.AuthoritativePresentationJson);
         Assert.Contains("\"totalType\":\"grand_total\"", result.AuthoritativePresentationJson);
         Assert.Contains("\"taxType\":\"VAT\"", result.AuthoritativePresentationJson);
@@ -177,6 +190,74 @@ public sealed class TerminalCashReceiptRetrievalTests
         Assert.Equal(TerminalCashReceiptRetrievalStatus.NotReady, result.Status);
         Assert.Null(result.AuthoritativePresentationJson);
         Assert.Null(result.AuthoritativePayloadHash);
+        Assert.True(result.LastRetryable);
+        Assert.NotNull(result.NextRetryAt);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task UnsupportedPresentationPersistsTerminalStateWithoutFallback()
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await CreateReceiptRetrievalAsync(database);
+        var client = new ScriptedCentralPmsReceiptClient();
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Unsupported(
+            409,
+            "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED",
+            retryable: false,
+            correlationId: Guid.Parse(receipt.RetrievalCorrelationId)));
+
+        var result = await new TerminalCashReceiptRetrievalService(client, database.Options).RetrieveReceiptAsync(receipt.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Unsupported, result.Status);
+        Assert.Equal("UNSUPPORTED", result.ResultClassification);
+        Assert.False(result.LastRetryable);
+        Assert.Null(result.NextRetryAt);
+        Assert.Null(result.AuthoritativePresentationJson);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task MalformedPresentationPersistsTerminalStateWithoutFallback()
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await CreateReceiptRetrievalAsync(database);
+        var client = new ScriptedCentralPmsReceiptClient();
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Malformed(
+            409,
+            "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED",
+            retryable: false,
+            correlationId: Guid.Parse(receipt.RetrievalCorrelationId)));
+
+        var result = await new TerminalCashReceiptRetrievalService(client, database.Options).RetrieveReceiptAsync(receipt.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Malformed, result.Status);
+        Assert.Equal("MALFORMED", result.ResultClassification);
+        Assert.False(result.LastRetryable);
+        Assert.Null(result.NextRetryAt);
+        Assert.Null(result.AuthoritativePresentationJson);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task DifferentPresentationForSameFiscalIdentityIsBlocked()
+    {
+        using var database = TestDatabase.Create();
+        var available = await RetrieveAvailableAsync(database);
+        var originalPayload = available.AuthoritativePresentationJson;
+        var client = new ScriptedCentralPmsReceiptClient();
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(available, voided: false, alternatePayload: true),
+            200,
+            Guid.Parse(available.RetrievalCorrelationId)));
+
+        var result = await new TerminalCashReceiptRetrievalService(client, database.Options).RetrieveReceiptAsync(available.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Inconsistent, result.Status);
+        Assert.Equal("PRESENTATION_INTEGRITY_MISMATCH", result.ResultClassification);
+        Assert.Equal(originalPayload, result.AuthoritativePresentationJson);
+        Assert.False(result.LastRetryable);
+        Assert.Null(result.NextRetryAt);
     }
 
     [Fact]
@@ -455,11 +536,12 @@ public sealed class TerminalCashReceiptRetrievalTests
         TerminalCashReceiptRetrievalCommand command,
         bool voided = false)
     {
-        var presentation = AuthoritativePresentation(voided);
+        var presentation = AuthoritativePresentation(voided, alternatePayload: false);
         return new TerminalCashReceiptPresentationResponse(
             command.TerminalCashTenderId,
             command.CanonicalPaymentAttemptId,
             command.CanonicalPaymentConfirmationId,
+            "CONFIRMED",
             command.FiscalIssuanceReferenceId,
             "FISCAL_ISSUANCE_RECORDED",
             command.PosFiscalDocumentId,
@@ -468,6 +550,9 @@ public sealed class TerminalCashReceiptRetrievalTests
             voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
             "digital-sales-invoice-presentation-json-v1",
             "digital-sales-invoice-json-v1",
+            "sha256:fiscal-semantic",
+            "pos-server-semantic-hash:sha256:v1",
+            "MATCHED",
             "application/json",
             presentation,
             voided ? "voided" : null,
@@ -478,11 +563,44 @@ public sealed class TerminalCashReceiptRetrievalTests
             Guid.Parse(command.RetrievalCorrelationId));
     }
 
-    private static JsonElement AuthoritativePresentation(bool voided)
+    private static TerminalCashReceiptPresentationResponse Available(
+        TerminalCashReceiptRetrievalCommand command,
+        bool voided,
+        bool alternatePayload)
+    {
+        var presentation = AuthoritativePresentation(voided, alternatePayload);
+        return new TerminalCashReceiptPresentationResponse(
+            command.TerminalCashTenderId,
+            command.CanonicalPaymentAttemptId,
+            command.CanonicalPaymentConfirmationId,
+            "CONFIRMED",
+            command.FiscalIssuanceReferenceId,
+            "FISCAL_ISSUANCE_RECORDED",
+            command.PosFiscalDocumentId,
+            "SI-000001",
+            "recorded",
+            voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
+            "digital-sales-invoice-presentation-json-v1",
+            "digital-sales-invoice-json-v1",
+            "sha256:fiscal-semantic",
+            "pos-server-semantic-hash:sha256:v1",
+            "MATCHED",
+            "application/json",
+            presentation,
+            voided ? "voided" : null,
+            voided ? "operator_void" : null,
+            voided ? DateTimeOffset.Parse("2026-07-15T00:06:00Z") : null,
+            DateTimeOffset.Parse("2026-07-15T00:05:00Z"),
+            DateTimeOffset.Parse("2026-07-15T00:05:00Z"),
+            Guid.Parse(command.RetrievalCorrelationId));
+    }
+
+    private static JsonElement AuthoritativePresentation(bool voided, bool alternatePayload)
     {
         var voidJson = voided
             ? "\"voidStatus\":\"voided\",\"voidReasonCode\":\"operator_void\",\"voidedAt\":\"2026-07-15T00:06:00Z\""
             : "\"voidStatus\":null,\"voidReasonCode\":null,\"voidedAt\":null";
+        var description = alternatePayload ? "Altered parking fee - cash" : "Parking fee - cash";
         var json = $$"""
         {
           "succeeded": true,
@@ -491,7 +609,7 @@ public sealed class TerminalCashReceiptRetrievalTests
           "presentation": {
             "presentationVersion": "digital-sales-invoice-presentation-json-v1",
             "lines": [
-              { "description": "Parking fee - cash", "amountMinorUnits": 10000 }
+              { "description": "{{description}}", "amountMinorUnits": 10000 }
             ],
             "taxes": [
               { "taxType": "VAT", "amountMinorUnits": 0 }

@@ -18,6 +18,8 @@ public sealed class TerminalCashReceiptRetrievalCommand
 
     public Guid CanonicalPaymentConfirmationId { get; set; }
 
+    public string? CanonicalPaymentStatus { get; set; }
+
     public Guid FiscalIssuanceReferenceId { get; set; }
 
     public Guid PosFiscalDocumentId { get; set; }
@@ -40,6 +42,10 @@ public sealed class TerminalCashReceiptRetrievalCommand
 
     public string? LastSafeErrorCode { get; set; }
 
+    public bool? LastRetryable { get; set; }
+
+    public string? LastCentralPmsCorrelationId { get; set; }
+
     public string? ResultClassification { get; set; }
 
     public string? ReceiptAvailabilityState { get; set; }
@@ -51,6 +57,12 @@ public sealed class TerminalCashReceiptRetrievalCommand
     public string? PresentationVersion { get; set; }
 
     public string? TemplateVersion { get; set; }
+
+    public string? SemanticRequestHash { get; set; }
+
+    public string? SemanticRequestHashVersion { get; set; }
+
+    public string? SemanticRequestHashStatus { get; set; }
 
     public string? ContentType { get; set; }
 
@@ -65,6 +77,8 @@ public sealed class TerminalCashReceiptRetrievalCommand
     public DateTimeOffset? VoidedAt { get; set; }
 
     public DateTimeOffset? RetrievedAt { get; set; }
+
+    public DateTimeOffset? LastUpdatedFromCentralPms { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 

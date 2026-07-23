@@ -50,7 +50,10 @@ public sealed class CentralPmsCashReceiptBridgeHandlerTests
         using var database = ReceiptBridgeTestDatabase.Create();
         var receipt = await database.CreateRecordedFiscalWithReceiptCommandAsync();
         var client = new ScriptedCentralPmsReceiptClient();
-        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(Available(receipt), 200));
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt),
+            200,
+            Guid.Parse(receipt.RetrievalCorrelationId)));
         var handler = database.CreateHandler(client);
 
         using var response = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck, "corr-retrieve", new
@@ -67,6 +70,12 @@ public sealed class CentralPmsCashReceiptBridgeHandlerTests
         Assert.Equal("digital-sales-invoice-presentation-json-v1", mapped.GetProperty("presentationVersion").GetString());
         Assert.Equal("digital-sales-invoice-json-v1", mapped.GetProperty("templateVersion").GetString());
         Assert.Equal("application/json", mapped.GetProperty("contentType").GetString());
+        Assert.Equal("CONFIRMED", mapped.GetProperty("canonicalPaymentStatus").GetString());
+        Assert.Equal("sha256:fiscal-semantic", mapped.GetProperty("semanticRequestHash").GetString());
+        Assert.Equal("pos-server-semantic-hash:sha256:v1", mapped.GetProperty("semanticRequestHashVersion").GetString());
+        Assert.Equal("MATCHED", mapped.GetProperty("semanticRequestHashStatus").GetString());
+        Assert.False(mapped.GetProperty("lastRetryable").GetBoolean());
+        Assert.Equal(receipt.RetrievalCorrelationId, mapped.GetProperty("lastCentralPmsCorrelationId").GetString());
         Assert.False(string.IsNullOrWhiteSpace(mapped.GetProperty("authoritativePayloadHash").GetString()));
         Assert.False(mapped.TryGetProperty("authoritativePresentationJson", out _));
     }
@@ -145,6 +154,31 @@ public sealed class CentralPmsCashReceiptBridgeHandlerTests
         var mapped = response.RootElement.GetProperty("payload").GetProperty("command");
         Assert.Equal("Rejected", mapped.GetProperty("status").GetString());
         Assert.Equal("RECEIPT_PRESENTATION_REJECTED", mapped.GetProperty("lastSafeErrorCode").GetString());
+    }
+
+    [Theory]
+    [InlineData("POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED", "Unsupported")]
+    [InlineData("POS_SERVER_RECEIPT_PRESENTATION_MALFORMED", "Malformed")]
+    public async Task TerminalPresentationFailuresMapToDistinctSafeStates(string safeCode, string expectedStatus)
+    {
+        using var database = ReceiptBridgeTestDatabase.Create();
+        var receipt = await database.CreateRecordedFiscalWithReceiptCommandAsync();
+        var client = new ScriptedCentralPmsReceiptClient();
+        client.Enqueue(safeCode.EndsWith("UNSUPPORTED", StringComparison.Ordinal)
+            ? CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Unsupported(409, safeCode, retryable: false)
+            : CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Malformed(409, safeCode, retryable: false));
+        var handler = database.CreateHandler(client);
+
+        using var response = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck, "corr-terminal-failure", new
+        {
+            localCashTenderId = receipt.TerminalCashTenderId
+        });
+
+        var mapped = response.RootElement.GetProperty("payload").GetProperty("command");
+        Assert.Equal(expectedStatus, mapped.GetProperty("status").GetString());
+        Assert.Equal(safeCode, mapped.GetProperty("lastSafeErrorCode").GetString());
+        Assert.False(mapped.GetProperty("lastRetryable").GetBoolean());
+        Assert.False(mapped.TryGetProperty("authoritativePresentationJson", out _));
     }
 
     [Fact]
@@ -297,6 +331,7 @@ public sealed class CentralPmsCashReceiptBridgeHandlerTests
             command.TerminalCashTenderId,
             command.CanonicalPaymentAttemptId,
             command.CanonicalPaymentConfirmationId,
+            "CONFIRMED",
             command.FiscalIssuanceReferenceId,
             "FISCAL_ISSUANCE_RECORDED",
             command.PosFiscalDocumentId,
@@ -305,6 +340,9 @@ public sealed class CentralPmsCashReceiptBridgeHandlerTests
             voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
             "digital-sales-invoice-presentation-json-v1",
             "digital-sales-invoice-json-v1",
+            "sha256:fiscal-semantic",
+            "pos-server-semantic-hash:sha256:v1",
+            "MATCHED",
             "application/json",
             document.RootElement.Clone(),
             voided ? "voided" : null,

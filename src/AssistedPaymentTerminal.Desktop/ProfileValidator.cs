@@ -29,7 +29,7 @@ public static class ProfileValidator
             return new ProfileValidationResult(
                 false,
                 "MODE2_NOT_IMPLEMENTED",
-                "CONTINUITY_TERMINAL is not implemented in this Mode 1 terminal shell.");
+                "CONTINUITY_TERMINAL is not implemented in this Assisted Payment Terminal shell.");
         }
 
         return new ProfileValidationResult(

@@ -39,5 +39,7 @@ public sealed class ProfileValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Equal("MODE2_NOT_IMPLEMENTED", result.Code);
+        Assert.Contains("Assisted Payment Terminal shell", result.Message);
+        Assert.DoesNotContain("Mode 1", result.Message);
     }
 }

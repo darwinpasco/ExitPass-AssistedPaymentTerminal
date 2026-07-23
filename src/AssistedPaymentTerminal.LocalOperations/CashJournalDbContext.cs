@@ -195,13 +195,18 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(command => command.RetrievalCorrelationId).HasMaxLength(128).IsRequired();
             entity.Property(command => command.CentralPmsTarget).HasMaxLength(512).IsRequired();
             entity.Property(command => command.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(command => command.CanonicalPaymentStatus).HasMaxLength(64);
             entity.Property(command => command.LastSafeErrorCode).HasMaxLength(128);
+            entity.Property(command => command.LastCentralPmsCorrelationId).HasMaxLength(128);
             entity.Property(command => command.ResultClassification).HasMaxLength(128);
             entity.Property(command => command.ReceiptAvailabilityState).HasMaxLength(128);
             entity.Property(command => command.FiscalDocumentNumber).HasMaxLength(128);
             entity.Property(command => command.FiscalDocumentStatus).HasMaxLength(128);
             entity.Property(command => command.PresentationVersion).HasMaxLength(128);
             entity.Property(command => command.TemplateVersion).HasMaxLength(128);
+            entity.Property(command => command.SemanticRequestHash).HasMaxLength(160);
+            entity.Property(command => command.SemanticRequestHashVersion).HasMaxLength(128);
+            entity.Property(command => command.SemanticRequestHashStatus).HasMaxLength(128);
             entity.Property(command => command.ContentType).HasMaxLength(128);
             entity.Property(command => command.AuthoritativePresentationJson);
             entity.Property(command => command.AuthoritativePayloadHash).HasMaxLength(128);
@@ -212,6 +217,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(command => command.NextRetryAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.VoidedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.RetrievedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(command => command.LastUpdatedFromCentralPms).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.CreatedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.UpdatedAt).HasConversion(dateTimeOffsetConverter);
             entity.HasOne(command => command.RelatedCashPaymentOutboxCommand)
@@ -232,6 +238,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.HasKey(attempt => attempt.Id);
             entity.Property(attempt => attempt.OutcomeClassification).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(attempt => attempt.SafeErrorCode).HasMaxLength(128);
+            entity.Property(attempt => attempt.CentralPmsCorrelationId).HasMaxLength(128);
             entity.Property(attempt => attempt.CorrelationId).HasMaxLength(128).IsRequired();
             entity.Property(attempt => attempt.StartedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(attempt => attempt.CompletedAt).HasConversion(dateTimeOffsetConverter);

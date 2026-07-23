@@ -107,15 +107,42 @@ describe("CashCapturePanel", () => {
     expect(payload.denominations.map((denomination) => denomination.denominationCode)).not.toContain("PHP-50");
   });
 
-  it("displays local tender ID and local-only authority warning after CASH_RECEIVED", async () => {
+  it("displays local tender ID and historical local-custody checkpoint after CASH_RECEIVED", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
 
     await recordCashReceived();
 
     expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
     expect(screen.getByText("Local tender ID: tender-001")).toBeInTheDocument();
-    expect(screen.getByText(/Canonical payment not submitted/)).toBeInTheDocument();
-    expect(screen.getByText(/Fiscal issuance not started/)).toBeInTheDocument();
+    expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
+    expect(screen.getByText(/At this checkpoint, canonical payment had not yet been submitted/)).toBeInTheDocument();
+    expect(screen.getByText(/fiscal issuance had not yet started/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Local cash only\./)).not.toBeInTheDocument();
+  });
+
+  it("does not send a deterministic fixture tender ID in normal cashier flow", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({ config: enabledConfig(), bridge });
+
+    await recordCashReceived();
+
+    expect(bridge.startTender.mock.calls[0][1]).not.toHaveProperty("localCashTenderId");
+  });
+
+  it("uses a deterministic tender ID only when a development fixture supplies one", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({
+      config: enabledConfig(),
+      bridge,
+      developmentFixtureLocalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee2001",
+    });
+
+    await recordCashReceived();
+
+    expect(bridge.startTender.mock.calls[0][1]).toHaveProperty(
+      "localCashTenderId",
+      "eeeeeeee-eeee-4eee-8eee-eeeeeeee2001",
+    );
   });
 
   it("shows deterministic conflict when duplicate unresolved tender is rejected", async () => {
@@ -636,12 +663,69 @@ describe("CashCapturePanel", () => {
     expect(screen.queryByRole("button", { name: "View Receipt Preview" })).not.toBeInTheDocument();
   });
 
-  it("opens a read-only receipt preview from authoritative data", async () => {
+  it("shows unsupported receipt presentation as a terminal safe state without retry action", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Unsupported"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Sales Invoice format is not supported")).toBeInTheDocument();
+    expect(screen.getByText("Safe error code: POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED")).toBeInTheDocument();
+    expect(screen.getByText(/No local fiscal receipt was created/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retrieve / Check Receipt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View Receipt Preview" })).not.toBeInTheDocument();
+  });
+
+  it("shows malformed receipt presentation as a terminal safe state without fallback content", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Malformed"),
+      }),
+    });
+
+    await recordCashReceived();
+
+    expect(await screen.findByText("Sales Invoice response could not be read")).toBeInTheDocument();
+    expect(screen.getByText("Safe error code: POS_SERVER_RECEIPT_PRESENTATION_MALFORMED")).toBeInTheDocument();
+    expect(screen.getByText(/No local fiscal receipt was created/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only receipt body")).not.toBeInTheDocument();
+  });
+
+  it("blocks placeholder-marked preview payloads without rendering a receipt body", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview({ complete: false }),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Receipt presentation is incomplete")).toBeInTheDocument();
+    expect(screen.getByText(/No local placeholders were rendered/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only receipt body")).not.toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
+  });
+
+  it("opens a read-only receipt preview from complete authoritative data", async () => {
     const bridge = new FakeBridge({
       centralStatus: centralStatus("Confirmed"),
       fiscalStatus: fiscalStatus("Recorded"),
       receiptStatus: receiptStatus("Available"),
-      receiptPreview: receiptPreview(),
+      receiptPreview: receiptPreview({ complete: true }),
     });
     renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
 
@@ -654,46 +738,47 @@ describe("CashCapturePanel", () => {
     expect(document.body).toHaveTextContent("Not printed");
     expect(document.body).toHaveTextContent("Exit authorization unavailable");
     expect(document.body).toHaveTextContent("Paper width: 57 mm");
-    expect(screen.getByText("Configuration completeness: Incomplete")).toBeInTheDocument();
-    expect(screen.getByText(/Development preview: some Sales Invoice fields are placeholders/)).toBeInTheDocument();
+    expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
+    expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
     expect(screen.getByText("SALES INVOICE")).toBeInTheDocument();
-    expect(screen.getByText("[REGISTERED BUSINESS NAME]")).toBeInTheDocument();
-    expect(screen.getByText("[REGISTERED BUSINESS ADDRESS]")).toBeInTheDocument();
-    expect(screen.getByText("[TIN]")).toBeInTheDocument();
-    expect(screen.getByText("[POS SERIAL NUMBER]")).toBeInTheDocument();
-    expect(screen.getByText("[MACHINE IDENTIFICATION NUMBER]")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED REGISTERED BUSINESS NAME")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED REGISTERED BUSINESS ADDRESS")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED TIN")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED POS SERIAL NUMBER")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED MACHINE IDENTIFICATION NUMBER")).toBeInTheDocument();
     expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
     expect(screen.getByText("Qty")).toBeInTheDocument();
     expect(screen.getByText("Unit price")).toBeInTheDocument();
-    expect(screen.getByText("[UNIT PRICE]")).toBeInTheDocument();
+    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
     expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
     expect(screen.getByText("SALES INVOICE DETAILS")).toBeInTheDocument();
     expect(screen.getByText("Sales Invoice No.")).toBeInTheDocument();
     expect(screen.queryByText("Fiscal Identity")).not.toBeInTheDocument();
     expect(screen.queryByText("Fiscal document no.")).not.toBeInTheDocument();
     expect(screen.getByText("PARKING DETAILS")).toBeInTheDocument();
-    expect(screen.getByText("[PLATE NUMBER]")).toBeInTheDocument();
-    expect(screen.getByText("[ENTRY TIME]")).toBeInTheDocument();
-    expect(screen.getByText("[EXIT TIME]")).toBeInTheDocument();
-    expect(screen.getByText("[DURATION]")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED PLATE NUMBER")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED ENTRY TIME")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED EXIT TIME")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED DURATION")).toBeInTheDocument();
     expect(screen.getByText("VAT BREAKDOWN")).toBeInTheDocument();
-    expect(screen.getByText("[VATABLE SALES]")).toBeInTheDocument();
+    expect(screen.getAllByText("PHP 0.00").length).toBeGreaterThan(0);
     expect(screen.getByText("Output VAT")).toBeInTheDocument();
     expect(screen.getAllByText("Subtotal").length).toBeGreaterThan(0);
-    expect(screen.getByText("[SUBTOTAL]")).toBeInTheDocument();
+    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
     expect(screen.queryByText("grand_total")).not.toBeInTheDocument();
     expect(screen.getByText("Payment method")).toBeInTheDocument();
     expect(screen.getByText("CASH")).toBeInTheDocument();
     expect(screen.getByText("Total Paid")).toBeInTheDocument();
     expect(screen.getByText("Change")).toBeInTheDocument();
-    expect(screen.getByText("[SALES INVOICE LEGAL STATEMENT]")).toBeInTheDocument();
-    expect(screen.getByText("[SALES INVOICE FOOTER]")).toBeInTheDocument();
+    expect(screen.getByText("THIS SERVES AS YOUR SALES INVOICE")).toBeInTheDocument();
+    expect(screen.getByText("THANK YOU FOR CHOOSING OUR SERVICE")).toBeInTheDocument();
     expect(screen.getByText("BIR ACCREDITATION AND PTU INFORMATION")).toBeInTheDocument();
-    expect(screen.getByText("[BIR ACCREDITATION NO.]")).toBeInTheDocument();
-    expect(screen.getByText("[BIR ACCREDITATION DATE ISSUED]")).toBeInTheDocument();
-    expect(screen.getByText("[BIR ACCREDITATION VALID UNTIL]")).toBeInTheDocument();
-    expect(screen.getByText("[PTU NO.]")).toBeInTheDocument();
-    expect(screen.getByText("[PTU DATE ISSUED]")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED BIR ACCREDITATION NO.")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED BIR ACCREDITATION DATE ISSUED")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED BIR ACCREDITATION VALID UNTIL")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED PTU NO.")).toBeInTheDocument();
+    expect(screen.getByText("GOVERNED PTU DATE ISSUED")).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
     expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
     expect(document.body.textContent ?? "").not.toMatch(/merchant Name|site Name|display Amount|total Type|tender Type|change Display|message|VAT REG TIN|Demo Corporation|Sample TIN/i);
     expect(screen.queryByRole("button", { name: /Print|Reprint|Export|PDF|Email|SMS|Share/i })).not.toBeInTheDocument();
@@ -750,7 +835,7 @@ describe("CashCapturePanel", () => {
         centralStatus: centralStatus("Confirmed"),
         fiscalStatus: fiscalStatus("Recorded"),
         receiptStatus: receiptStatus("Available"),
-        receiptPreview: receiptPreview(),
+        receiptPreview: receiptPreview({ complete: true }),
       }),
     });
 
@@ -759,7 +844,7 @@ describe("CashCapturePanel", () => {
 
     expect(await screen.findByText("Sales Invoice No. SI-000001")).toBeInTheDocument();
     expect(screen.getByText("Paper width: 57 mm")).toBeInTheDocument();
-    expect(screen.getByText("Configuration completeness: Incomplete")).toBeInTheDocument();
+    expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
     expect(screen.getByText("Not printed")).toBeInTheDocument();
     expect(screen.getByText("Exit authorization unavailable")).toBeInTheDocument();
     const details = screen.getByText("Receipt technical details").closest("details");
@@ -773,7 +858,7 @@ describe("CashCapturePanel", () => {
         centralStatus: centralStatus("Confirmed"),
         fiscalStatus: fiscalStatus("Recorded"),
         receiptStatus: receiptStatus("Available"),
-        receiptPreview: receiptPreview(),
+        receiptPreview: receiptPreview({ complete: true }),
       }),
     });
 
@@ -841,7 +926,7 @@ describe("CashCapturePanel", () => {
         centralStatus: centralStatus("Confirmed"),
         fiscalStatus: fiscalStatus("Recorded"),
         receiptStatus: receiptStatus("Voided"),
-        receiptPreview: receiptPreview({ voided: true }),
+        receiptPreview: receiptPreview({ voided: true, complete: true }),
       }),
     });
 
@@ -859,7 +944,7 @@ describe("CashCapturePanel", () => {
     [58 as const, "58 mm"],
     [80 as const, "80 mm"],
   ])("displays active paper width %s", async (width, expectedText) => {
-    const preview = receiptPreview({ paperWidthMm: width ?? 57 });
+    const preview = receiptPreview({ paperWidthMm: width ?? 57, complete: true });
     renderPanel({
       config: receiptPreviewEnabledConfig(width ? { receiptPaperWidthMm: width } : {}),
       bridge: new FakeBridge({
@@ -892,6 +977,7 @@ describe("CashCapturePanel", () => {
         receiptPreview: receiptPreview({
           paperWidthMm: 57,
           paperWidthWarning: "Unsupported APT_RECEIPT_PAPER_WIDTH_MM value '99'. Falling back to 57 mm.",
+          complete: true,
         }),
       }),
     });
@@ -913,7 +999,7 @@ describe("CashCapturePanel", () => {
         centralStatus: centralStatus("Confirmed"),
         fiscalStatus: fiscalStatus("Recorded"),
         receiptStatus: receiptStatus("Available"),
-        receiptPreview: receiptPreview({ paperWidthMm: width }),
+        receiptPreview: receiptPreview({ paperWidthMm: width, complete: true }),
       });
       const { unmount } = renderPanel({ config: receiptPreviewEnabledConfig({ receiptPaperWidthMm: width }), bridge });
 
@@ -938,7 +1024,7 @@ describe("CashCapturePanel", () => {
       centralStatus: centralStatus("Confirmed"),
       fiscalStatus: fiscalStatus("Recorded"),
       receiptStatus: receiptStatus("Available"),
-      receiptPreview: receiptPreview(),
+        receiptPreview: receiptPreview({ complete: true }),
     });
     renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
 
@@ -954,7 +1040,7 @@ describe("CashCapturePanel", () => {
       centralStatus: centralStatus("Confirmed"),
       fiscalStatus: fiscalStatus("Recorded"),
       receiptStatus: receiptStatus("Available"),
-      receiptPreview: receiptPreview(),
+      receiptPreview: receiptPreview({ complete: true }),
     });
     renderPanel({ config: receiptPreviewEnabledConfig(), bridge });
 
@@ -970,10 +1056,12 @@ function renderPanel({
   config,
   tariffExpired = false,
   bridge,
+  developmentFixtureLocalCashTenderId,
 }: {
   config: AptConfig;
   tariffExpired?: boolean;
   bridge: LocalJournalBridge;
+  developmentFixtureLocalCashTenderId?: string;
 }) {
   return render(
     <CashCapturePanel
@@ -982,6 +1070,7 @@ function renderPanel({
       session={activeSession()}
       tariffExpired={tariffExpired}
       bridge={bridge}
+      developmentFixtureLocalCashTenderId={developmentFixtureLocalCashTenderId}
     />,
   );
 }
@@ -1122,7 +1211,7 @@ class FakeBridge implements LocalJournalBridge {
       ok: true,
       command: "localJournal.startTender",
       correlationId,
-      payload: tender({ ...payload, id: "tender-001", state: "TenderStarted", correlationId }),
+      payload: tender({ ...payload, id: payload.localCashTenderId ?? "tender-001", state: "TenderStarted", correlationId }),
     };
   });
 
@@ -1356,6 +1445,8 @@ function receiptStatus(
   const voided = status === "Voided";
   const rejected = status === "Rejected";
   const inconsistent = status === "Inconsistent";
+  const unsupported = status === "Unsupported";
+  const malformed = status === "Malformed";
   return {
     enabled: true,
     configurationValid: true,
@@ -1367,18 +1458,32 @@ function receiptStatus(
       relatedFiscalCommandId: "fiscal-command-001",
       canonicalPaymentAttemptId: "payment-attempt-001",
       canonicalPaymentConfirmationId: "payment-confirmation-001",
+      canonicalPaymentStatus: "CONFIRMED",
       fiscalIssuanceReferenceId: "fiscal-reference-001",
       posFiscalDocumentId: "pos-fiscal-document-001",
       status,
       statusLabel: status === "NotReady" ? "Not ready" : status === "RetryPending" ? "Retry pending" : status,
       attemptCount: status === "Pending" ? 0 : 1,
       retrievalCorrelationId: "corr-receipt",
-      resultClassification: available || voided ? "AVAILABLE" : inconsistent ? "INCONSISTENT" : rejected ? "REJECTED" : "PENDING",
+      resultClassification: available || voided
+        ? "AVAILABLE"
+        : inconsistent
+          ? "INCONSISTENT"
+          : rejected
+            ? "REJECTED"
+            : unsupported
+              ? "UNSUPPORTED"
+              : malformed
+                ? "MALFORMED"
+                : "PENDING",
       receiptAvailabilityState: available || voided ? "AVAILABLE" : null,
       fiscalDocumentNumber: available || voided ? "SI-000001" : null,
       fiscalDocumentStatus: available ? "RECORDED" : voided ? "VOIDED" : null,
       presentationVersion: available || voided ? "dsi-presentation-v1" : null,
       templateVersion: available || voided ? "template-v1" : null,
+      semanticRequestHash: available || voided ? "sha256:fiscal-semantic" : null,
+      semanticRequestHashVersion: available || voided ? "pos-server-semantic-hash:sha256:v1" : null,
+      semanticRequestHashStatus: available || voided ? "MATCHED" : null,
       contentType: available || voided ? "application/vnd.exitpass.digital-sales-invoice+json" : null,
       authoritativePayloadHash: available || voided ? "sha256:receipt-payload" : null,
       voidStatus: voided ? "voided" : null,
@@ -1386,8 +1491,19 @@ function receiptStatus(
       voidedAt: voided ? new Date().toISOString() : null,
       retrievedAt: available || voided ? new Date().toISOString() : null,
       nextRetryAt: status === "RetryPending" || status === "NotReady" ? new Date().toISOString() : null,
-      lastSafeHttpStatus: inconsistent ? 409 : rejected ? 400 : null,
-      lastSafeErrorCode: inconsistent ? "RECEIPT_REFERENCE_MISMATCH" : rejected ? "RECEIPT_PRESENTATION_REJECTED" : null,
+      lastSafeHttpStatus: inconsistent || unsupported || malformed ? 409 : rejected ? 400 : null,
+      lastSafeErrorCode: inconsistent
+        ? "RECEIPT_REFERENCE_MISMATCH"
+        : rejected
+          ? "RECEIPT_PRESENTATION_REJECTED"
+          : unsupported
+            ? "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED"
+            : malformed
+              ? "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED"
+              : null,
+      lastRetryable: status === "RetryPending" || status === "NotReady",
+      lastCentralPmsCorrelationId: available || voided ? "corr-central-pms-receipt" : null,
+      lastUpdatedFromCentralPms: available || voided ? new Date().toISOString() : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       ...overrides,
@@ -1433,8 +1549,12 @@ function receiptPreview({
       templateVersion: "digital-sales-invoice-json-v1",
       contentType: "application/json",
       authoritativePayloadHash: "sha256:receipt-payload",
+      semanticRequestHash: command.semanticRequestHash,
+      semanticRequestHashVersion: command.semanticRequestHashVersion,
+      semanticRequestHashStatus: command.semanticRequestHashStatus,
       retrievedAt: new Date().toISOString(),
       retrievalCorrelationId: "corr-receipt",
+      centralPmsCorrelationId: "corr-central-pms-receipt",
       voided,
       voidStatus: voided ? "voided" : null,
       voidReasonCode: voided ? "SUPERVISOR_VOID" : null,

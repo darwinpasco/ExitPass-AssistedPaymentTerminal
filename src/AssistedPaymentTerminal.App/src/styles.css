@@ -841,6 +841,21 @@ dl {
   line-height: 1.35;
 }
 
+.receipt-visual-smoke-shell .brand-header {
+  border: 2px solid #b77700;
+}
+
+.visual-smoke-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.visual-smoke-selector .secondary-action.selected {
+  border-color: #0f5f6d;
+  background: #e8f7fa;
+}
+
 @media (max-width: 1100px) {
   .terminal-shell {
     padding: 8px;

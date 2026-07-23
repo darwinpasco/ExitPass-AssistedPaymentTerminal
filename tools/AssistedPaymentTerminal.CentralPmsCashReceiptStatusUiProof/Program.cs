@@ -25,6 +25,8 @@ await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.NotRe
 await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.RetryPending, "RetryPending", expectedStatus: "Unavailable");
 await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.Inconsistent, "Inconsistent", expectedStatus: "Inconsistent");
 await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.Rejected, "Rejected", expectedStatus: "Rejected");
+await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.Unsupported, "Unsupported", expectedStatus: "Unsupported");
+await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.Malformed, "Malformed", expectedStatus: "Malformed");
 await RunScenarioProofAsync(fullDatabasePath, ReceiptStatusUiProofScenario.Voided, "Voided", expectedStatus: "Voided");
 await RunUnavailableThenAvailableAsync(fullDatabasePath);
 
@@ -32,7 +34,7 @@ Console.WriteLine("recorded fiscal state exists.");
 Console.WriteLine("one receipt-retrieval record exists per terminal cash tender.");
 Console.WriteLine("explicit retrieval invokes the persisted receipt command.");
 Console.WriteLine("available metadata is returned without rendering the opaque payload.");
-Console.WriteLine("not-ready, retry, inconsistent, rejected, and voided states map safely.");
+Console.WriteLine("not-ready, retry, inconsistent, rejected, unsupported, malformed, and voided states map safely.");
 Console.WriteLine("restart restores receipt status from the same database.");
 Console.WriteLine("no duplicate retrieval record was created.");
 Console.WriteLine("no rendering, printing, exit, gate, provider, or direct POS Server behavior was executed.");

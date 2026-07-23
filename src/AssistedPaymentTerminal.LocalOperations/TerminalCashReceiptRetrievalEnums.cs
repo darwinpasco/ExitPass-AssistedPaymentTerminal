@@ -10,7 +10,9 @@ public enum TerminalCashReceiptRetrievalStatus
     Voided = 6,
     Rejected = 7,
     Inconsistent = 8,
-    Unavailable = 9
+    Unavailable = 9,
+    Unsupported = 10,
+    Malformed = 11
 }
 
 public enum TerminalCashReceiptRetrievalAttemptOutcome
@@ -22,5 +24,7 @@ public enum TerminalCashReceiptRetrievalAttemptOutcome
     Inconsistent = 5,
     Timeout = 6,
     Unavailable = 7,
-    Unknown = 8
+    Unknown = 8,
+    Unsupported = 9,
+    Malformed = 10
 }
