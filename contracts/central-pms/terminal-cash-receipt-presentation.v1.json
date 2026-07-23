@@ -1,8 +1,9 @@
 {
   "contractVersion": "terminal-cash-receipt-presentation.v1",
   "owner": "Central PMS",
+  "consumerRepository": "ExitPass-AssistedPaymentTerminal",
   "sourceRepository": "ExitPass-APT",
-  "sourceCommit": "14600a179ea709fe5d5aa626a16025ff610f24ff",
+  "sourceBranch": "feature/apt-terminal-cash-receipt-presentation-parity",
   "method": "GET",
   "route": "/v1/terminal-cash-payments/references/{terminalCashTenderId}/receipt-presentation",
   "readOnly": true,
@@ -17,6 +18,7 @@
     "terminalCashTenderId",
     "paymentAttemptId",
     "paymentConfirmationId",
+    "canonicalPaymentStatus",
     "fiscalIssuanceReferenceId",
     "fiscalIssuanceState",
     "posFiscalDocumentId",
@@ -25,6 +27,9 @@
     "receiptAvailabilityState",
     "presentationVersion",
     "templateVersion",
+    "semanticRequestHash",
+    "semanticRequestHashVersion",
+    "semanticRequestHashStatus",
     "contentType",
     "authoritativePresentation",
     "voidStatus",
@@ -34,14 +39,27 @@
     "updatedAt",
     "correlationId"
   ],
+  "desktopPersistence": {
+    "terminalCashTenderId": "public APT receipt reference",
+    "localReceiptRetrievalId": "terminal-local durable receipt-retrieval record",
+    "canonicalPaymentStatus": "stored separately from fiscal and receipt status",
+    "fiscalIssuanceState": "stored separately from payment and receipt status",
+    "posFiscalDocumentId": "recorded authoritative fiscal document identity",
+    "authoritativePresentation": "stored as opaque POS Server-owned presentation snapshot",
+    "semanticRequestHash": "stored when Central PMS returns recorded fiscal semantic evidence",
+    "retryable": "stored from safe Central PMS error responses",
+    "nextRetryAt": "terminal-local retry guidance, never a fabricated server timestamp",
+    "correlationId": "Central PMS response correlation retained separately from terminal request correlation"
+  },
   "authoritativePresentation": {
     "owner": "POS Server",
     "shape": "GetDigitalSalesInvoicePresentationResponse",
     "transportedThrough": "Central PMS",
-    "persistencePosture": "APT stores the complete returned payload as an opaque authoritative snapshot for restart-safe downstream presentation.",
+    "persistencePosture": "APT stores the complete returned payload as an opaque authoritative snapshot for restart-safe display.",
     "notes": [
       "APT must not reconstruct lines, totals, taxes, tenders, fiscal numbers, wording, template content, or presentation content.",
-      "APT must not mark the receipt rendered, printed, reprinted, emailed, or delivered in this slice."
+      "APT must not substitute placeholders or local cash-summary fields for missing authoritative Sales Invoice fields.",
+      "APT must not mark the receipt printed, reprinted, emailed, or delivered in this slice."
     ]
   },
   "posServerDelegation": {
@@ -60,57 +78,83 @@
     {
       "httpStatus": 400,
       "code": "INVALID_REQUEST",
-      "meaning": "Required correlation header is missing or invalid."
+      "meaning": "Required correlation header is missing or invalid.",
+      "retryable": false
     },
     {
       "httpStatus": 404,
       "code": "TERMINAL_CASH_PAYMENT_NOT_FOUND",
-      "meaning": "Terminal cash payment does not exist."
+      "meaning": "Terminal cash payment does not exist.",
+      "retryable": false
     },
     {
       "httpStatus": 404,
       "code": "TERMINAL_CASH_FISCAL_ISSUANCE_NOT_FOUND",
-      "meaning": "Fiscal issuance has not been created for the terminal cash tender."
+      "meaning": "Fiscal issuance has not been created for the terminal cash tender.",
+      "retryable": true
     },
     {
       "httpStatus": 409,
       "code": "TERMINAL_CASH_PAYMENT_NOT_CONFIRMED",
-      "meaning": "Canonical Central PMS payment confirmation is not recorded."
+      "meaning": "Canonical Central PMS payment confirmation is not recorded.",
+      "retryable": true
     },
     {
       "httpStatus": 409,
       "code": "TERMINAL_CASH_RECEIPT_PRESENTATION_NOT_READY",
-      "meaning": "Fiscal issuance is pending, readback-required, retry-pending, or uncertain."
+      "meaning": "Fiscal issuance is pending, readback-required, retry-pending, or uncertain.",
+      "retryable": true
     },
     {
       "httpStatus": 409,
       "code": "POS_FISCAL_DOCUMENT_ID_MISSING",
-      "meaning": "Recorded fiscal issuance lacks a POS fiscal document id."
+      "meaning": "Recorded fiscal issuance lacks a POS fiscal document id.",
+      "retryable": true
     },
     {
       "httpStatus": 409,
       "code": "POS_FISCAL_DOCUMENT_PRESENTATION_INCONSISTENT",
-      "meaning": "POS Server did not return the recorded fiscal document."
+      "meaning": "POS Server did not return the recorded fiscal document.",
+      "retryable": false
     },
     {
       "httpStatus": 409,
       "code": "POS_SERVER_RECEIPT_PRESENTATION_NOT_READY",
-      "meaning": "POS Server reports presentation is not safely ready."
+      "meaning": "POS Server reports presentation is not safely ready.",
+      "retryable": true
+    },
+    {
+      "httpStatus": 409,
+      "code": "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED",
+      "meaning": "POS Server reports the presentation contract is unsupported for this fiscal document.",
+      "retryable": false
+    },
+    {
+      "httpStatus": 409,
+      "code": "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED",
+      "meaning": "POS Server presentation response cannot be safely mapped.",
+      "retryable": false
     },
     {
       "httpStatus": 503,
       "code": "POS_SERVER_RECEIPT_PRESENTATION_UNAVAILABLE",
-      "meaning": "POS Server presentation read path is unavailable."
+      "meaning": "POS Server presentation read path is temporarily unavailable.",
+      "retryable": true
     }
   ],
   "sideEffectsProhibited": [
+    "call WebPay receipt-presentation route",
     "call POS Server directly from APT",
-    "render receipt HTML or UI",
+    "submit terminal cash payment",
+    "create fiscal issuance",
+    "allocate fiscal number",
+    "render local fallback receipt",
     "print receipt",
     "create print job",
     "mark receipt printed",
     "issue exit authorization",
     "create gate command or event",
+    "invoke HikCentral",
     "invoke Payment Orchestrator"
   ]
 }

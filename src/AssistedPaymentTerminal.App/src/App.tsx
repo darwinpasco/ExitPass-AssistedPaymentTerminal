@@ -5,6 +5,7 @@ import { createCorrelationId } from "./correlation";
 import { createCentralPmsClient } from "./api/clientFactory";
 import type { CentralPmsClient, CentralPmsResult, ResolveVendorParkingResponse } from "./api/centralPmsTypes";
 import { CashCapturePanel } from "./CashCapturePanel";
+import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import type { LocalJournalBridge } from "./localJournalBridge";
 
@@ -32,6 +33,10 @@ export function App() {
 
   if (!configResult.ok) {
     return <StartupRefusal result={configResult} />;
+  }
+
+  if (shouldUseReceiptVisualSmoke(window.location.search)) {
+    return <ReceiptVisualSmokeShell config={configResult.config} />;
   }
 
   return <TerminalShell config={configResult.config} client={createCentralPmsClient(configResult.config)} />;
@@ -78,7 +83,7 @@ export function TerminalShell({
   const tariffExpired = resolvedSession ? new Date(resolvedSession.tariffExpiresAt).getTime() <= Date.now() : false;
 
   return (
-    <main className="terminal-shell" data-testid="apt-mode1-shell" data-app-ready="true">
+    <main className="terminal-shell" data-testid="apt-terminal-shell" data-app-ready="true">
       <header className="brand-header">
         <div>
           <p className="eyebrow">ExitPass Assisted Payment Terminal</p>

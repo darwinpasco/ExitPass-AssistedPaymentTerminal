@@ -144,14 +144,14 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var ready = await WaitForReadinessMarkerAsync(TimeSpan.FromSeconds(12));
-            if (!ready)
+            var readiness = await WaitForReadinessMarkerAsync(TimeSpan.FromSeconds(12));
+            if (!readiness.Ready)
             {
                 var errorReference = CreateErrorReference();
                 ShowError(
                     "Terminal interface did not start",
-                    "The page loaded, but the React Mode 1 terminal did not mount.",
-                    $"Reference: {errorReference}\nURL: {TerminalWebView.Source}\nExpected marker: [data-testid='apt-mode1-shell'][data-app-ready='true']");
+                    TerminalShellReadiness.MissingMountMessage,
+                    TerminalShellReadiness.BuildMountFailureDetail(errorReference, TerminalWebView.Source?.ToString(), readiness.StartupError));
                 return;
             }
 
@@ -203,6 +203,10 @@ public partial class MainWindow : Window
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
             """
             (() => {
+              window.__APT_STARTUP_ERROR__ = "";
+              const rememberStartupError = (message, detail) => {
+                window.__APT_STARTUP_ERROR__ = `${String(message ?? "")} ${String(detail ?? "")}`.trim().slice(0, 500);
+              };
               const post = (level, message, detail) => {
                 try {
                   window.chrome?.webview?.postMessage(JSON.stringify({
@@ -230,10 +234,13 @@ public partial class MainWindow : Window
                 originalError(...args);
               };
               window.addEventListener("error", event => {
+                rememberStartupError(event.message, `${event.filename}:${event.lineno}:${event.colno}`);
                 post("error", event.message, `${event.filename}:${event.lineno}:${event.colno}`);
               });
               window.addEventListener("unhandledrejection", event => {
-                post("error", event.reason?.message ?? event.reason, "unhandledrejection");
+                const reason = event.reason?.message ?? event.reason;
+                rememberStartupError(reason, "unhandledrejection");
+                post("error", reason, "unhandledrejection");
               });
             })();
             """.Replace(
@@ -265,39 +272,58 @@ public partial class MainWindow : Window
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);
 
-    private async Task<bool> WaitForReadinessMarkerAsync(TimeSpan timeout)
+    private async Task<ReadinessMarkerResult> WaitForReadinessMarkerAsync(TimeSpan timeout)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
+        string? startupError = null;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
-            var marker = await TerminalWebView.ExecuteScriptAsync(
-                "Boolean(document.querySelector('[data-testid=\"apt-mode1-shell\"][data-app-ready=\"true\"]'))");
-            var heading = await TerminalWebView.ExecuteScriptAsync(
-                "Boolean(document.body && document.body.innerText && document.body.innerText.includes('Cashier-Assisted Terminal'))");
+            var result = await ReadinessMarkerScriptResultAsync();
+            startupError = result.StartupError;
 
-            if (ReadBooleanScriptResult(marker) && ReadBooleanScriptResult(heading))
+            if (result.Ready)
             {
-                return true;
+                return result;
             }
 
             await Task.Delay(250);
         }
 
-        return false;
+        return new ReadinessMarkerResult(false, startupError);
     }
 
-    private static bool ReadBooleanScriptResult(string json)
+    private async Task<ReadinessMarkerResult> ReadinessMarkerScriptResultAsync()
     {
         try
         {
-            return JsonSerializer.Deserialize<bool>(json);
+            var json = await TerminalWebView.ExecuteScriptAsync(
+                """
+                (() => ({
+                  ready: Boolean(document.querySelector('__APT_TERMINAL_READY_SELECTOR__')),
+                  startupError: String(window.__APT_STARTUP_ERROR__ || "")
+                }))()
+                """.Replace("__APT_TERMINAL_READY_SELECTOR__", TerminalShellReadiness.ReadySelectorForScript));
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var ready = root.TryGetProperty("ready", out var readyElement) && readyElement.GetBoolean();
+            var startupError = root.TryGetProperty("startupError", out var startupElement)
+                ? startupElement.GetString()
+                : null;
+
+            return new ReadinessMarkerResult(ready, startupError);
         }
         catch (JsonException)
         {
-            return false;
+            return new ReadinessMarkerResult(false, "Unable to read terminal shell readiness marker.");
+        }
+        catch (InvalidOperationException)
+        {
+            return new ReadinessMarkerResult(false, "Unable to read terminal shell readiness marker.");
         }
     }
+
+    private sealed record ReadinessMarkerResult(bool Ready, string? StartupError);
 
     private void ShowLoading(string title, string message, string detail)
     {

@@ -56,45 +56,13 @@ static async Task RunAutomatedProofAsync(string databasePath)
 {
     var availableTenderId = await SeedScenarioAsync(databasePath, ReceiptPreviewProofScenario.Available).ConfigureAwait(false);
     var first = await PreviewAsync(databasePath, availableTenderId, receiptPreviewEnabled: true, paperWidthMm: null).ConfigureAwait(false);
-    Require(first.GetProperty("ok").GetBoolean(), "Available preview did not succeed.");
-    var firstPayload = first.GetProperty("payload");
-    Require(firstPayload.GetProperty("paperProfile").GetProperty("paperWidthMm").GetInt32() == 57, "Missing paper-width configuration did not default to 57 mm.");
-    var firstPreview = firstPayload.GetProperty("preview");
-    var firstSections = firstPreview.GetProperty("sections").GetRawText();
-    Require(firstPreview.GetProperty("hasPlaceholders").GetBoolean(), "Available fixture with missing configuration did not expose placeholders.");
-    Require(firstPreview.GetProperty("configurationCompleteness").GetString() == "Incomplete", "Available fixture did not report incomplete configuration.");
-    Require(firstSections.Contains("SALES INVOICE", StringComparison.Ordinal), "Sales Invoice title was not displayed.");
-    Require(firstSections.Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Missing registered business name placeholder was not displayed.");
-    Require(firstSections.Contains("[TIN]", StringComparison.Ordinal), "Missing TIN placeholder was not displayed.");
-    Require(firstSections.Contains("[PARKING LOCATION]", StringComparison.Ordinal), "Missing parking location placeholder was not displayed.");
-    Require(firstSections.Contains("[PLATE NUMBER]", StringComparison.Ordinal), "Missing parking detail placeholder was not displayed.");
-    Require(firstSections.Contains("[SUBTOTAL]", StringComparison.Ordinal), "Missing subtotal placeholder was not displayed instead of deriving subtotal.");
-    Require(firstSections.Contains("[BIR ACCREDITATION NO.]", StringComparison.Ordinal), "Missing BIR accreditation placeholder was not displayed.");
-    Require(firstSections.Contains("[BIR ACCREDITATION DATE ISSUED]", StringComparison.Ordinal), "Missing BIR accreditation issued-date placeholder was not displayed.");
-    Require(firstSections.Contains("[BIR ACCREDITATION VALID UNTIL]", StringComparison.Ordinal), "Missing BIR accreditation valid-until placeholder was not displayed.");
-    Require(firstSections.Contains("[PTU DATE ISSUED]", StringComparison.Ordinal), "Missing PTU issued-date placeholder was not displayed.");
-    Require(firstSections.Contains("Parking fee - cash", StringComparison.Ordinal), "Line item was not displayed from authoritative data.");
-    Require(firstSections.Contains("CASH", StringComparison.Ordinal), "CASH tender was not displayed from authoritative data.");
-    Require(firstSections.Contains("PHP 25.00", StringComparison.Ordinal), "Authoritative change was not displayed.");
-    Require(!firstSections.Contains("display Amount", StringComparison.OrdinalIgnoreCase), "Raw displayAmount contract label leaked to the preview model.");
-    Require(!firstSections.Contains("grand_total", StringComparison.OrdinalIgnoreCase), "Raw grand_total contract value leaked to the preview model.");
-    Require(!firstSections.Contains("ExitPass Demo Parking", StringComparison.OrdinalIgnoreCase), "Realistic demo merchant data leaked into placeholder preview.");
-    Require(!firstSections.Contains("Main Garage", StringComparison.OrdinalIgnoreCase), "Realistic demo site data leaked into placeholder preview.");
-    Require(!firstPreview.TryGetProperty("authoritativePresentationJson", out _), "Raw JSON leaked to the preview bridge.");
+    Require(!first.GetProperty("ok").GetBoolean(), "Incomplete authoritative preview unexpectedly succeeded.");
+    Require(
+        first.GetProperty("error").GetProperty("code").GetString() == "receipt_preview_incomplete_authoritative_payload",
+        "Incomplete authoritative payload did not block preview.");
+    Require(!first.GetRawText().Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Placeholder leaked into blocked preview response.");
     var storedPayload = await ReadAuthoritativePayloadAsync(databasePath, availableTenderId).ConfigureAwait(false);
     Require(!storedPayload.Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Placeholder was written into the persisted authoritative payload.");
-
-    var hash = firstPreview.GetProperty("authoritativePayloadHash").GetString();
-    foreach (var width in new string?[] { "57", "58", "80", "99" })
-    {
-        var preview = await PreviewAsync(databasePath, availableTenderId, receiptPreviewEnabled: true, paperWidthMm: width).ConfigureAwait(false);
-        Require(preview.GetProperty("ok").GetBoolean(), $"Width {width ?? "missing"} preview failed.");
-        var payload = preview.GetProperty("payload");
-        var expectedWidth = width == "58" ? 58 : width == "80" ? 80 : 57;
-        Require(payload.GetProperty("paperProfile").GetProperty("paperWidthMm").GetInt32() == expectedWidth, $"Width {width ?? "missing"} did not select the expected profile.");
-        Require(payload.GetProperty("preview").GetProperty("authoritativePayloadHash").GetString() == hash, "Paper-width selection changed the authoritative payload hash.");
-        Require(payload.GetProperty("preview").GetProperty("sections").GetRawText() == firstSections, "Paper-width selection altered receipt facts.");
-    }
 
     var completeTenderId = await SeedScenarioAsync(databasePath, ReceiptPreviewProofScenario.Complete).ConfigureAwait(false);
     var complete = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: true, paperWidthMm: "57").ConfigureAwait(false);
@@ -110,11 +78,23 @@ static async Task RunAutomatedProofAsync(string databasePath)
     Require(!completeSections.Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Placeholder was shown alongside actual registered business value.");
     Require(!completeSections.Contains("[BIR ACCREDITATION VALID UNTIL]", StringComparison.Ordinal), "BIR validity placeholder was shown alongside actual value.");
 
-    var reopened = await PreviewAsync(databasePath, availableTenderId, receiptPreviewEnabled: true, paperWidthMm: "57").ConfigureAwait(false);
-    Require(reopened.GetProperty("ok").GetBoolean(), "Restart-style preview did not use the persisted payload.");
-    Require(await CountReceiptCommandsAsync(databasePath, availableTenderId).ConfigureAwait(false) == 1, "Preview created a duplicate receipt-retrieval record.");
+    var hash = completePreview.GetProperty("authoritativePayloadHash").GetString();
+    foreach (var width in new string?[] { "57", "58", "80", "99" })
+    {
+        var preview = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: true, paperWidthMm: width).ConfigureAwait(false);
+        Require(preview.GetProperty("ok").GetBoolean(), $"Width {width ?? "missing"} preview failed.");
+        var payload = preview.GetProperty("payload");
+        var expectedWidth = width == "58" ? 58 : width == "80" ? 80 : 57;
+        Require(payload.GetProperty("paperProfile").GetProperty("paperWidthMm").GetInt32() == expectedWidth, $"Width {width ?? "missing"} did not select the expected profile.");
+        Require(payload.GetProperty("preview").GetProperty("authoritativePayloadHash").GetString() == hash, "Paper-width selection changed the authoritative payload hash.");
+        Require(payload.GetProperty("preview").GetProperty("sections").GetRawText() == completeSections, "Paper-width selection altered receipt facts.");
+    }
 
-    var disabled = await PreviewAsync(databasePath, availableTenderId, receiptPreviewEnabled: false, paperWidthMm: "57").ConfigureAwait(false);
+    var reopened = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: true, paperWidthMm: "57").ConfigureAwait(false);
+    Require(reopened.GetProperty("ok").GetBoolean(), "Restart-style preview did not use the persisted payload.");
+    Require(await CountReceiptCommandsAsync(databasePath, completeTenderId).ConfigureAwait(false) == 1, "Preview created a duplicate receipt-retrieval record.");
+
+    var disabled = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: false, paperWidthMm: "57").ConfigureAwait(false);
     Require(!disabled.GetProperty("ok").GetBoolean(), "Disabled preview unexpectedly succeeded.");
 
     await ExpectBlockedAsync(databasePath, ReceiptPreviewProofScenario.UnsupportedVersion, "receipt_preview_unsupported_version").ConfigureAwait(false);
@@ -130,8 +110,8 @@ static async Task RunAutomatedProofAsync(string databasePath)
     Console.WriteLine("Available receipt snapshot exists.");
     Console.WriteLine("Preview action can decode the approved Sales Invoice structure.");
     Console.WriteLine("Corrected BIR accreditation and PTU registration fields are represented distinctly.");
-    Console.WriteLine("Missing statutory, site, terminal, parking, and transaction fields are represented by approved placeholders.");
-    Console.WriteLine("Placeholders are not inserted into the stored authoritative payload and do not change the payload hash.");
+    Console.WriteLine("Missing statutory, site, terminal, parking, and transaction fields block preview without rendering placeholders.");
+    Console.WriteLine("Placeholders are not inserted into the stored authoritative payload, preview response, or payload hash.");
     Console.WriteLine("Actual governed values replace placeholders and report complete configuration.");
     Console.WriteLine("Receipt preview maps governed fields to customer-facing labels without raw contract property labels.");
     Console.WriteLine("Lines, taxes, totals, and CASH tender are returned through the preview model.");
@@ -485,7 +465,7 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
         CancellationToken cancellationToken = default)
     {
         var voided = scenario == ReceiptPreviewProofScenario.Voided;
-        var payload = scenario == ReceiptPreviewProofScenario.Complete
+        var payload = scenario is ReceiptPreviewProofScenario.Complete or ReceiptPreviewProofScenario.Voided
             ? """
               {
                 "presentation": {
@@ -553,6 +533,7 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
                 terminalCashTenderId,
                 Guid.Parse("33333333-3333-4333-8333-333333333333"),
                 Guid.Parse("44444444-4444-4444-8444-444444444444"),
+                "CONFIRMED",
                 Guid.Parse("55555555-5555-4555-8555-555555555555"),
                 "FISCAL_ISSUANCE_RECORDED",
                 Guid.Parse("66666666-6666-4666-8666-666666666666"),
@@ -561,6 +542,9 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
                 voided ? "VOIDED_PRESENTATION_AVAILABLE" : "AVAILABLE",
                 ReceiptPreviewContract.PresentationVersion,
                 ReceiptPreviewContract.TemplateVersion,
+                "sha256:fiscal-semantic",
+                "pos-server-semantic-hash:sha256:v1",
+                "MATCHED",
                 ReceiptPreviewContract.ContentType,
                 document.RootElement.Clone(),
                 voided ? "voided" : null,
@@ -569,7 +553,8 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
                 DateTimeOffset.Parse("2026-07-15T00:05:00Z"),
                 DateTimeOffset.Parse("2026-07-15T00:05:00Z"),
                 Guid.Parse(correlationId)),
-            200));
+            200,
+            Guid.Parse(correlationId)));
     }
 }
 

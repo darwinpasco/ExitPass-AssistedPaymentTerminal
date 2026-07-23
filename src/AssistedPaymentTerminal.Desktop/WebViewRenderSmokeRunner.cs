@@ -174,11 +174,9 @@ public static class WebViewRenderSmokeRunner
         while (!cancellationToken.IsCancellationRequested)
         {
             var marker = await webView.ExecuteScriptAsync(
-                "Boolean(document.querySelector('[data-testid=\"apt-mode1-shell\"][data-app-ready=\"true\"]'))");
-            var heading = await webView.ExecuteScriptAsync(
-                "Boolean(document.body && document.body.innerText && document.body.innerText.includes('Cashier-Assisted Terminal') && document.body.innerText.includes('Mode 1'))");
+                $"Boolean(document.querySelector('{TerminalShellReadiness.ReadySelectorForScript}'))");
 
-            if (ReadBooleanScriptResult(marker) && ReadBooleanScriptResult(heading))
+            if (ReadBooleanScriptResult(marker))
             {
                 return true;
             }

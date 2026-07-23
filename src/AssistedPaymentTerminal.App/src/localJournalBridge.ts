@@ -140,6 +140,7 @@ export type CentralPmsCashReceiptCommand = {
   relatedFiscalCommandId: string;
   canonicalPaymentAttemptId: string;
   canonicalPaymentConfirmationId: string;
+  canonicalPaymentStatus: string | null;
   fiscalIssuanceReferenceId: string;
   posFiscalDocumentId: string;
   status:
@@ -151,7 +152,9 @@ export type CentralPmsCashReceiptCommand = {
     | "Voided"
     | "Rejected"
     | "Inconsistent"
-    | "Unavailable";
+    | "Unavailable"
+    | "Unsupported"
+    | "Malformed";
   statusLabel: string;
   attemptCount: number;
   retrievalCorrelationId: string;
@@ -161,6 +164,9 @@ export type CentralPmsCashReceiptCommand = {
   fiscalDocumentStatus: string | null;
   presentationVersion: string | null;
   templateVersion: string | null;
+  semanticRequestHash: string | null;
+  semanticRequestHashVersion: string | null;
+  semanticRequestHashStatus: string | null;
   contentType: string | null;
   authoritativePayloadHash: string | null;
   voidStatus: string | null;
@@ -170,6 +176,9 @@ export type CentralPmsCashReceiptCommand = {
   nextRetryAt: string | null;
   lastSafeHttpStatus: number | null;
   lastSafeErrorCode: string | null;
+  lastRetryable: boolean | null;
+  lastCentralPmsCorrelationId: string | null;
+  lastUpdatedFromCentralPms: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -220,8 +229,12 @@ export type ReceiptPreviewDocument = {
   templateVersion: string | null;
   contentType: string | null;
   authoritativePayloadHash: string | null;
+  semanticRequestHash: string | null;
+  semanticRequestHashVersion: string | null;
+  semanticRequestHashStatus: string | null;
   retrievedAt: string | null;
   retrievalCorrelationId: string;
+  centralPmsCorrelationId: string | null;
   voided: boolean;
   voidStatus: string | null;
   voidReasonCode: string | null;
@@ -252,6 +265,7 @@ export type CreateDevelopmentSessionPayload = {
 };
 
 export type StartTenderPayload = {
+  localCashTenderId?: string;
   cashCustodySessionId: string;
   parkingSessionId: string;
   tariffSnapshotId: string;

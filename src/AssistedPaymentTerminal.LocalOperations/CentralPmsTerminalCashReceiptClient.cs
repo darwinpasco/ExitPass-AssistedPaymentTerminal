@@ -56,57 +56,115 @@ public sealed class CentralPmsTerminalCashReceiptClient(HttpClient httpClient) :
             var payload = await response.Content.ReadFromJsonAsync<TerminalCashReceiptPresentationResponse>(
                 TerminalCashPaymentPayloadFactory.JsonOptions,
                 cancellationToken).ConfigureAwait(false);
-            return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(payload!, (int)response.StatusCode);
+            return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+                payload!,
+                (int)response.StatusCode,
+                payload!.CorrelationId);
         }
 
-        var safeErrorCode = await ReadSafeErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+        var safeError = await ReadSafeErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        var safeErrorCode = safeError?.ErrorCode;
+        var retryable = safeError?.Retryable ?? IsRetryableTransportStatus(response.StatusCode);
+        var correlationId = safeError?.CorrelationId;
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
+            if (retryable)
+            {
+                return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.NotReady(
+                    (int)response.StatusCode,
+                    safeErrorCode,
+                    retryable,
+                    correlationId);
+            }
+
             return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.NotFound(
                 (int)response.StatusCode,
-                safeErrorCode);
+                safeErrorCode,
+                retryable,
+                correlationId);
         }
 
         if (response.StatusCode == HttpStatusCode.Conflict)
         {
+            if (IsUnsupported(safeErrorCode))
+            {
+                return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Unsupported(
+                    (int)response.StatusCode,
+                    safeErrorCode,
+                    retryable,
+                    correlationId);
+            }
+
+            if (IsMalformed(safeErrorCode))
+            {
+                return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Malformed(
+                    (int)response.StatusCode,
+                    safeErrorCode,
+                    retryable,
+                    correlationId);
+            }
+
             return IsInconsistent(safeErrorCode)
-                ? CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Inconsistent((int)response.StatusCode, safeErrorCode)
-                : CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.NotReady((int)response.StatusCode, safeErrorCode);
+                ? CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Inconsistent(
+                    (int)response.StatusCode,
+                    safeErrorCode,
+                    retryable,
+                    correlationId)
+                : CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.NotReady(
+                    (int)response.StatusCode,
+                    safeErrorCode,
+                    retryable,
+                    correlationId);
         }
 
         if (response.StatusCode == HttpStatusCode.BadRequest)
         {
             return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Rejected(
                 (int)response.StatusCode,
-                safeErrorCode);
+                safeErrorCode,
+                retryable,
+                correlationId);
         }
 
         if ((int)response.StatusCode >= 500)
         {
             return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Unavailable(
                 (int)response.StatusCode,
-                safeErrorCode);
+                safeErrorCode,
+                retryable,
+                correlationId);
         }
 
         return CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Unknown(
             (int)response.StatusCode,
-            safeErrorCode);
+            safeErrorCode,
+            retryable,
+            correlationId);
     }
 
     private static bool IsInconsistent(string? safeErrorCode) =>
         safeErrorCode is "POS_FISCAL_DOCUMENT_PRESENTATION_INCONSISTENT"
-            or "TERMINAL_CASH_RECEIPT_REFERENCE_CONFLICT"
-            or "POS_FISCAL_DOCUMENT_ID_MISSING";
+            or "TERMINAL_CASH_RECEIPT_REFERENCE_CONFLICT";
 
-    private static async Task<string?> ReadSafeErrorCodeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static bool IsUnsupported(string? safeErrorCode) =>
+        safeErrorCode is "POS_SERVER_RECEIPT_PRESENTATION_UNSUPPORTED";
+
+    private static bool IsMalformed(string? safeErrorCode) =>
+        safeErrorCode is "POS_SERVER_RECEIPT_PRESENTATION_MALFORMED";
+
+    private static bool IsRetryableTransportStatus(HttpStatusCode statusCode) =>
+        statusCode == HttpStatusCode.ServiceUnavailable || (int)statusCode >= 500;
+
+    private static async Task<CentralPmsSafeError?> ReadSafeErrorAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var error = await response.Content.ReadFromJsonAsync<CentralPmsSafeError>(
+            return await response.Content.ReadFromJsonAsync<CentralPmsSafeError>(
                 new JsonSerializerOptions(JsonSerializerDefaults.Web),
                 cancellationToken).ConfigureAwait(false);
-            return error?.ErrorCode;
         }
         catch (JsonException)
         {
@@ -119,29 +177,72 @@ public sealed record CentralPmsTerminalCashReceiptResult<T>(
     TerminalCashReceiptRetrievalAttemptOutcome Outcome,
     T? Payload,
     int? HttpStatus,
-    string? SafeErrorCode)
+    string? SafeErrorCode,
+    bool Retryable,
+    Guid? CorrelationId)
 {
+    public static CentralPmsTerminalCashReceiptResult<T> Available(T payload, int httpStatus, Guid correlationId) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Available, payload, httpStatus, null, false, correlationId);
+
     public static CentralPmsTerminalCashReceiptResult<T> Available(T payload, int httpStatus) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Available, payload, httpStatus, null);
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Available, payload, httpStatus, null, false, null);
 
-    public static CentralPmsTerminalCashReceiptResult<T> NotFound(int httpStatus, string? safeErrorCode) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.NotFound, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> NotFound(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = false,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.NotFound, default, httpStatus, safeErrorCode, retryable, correlationId);
 
-    public static CentralPmsTerminalCashReceiptResult<T> NotReady(int httpStatus, string? safeErrorCode) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.NotReady, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> NotReady(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = true,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.NotReady, default, httpStatus, safeErrorCode, retryable, correlationId);
 
-    public static CentralPmsTerminalCashReceiptResult<T> Rejected(int httpStatus, string? safeErrorCode) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Rejected, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> Rejected(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = false,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Rejected, default, httpStatus, safeErrorCode, retryable, correlationId);
 
-    public static CentralPmsTerminalCashReceiptResult<T> Inconsistent(int httpStatus, string? safeErrorCode) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Inconsistent, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> Inconsistent(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = false,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Inconsistent, default, httpStatus, safeErrorCode, retryable, correlationId);
+
+    public static CentralPmsTerminalCashReceiptResult<T> Unsupported(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = false,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Unsupported, default, httpStatus, safeErrorCode, retryable, correlationId);
+
+    public static CentralPmsTerminalCashReceiptResult<T> Malformed(
+        int httpStatus,
+        string? safeErrorCode,
+        bool retryable = false,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Malformed, default, httpStatus, safeErrorCode, retryable, correlationId);
 
     public static CentralPmsTerminalCashReceiptResult<T> Timeout() =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Timeout, default, null, "TIMEOUT");
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Timeout, default, null, "TIMEOUT", true, null);
 
-    public static CentralPmsTerminalCashReceiptResult<T> Unavailable(int? httpStatus = null, string? safeErrorCode = null) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Unavailable, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> Unavailable(
+        int? httpStatus = null,
+        string? safeErrorCode = null,
+        bool retryable = true,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Unavailable, default, httpStatus, safeErrorCode, retryable, correlationId);
 
-    public static CentralPmsTerminalCashReceiptResult<T> Unknown(int? httpStatus = null, string? safeErrorCode = null) =>
-        new(TerminalCashReceiptRetrievalAttemptOutcome.Unknown, default, httpStatus, safeErrorCode);
+    public static CentralPmsTerminalCashReceiptResult<T> Unknown(
+        int? httpStatus = null,
+        string? safeErrorCode = null,
+        bool retryable = true,
+        Guid? correlationId = null) =>
+        new(TerminalCashReceiptRetrievalAttemptOutcome.Unknown, default, httpStatus, safeErrorCode, retryable, correlationId);
 }

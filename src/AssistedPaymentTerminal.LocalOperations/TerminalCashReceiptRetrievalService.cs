@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace AssistedPaymentTerminal.LocalOperations;
 
@@ -191,6 +192,7 @@ public sealed class TerminalCashReceiptRetrievalService
 
         await using var dbContext = CreateDbContext();
         await dbContext.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureReceiptRetrievalSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
     }
 
     private CashJournalDbContext CreateDbContext()
@@ -247,6 +249,8 @@ public sealed class TerminalCashReceiptRetrievalService
         command.LastAttemptedAt = now;
         command.LastSafeHttpStatus = result.HttpStatus;
         command.LastSafeErrorCode = result.SafeErrorCode;
+        command.LastRetryable = result.Retryable;
+        command.LastCentralPmsCorrelationId = result.CorrelationId?.ToString("D");
         command.UpdatedAt = now;
 
         dbContext.TerminalCashReceiptRetrievalAttempts.Add(new TerminalCashReceiptRetrievalAttempt
@@ -259,6 +263,8 @@ public sealed class TerminalCashReceiptRetrievalService
             OutcomeClassification = result.Outcome,
             HttpStatus = result.HttpStatus,
             SafeErrorCode = result.SafeErrorCode,
+            Retryable = result.Retryable,
+            CentralPmsCorrelationId = result.CorrelationId?.ToString("D"),
             CorrelationId = command.RetrievalCorrelationId
         });
 
@@ -279,19 +285,33 @@ public sealed class TerminalCashReceiptRetrievalService
             case TerminalCashReceiptRetrievalAttemptOutcome.NotReady:
                 command.Status = TerminalCashReceiptRetrievalStatus.NotReady;
                 command.ResultClassification = "NOT_READY";
-                command.NextRetryAt = now.AddMinutes(1);
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
                 break;
             case TerminalCashReceiptRetrievalAttemptOutcome.NotFound:
                 command.Status = TerminalCashReceiptRetrievalStatus.Inconsistent;
                 command.ResultClassification = "NOT_FOUND";
+                command.NextRetryAt = null;
+                command.LastRetryable = false;
                 break;
             case TerminalCashReceiptRetrievalAttemptOutcome.Rejected:
                 command.Status = TerminalCashReceiptRetrievalStatus.Rejected;
                 command.ResultClassification = "REJECTED";
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
                 break;
             case TerminalCashReceiptRetrievalAttemptOutcome.Inconsistent:
                 command.Status = TerminalCashReceiptRetrievalStatus.Inconsistent;
                 command.ResultClassification = "INCONSISTENT";
+                command.NextRetryAt = null;
+                break;
+            case TerminalCashReceiptRetrievalAttemptOutcome.Unsupported:
+                command.Status = TerminalCashReceiptRetrievalStatus.Unsupported;
+                command.ResultClassification = "UNSUPPORTED";
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
+                break;
+            case TerminalCashReceiptRetrievalAttemptOutcome.Malformed:
+                command.Status = TerminalCashReceiptRetrievalStatus.Malformed;
+                command.ResultClassification = "MALFORMED";
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
                 break;
             case TerminalCashReceiptRetrievalAttemptOutcome.Timeout:
                 command.Status = TerminalCashReceiptRetrievalStatus.RetryPending;
@@ -303,12 +323,14 @@ public sealed class TerminalCashReceiptRetrievalService
                     ? TerminalCashReceiptRetrievalStatus.Unavailable
                     : command.Status;
                 command.ResultClassification = "UNAVAILABLE";
-                command.NextRetryAt = now.AddMinutes(1);
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
                 break;
             case TerminalCashReceiptRetrievalAttemptOutcome.Unknown:
-                command.Status = TerminalCashReceiptRetrievalStatus.RetryPending;
+                command.Status = result.Retryable
+                    ? TerminalCashReceiptRetrievalStatus.RetryPending
+                    : TerminalCashReceiptRetrievalStatus.Rejected;
                 command.ResultClassification = "UNKNOWN";
-                command.NextRetryAt = now.AddMinutes(1);
+                command.NextRetryAt = result.Retryable ? now.AddMinutes(1) : null;
                 break;
         }
     }
@@ -326,10 +348,23 @@ public sealed class TerminalCashReceiptRetrievalService
         {
             command.Status = TerminalCashReceiptRetrievalStatus.Inconsistent;
             command.ResultClassification = "REFERENCE_MISMATCH";
+            command.LastRetryable = false;
+            command.NextRetryAt = null;
             return;
         }
 
         var authoritativePayload = TerminalCashReceiptPayloadFactory.Serialize(payload.AuthoritativePresentation);
+        var authoritativePayloadHash = TerminalCashReceiptPayloadFactory.ComputeHash(authoritativePayload);
+        if (!PresentationCanReplaceExisting(command, authoritativePayloadHash, payload.SemanticRequestHash))
+        {
+            command.Status = TerminalCashReceiptRetrievalStatus.Inconsistent;
+            command.ResultClassification = "PRESENTATION_INTEGRITY_MISMATCH";
+            command.LastRetryable = false;
+            command.NextRetryAt = null;
+            return;
+        }
+
+        command.CanonicalPaymentStatus = payload.CanonicalPaymentStatus;
         command.Status = string.Equals(payload.VoidStatus, "voided", StringComparison.OrdinalIgnoreCase)
             ? TerminalCashReceiptRetrievalStatus.Voided
             : TerminalCashReceiptRetrievalStatus.Available;
@@ -339,13 +374,133 @@ public sealed class TerminalCashReceiptRetrievalService
         command.FiscalDocumentStatus = payload.FiscalDocumentStatus;
         command.PresentationVersion = payload.PresentationVersion;
         command.TemplateVersion = payload.TemplateVersion;
+        command.SemanticRequestHash = payload.SemanticRequestHash;
+        command.SemanticRequestHashVersion = payload.SemanticRequestHashVersion;
+        command.SemanticRequestHashStatus = payload.SemanticRequestHashStatus;
         command.ContentType = payload.ContentType;
         command.AuthoritativePresentationJson = authoritativePayload;
-        command.AuthoritativePayloadHash = TerminalCashReceiptPayloadFactory.ComputeHash(authoritativePayload);
+        command.AuthoritativePayloadHash = authoritativePayloadHash;
         command.VoidStatus = payload.VoidStatus;
         command.VoidReasonCode = payload.VoidReasonCode;
         command.VoidedAt = payload.VoidedAt;
         command.RetrievedAt = now;
+        command.LastUpdatedFromCentralPms = payload.UpdatedAt;
         command.NextRetryAt = null;
+    }
+
+    private static bool PresentationCanReplaceExisting(
+        TerminalCashReceiptRetrievalCommand command,
+        string newPayloadHash,
+        string? newSemanticRequestHash)
+    {
+        if (!string.IsNullOrWhiteSpace(command.AuthoritativePayloadHash) &&
+            !string.Equals(command.AuthoritativePayloadHash, newPayloadHash, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(command.SemanticRequestHash)
+            || string.IsNullOrWhiteSpace(newSemanticRequestHash)
+            || string.Equals(command.SemanticRequestHash, newSemanticRequestHash, StringComparison.Ordinal);
+    }
+
+    private static async Task EnsureReceiptRetrievalSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "CanonicalPaymentStatus",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "LastRetryable",
+            "INTEGER NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "LastCentralPmsCorrelationId",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "SemanticRequestHash",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "SemanticRequestHashVersion",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "SemanticRequestHashStatus",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_commands",
+            "LastUpdatedFromCentralPms",
+            "INTEGER NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_attempts",
+            "Retryable",
+            "INTEGER NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_receipt_retrieval_attempts",
+            "CentralPmsCorrelationId",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        CashJournalDbContext dbContext,
+        string tableName,
+        string columnName,
+        string columnDefinition,
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var closeConnection = connection.State != ConnectionState.Open;
+        if (closeConnection)
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var readCommand = connection.CreateCommand();
+            readCommand.CommandText = $"PRAGMA table_info('{tableName}')";
+            await using var reader = await readCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            await using var alterCommand = connection.CreateCommand();
+            alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}";
+            await alterCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (closeConnection)
+            {
+                await connection.CloseAsync().ConfigureAwait(false);
+            }
+        }
     }
 }

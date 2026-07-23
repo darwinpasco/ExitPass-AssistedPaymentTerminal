@@ -20,5 +20,9 @@ public sealed class TerminalCashReceiptRetrievalAttempt
 
     public string? SafeErrorCode { get; set; }
 
+    public bool? Retryable { get; set; }
+
+    public string? CentralPmsCorrelationId { get; set; }
+
     public required string CorrelationId { get; set; }
 }

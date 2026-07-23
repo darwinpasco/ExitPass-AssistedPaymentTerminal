@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateOperatingProfile } from "./profile";
 
 describe("validateOperatingProfile", () => {
-  it("accepts supported Mode 1 profile", () => {
+  it("accepts the cashier-assisted terminal profile", () => {
     expect(validateOperatingProfile("CASHIER_ASSISTED_TERMINAL")).toEqual({
       ok: true,
       profile: "CASHIER_ASSISTED_TERMINAL",

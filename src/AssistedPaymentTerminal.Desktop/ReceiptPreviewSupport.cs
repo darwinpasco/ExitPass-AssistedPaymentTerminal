@@ -210,6 +210,13 @@ public static class ReceiptPreviewBuilder
 
             var sections = sectionsResult.Sections;
             var hasPlaceholders = ContainsPlaceholder(sections);
+            if (hasPlaceholders)
+            {
+                return ReceiptPreviewBuildResult.Fail(
+                    "receipt_preview_incomplete_authoritative_payload",
+                    "Receipt presentation is missing required authoritative display fields. No local placeholders were rendered.");
+            }
+
             if (sections.Count == 0)
             {
                 return ReceiptPreviewBuildResult.Fail(
@@ -229,8 +236,12 @@ public static class ReceiptPreviewBuilder
                 command.TemplateVersion,
                 command.ContentType,
                 command.AuthoritativePayloadHash,
+                command.SemanticRequestHash,
+                command.SemanticRequestHashVersion,
+                command.SemanticRequestHashStatus,
                 command.RetrievedAt,
                 command.RetrievalCorrelationId,
+                command.LastCentralPmsCorrelationId,
                 command.Status == TerminalCashReceiptRetrievalStatus.Voided,
                 command.VoidStatus,
                 command.VoidReasonCode,
@@ -634,8 +645,12 @@ public sealed record ReceiptPreviewDocument(
     string? TemplateVersion,
     string? ContentType,
     string? AuthoritativePayloadHash,
+    string? SemanticRequestHash,
+    string? SemanticRequestHashVersion,
+    string? SemanticRequestHashStatus,
     DateTimeOffset? RetrievedAt,
     string RetrievalCorrelationId,
+    string? CentralPmsCorrelationId,
     bool Voided,
     string? VoidStatus,
     string? VoidReasonCode,

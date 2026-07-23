@@ -215,7 +215,8 @@ public sealed class LocalJournalBridgeHandler
             AmountDue: payload.AmountDue,
             AmountTendered: payload.AmountTendered,
             CorrelationId: request.CorrelationId,
-            LocalIdempotencyIdentity: payload.LocalIdempotencyIdentity), cancellationToken).ConfigureAwait(false);
+            LocalIdempotencyIdentity: payload.LocalIdempotencyIdentity,
+            LocalCashTenderId: payload.LocalCashTenderId), cancellationToken).ConfigureAwait(false);
 
         return BridgeResult(request, result);
     }
@@ -756,6 +757,7 @@ public sealed record CreateDevelopmentSessionPayload(
     decimal OpeningCashAmount);
 
 public sealed record StartTenderPayload(
+    Guid? LocalCashTenderId,
     Guid CashCustodySessionId,
     string ParkingSessionId,
     string TariffSnapshotId,
@@ -932,6 +934,7 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
     Guid RelatedFiscalCommandId,
     Guid CanonicalPaymentAttemptId,
     Guid CanonicalPaymentConfirmationId,
+    string? CanonicalPaymentStatus,
     Guid FiscalIssuanceReferenceId,
     Guid PosFiscalDocumentId,
     TerminalCashReceiptRetrievalStatus Status,
@@ -944,6 +947,9 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
     string? FiscalDocumentStatus,
     string? PresentationVersion,
     string? TemplateVersion,
+    string? SemanticRequestHash,
+    string? SemanticRequestHashVersion,
+    string? SemanticRequestHashStatus,
     string? ContentType,
     string? AuthoritativePayloadHash,
     string? VoidStatus,
@@ -953,6 +959,9 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
     DateTimeOffset? NextRetryAt,
     int? LastSafeHttpStatus,
     string? LastSafeErrorCode,
+    bool? LastRetryable,
+    string? LastCentralPmsCorrelationId,
+    DateTimeOffset? LastUpdatedFromCentralPms,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt)
 {
@@ -964,6 +973,7 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
             command.RelatedFiscalCommandId,
             command.CanonicalPaymentAttemptId,
             command.CanonicalPaymentConfirmationId,
+            command.CanonicalPaymentStatus,
             command.FiscalIssuanceReferenceId,
             command.PosFiscalDocumentId,
             command.Status,
@@ -978,6 +988,8 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
                 TerminalCashReceiptRetrievalStatus.Rejected => "Rejected",
                 TerminalCashReceiptRetrievalStatus.Inconsistent => "Inconsistent",
                 TerminalCashReceiptRetrievalStatus.Unavailable => "Unavailable",
+                TerminalCashReceiptRetrievalStatus.Unsupported => "Unsupported",
+                TerminalCashReceiptRetrievalStatus.Malformed => "Malformed",
                 _ => command.Status.ToString()
             },
             command.AttemptCount,
@@ -988,6 +1000,9 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
             command.FiscalDocumentStatus,
             command.PresentationVersion,
             command.TemplateVersion,
+            command.SemanticRequestHash,
+            command.SemanticRequestHashVersion,
+            command.SemanticRequestHashStatus,
             command.ContentType,
             command.AuthoritativePayloadHash,
             command.VoidStatus,
@@ -997,6 +1012,9 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
             command.NextRetryAt,
             command.LastSafeHttpStatus,
             command.LastSafeErrorCode,
+            command.LastRetryable,
+            command.LastCentralPmsCorrelationId,
+            command.LastUpdatedFromCentralPms,
             command.CreatedAt,
             command.UpdatedAt);
 }

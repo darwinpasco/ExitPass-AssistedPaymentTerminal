@@ -56,6 +56,36 @@ public sealed class LocalJournalBridgeHandlerTests
     }
 
     [Fact]
+    public async Task StartTenderCommandAcceptsOptionalDevelopmentFixtureTenderId()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var handler = database.CreateHandler(enabled: true);
+        var sessionId = await CreateSessionAsync(handler);
+        var fixtureTenderId = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2001");
+
+        var response = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.StartTender,
+            "corr-start-fixture",
+            new
+            {
+                localCashTenderId = fixtureTenderId,
+                cashCustodySessionId = sessionId,
+                parkingSessionId = ParkingSessionStartId,
+                tariffSnapshotId = TariffSnapshotId,
+                currency = "PHP",
+                amountDue = 125m,
+                amountTendered = 150m,
+                localIdempotencyIdentity = $"idem-fixture-{ParkingSessionStartId}"
+            });
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var payload = response.RootElement.GetProperty("payload");
+        Assert.Equal(fixtureTenderId, payload.GetProperty("id").GetGuid());
+        Assert.Equal(nameof(CashTenderState.TenderStarted), payload.GetProperty("currentLocalState").GetString());
+    }
+
+    [Fact]
     public async Task CashReceivedCommandMapsToLocalJournalAndReturnsPersistedState()
     {
         using var database = DesktopTestDatabase.Create();

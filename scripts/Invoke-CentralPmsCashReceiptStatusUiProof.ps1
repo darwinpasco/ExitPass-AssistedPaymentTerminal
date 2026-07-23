@@ -1,6 +1,6 @@
 param(
   [switch]$Interactive,
-  [ValidateSet("Available", "NotReady", "RetryPending", "Inconsistent", "Rejected", "Voided", "UnavailableThenAvailable")]
+  [ValidateSet("Available", "NotReady", "RetryPending", "Inconsistent", "Rejected", "Voided", "UnavailableThenAvailable", "Unsupported", "Malformed", "IncompleteConfiguration", "VisualMatrix")]
   [string]$Scenario = "Available",
   [int]$Port = 0
 )
