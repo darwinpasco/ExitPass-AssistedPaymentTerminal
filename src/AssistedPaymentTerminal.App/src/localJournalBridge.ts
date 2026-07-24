@@ -253,6 +253,75 @@ export type CentralPmsCashReceiptPreview = {
   paperWidthWarning: string | null;
 };
 
+export type ReceiptPrintDocument = {
+  terminalCashTenderId: string;
+  fiscalDocumentId: string;
+  fiscalDocumentNumber: string;
+  authoritativePayloadHash: string;
+  semanticRequestHash: string | null;
+  classification: "Original" | "Reprint";
+  copySequence: number;
+  reprintedAt: string | null;
+  reprintMarker: string | null;
+  paperProfile: ReceiptPreviewPaperProfile;
+  lines: string[];
+};
+
+export type CentralPmsCashReceiptPrintJob = {
+  printJobId: string;
+  terminalCashTenderId: string;
+  localReceiptRetrievalId: string;
+  fiscalIssuanceReferenceId: string;
+  posFiscalDocumentId: string;
+  fiscalDocumentNumber: string;
+  presentationVersion: string;
+  templateVersion: string;
+  authoritativePayloadHash: string;
+  semanticRequestHash: string | null;
+  paperWidthMm: 57 | 58 | 80;
+  paperProfileId: string;
+  configuredPrinterName: string;
+  classification: "Original" | "Reprint";
+  classificationLabel: string;
+  copySequence: number;
+  status:
+    | "Requested"
+    | "Preparing"
+    | "PrinterUnavailable"
+    | "PreparationFailed"
+    | "SubmissionPending"
+    | "SubmittedToSpooler"
+    | "SpoolerSubmissionFailed"
+    | "UnknownAfterRestart"
+    | "Completed";
+  statusLabel: string;
+  requestedAt: string;
+  requestedBy: string | null;
+  submissionStartedAt: string | null;
+  submittedToSpoolerAt: string | null;
+  completedAt: string | null;
+  failedAt: string | null;
+  failureClassification: string | null;
+  retryable: boolean;
+  windowsSpoolerJobId: string | null;
+  lastUpdatedAt: string;
+  correlationId: string;
+};
+
+export type CentralPmsCashReceiptPrintStatus = {
+  enabled: boolean;
+  configurationValid: boolean;
+  configurationMessage: string;
+  command: CentralPmsCashReceiptCommand | null;
+  jobs: CentralPmsCashReceiptPrintJob[];
+};
+
+export type CentralPmsCashReceiptPrintSubmit = {
+  job: CentralPmsCashReceiptPrintJob;
+  printDocument: ReceiptPrintDocument;
+  safeMessage: string;
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -322,6 +391,14 @@ export interface LocalJournalBridge {
     correlationId: string,
     localCashTenderId: string,
   ): Promise<BridgeResult<CentralPmsCashReceiptPreview>>;
+  getCentralPmsCashReceiptPrintStatus(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashReceiptPrintStatus>>;
+  submitCentralPmsCashReceiptPrint(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>>;
 }
 
 declare global {
@@ -359,6 +436,10 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashReceipt.retrieveOrCheck", correlationId, { localCashTenderId }),
     getCentralPmsCashReceiptPreview: (correlationId, localCashTenderId) =>
       send("centralPmsCashReceipt.getPreview", correlationId, { localCashTenderId }),
+    getCentralPmsCashReceiptPrintStatus: (correlationId, localCashTenderId) =>
+      send("centralPmsCashReceiptPrint.getStatus", correlationId, { localCashTenderId }),
+    submitCentralPmsCashReceiptPrint: (correlationId, localCashTenderId) =>
+      send("centralPmsCashReceiptPrint.submit", correlationId, { localCashTenderId }),
   };
 }
 

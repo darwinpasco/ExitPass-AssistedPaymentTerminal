@@ -25,6 +25,8 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<TerminalCashReceiptRetrievalAttempt> TerminalCashReceiptRetrievalAttempts => Set<TerminalCashReceiptRetrievalAttempt>();
 
+    public DbSet<TerminalCashReceiptPrintJob> TerminalCashReceiptPrintJobs => Set<TerminalCashReceiptPrintJob>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
@@ -247,6 +249,38 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
                 .HasForeignKey(attempt => attempt.LocalReceiptRetrievalId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(attempt => new { attempt.LocalReceiptRetrievalId, attempt.AttemptSequence }).IsUnique();
+        });
+
+        modelBuilder.Entity<TerminalCashReceiptPrintJob>(entity =>
+        {
+            entity.ToTable("terminal_cash_receipt_print_jobs");
+            entity.HasKey(job => job.Id);
+            entity.Property(job => job.TerminalCashTenderId).IsRequired();
+            entity.Property(job => job.FiscalDocumentNumber).HasMaxLength(128).IsRequired();
+            entity.Property(job => job.PresentationVersion).HasMaxLength(128).IsRequired();
+            entity.Property(job => job.TemplateVersion).HasMaxLength(128).IsRequired();
+            entity.Property(job => job.AuthoritativePayloadHash).HasMaxLength(128).IsRequired();
+            entity.Property(job => job.SemanticRequestHash).HasMaxLength(160);
+            entity.Property(job => job.PaperProfileId).HasMaxLength(64).IsRequired();
+            entity.Property(job => job.ConfiguredPrinterName).HasMaxLength(256).IsRequired();
+            entity.Property(job => job.Classification).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(job => job.Status).HasConversion<string>().HasMaxLength(48).IsRequired();
+            entity.Property(job => job.FailureClassification).HasMaxLength(128);
+            entity.Property(job => job.WindowsSpoolerJobId).HasMaxLength(128);
+            entity.Property(job => job.RequestedBy).HasMaxLength(128);
+            entity.Property(job => job.CorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(job => job.RequestedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(job => job.SubmissionStartedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(job => job.SubmittedToSpoolerAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(job => job.CompletedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(job => job.FailedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(job => job.LastUpdatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(job => job.LocalReceiptRetrieval)
+                .WithMany()
+                .HasForeignKey(job => job.LocalReceiptRetrievalId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(job => new { job.PosFiscalDocumentId, job.AuthoritativePayloadHash, job.CopySequence }).IsUnique();
+            entity.HasIndex(job => new { job.TerminalCashTenderId, job.Status });
         });
     }
 }

@@ -9,6 +9,8 @@ import {
   type CashCustodySessionSnapshot,
   type CashTenderSnapshot,
   type CentralPmsCashFiscalStatus,
+  type CentralPmsCashReceiptPrintStatus,
+  type CentralPmsCashReceiptPrintSubmit,
   type CentralPmsCashReceiptPreview,
   type CentralPmsCashReceiptStatus,
   type CentralPmsCashSubmissionStatus,
@@ -52,6 +54,13 @@ type ReceiptPreviewStatus =
   | { kind: "ready"; preview: CentralPmsCashReceiptPreview; correlationId: string }
   | { kind: "blocked"; message: string; correlationId: string; code: string; detail?: BridgeError["detail"] };
 
+type ReceiptPrintStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "unavailable"; message: string }
+  | { kind: "ready"; status: CentralPmsCashReceiptPrintStatus; correlationId: string; lastSubmit?: CentralPmsCashReceiptPrintSubmit }
+  | { kind: "error"; message: string; correlationId: string };
+
 const defaultBridge = createWebViewLocalJournalBridge();
 const denominations = [
   { code: "PHP-1000", value: 1000 },
@@ -88,6 +97,7 @@ export function CashCapturePanel({
   const [fiscalStatus, setFiscalStatus] = useState<FiscalPanelStatus>({ kind: "idle" });
   const [receiptStatus, setReceiptStatus] = useState<ReceiptPanelStatus>({ kind: "idle" });
   const [receiptPreviewStatus, setReceiptPreviewStatus] = useState<ReceiptPreviewStatus>({ kind: "idle" });
+  const [receiptPrintStatus, setReceiptPrintStatus] = useState<ReceiptPrintStatus>({ kind: "idle" });
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -100,6 +110,7 @@ export function CashCapturePanel({
     setFiscalStatus({ kind: "idle" });
     setReceiptStatus({ kind: "idle" });
     setReceiptPreviewStatus({ kind: "idle" });
+    setReceiptPrintStatus({ kind: "idle" });
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -166,6 +177,7 @@ export function CashCapturePanel({
   const fiscalRecorded = fiscalCommand?.status === "Recorded";
   const receiptCommand = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
   const receiptPreviewEligible = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided";
+  const receiptPrintEligible = receiptPreviewEligible && config.receiptPrintingEnabled;
 
   useEffect(() => {
     if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
@@ -291,6 +303,39 @@ export function CashCapturePanel({
     receiptConfig.message,
     receiptConfig.valid,
   ]);
+
+  useEffect(() => {
+    if (!existingTender || !receiptPrintEligible) {
+      setReceiptPrintStatus({ kind: "idle" });
+      return;
+    }
+
+    if (!config.receiptPrintingEnabled) {
+      setReceiptPrintStatus({ kind: "idle" });
+      return;
+    }
+
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+    setReceiptPrintStatus({ kind: "loading", message: "Checking printer status..." });
+
+    async function loadStatus() {
+      const result = await bridge.getCentralPmsCashReceiptPrintStatus(correlationId, existingTender!.id);
+      if (cancelled) return;
+
+      if (result.ok) {
+        setReceiptPrintStatus({ kind: "ready", status: result.payload, correlationId });
+      } else {
+        setReceiptPrintStatus({ kind: "error", message: result.error.message, correlationId });
+      }
+    }
+
+    void loadStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, config.receiptPrintingEnabled, existingTender?.id, receiptPrintEligible]);
 
   const denominationPayload = useMemo(
     () =>
@@ -488,6 +533,40 @@ export function CashCapturePanel({
     }
   }
 
+  async function printReceipt() {
+    if (!existingTender) {
+      setReceiptPrintStatus({ kind: "error", message: "Local CASH_RECEIVED tender is not available.", correlationId: "unavailable" });
+      return;
+    }
+
+    if (!receiptPrintEligible) {
+      setReceiptPrintStatus({ kind: "error", message: "Sales Invoice printing requires an available authoritative receipt.", correlationId: "unavailable" });
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    setReceiptPrintStatus({ kind: "loading", message: "Preparing Sales Invoice for printer..." });
+    const result = await bridge.submitCentralPmsCashReceiptPrint(correlationId, existingTender.id);
+
+    if (result.ok) {
+      const statusResult = await bridge.getCentralPmsCashReceiptPrintStatus(createCorrelationId(), existingTender.id);
+      const refreshedStatus = statusResult.ok
+        ? statusResult.payload
+        : { enabled: true, configurationValid: true, configurationMessage: result.payload.safeMessage, command: receiptCommand, jobs: [] };
+      const refreshedJobs = refreshedStatus.jobs.some((job) => job.printJobId === result.payload.job.printJobId)
+        ? refreshedStatus.jobs
+        : [...refreshedStatus.jobs, result.payload.job];
+      setReceiptPrintStatus({
+        kind: "ready",
+        status: { ...refreshedStatus, jobs: refreshedJobs },
+        correlationId,
+        lastSubmit: result.payload,
+      });
+    } else {
+      setReceiptPrintStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
   async function reloadLocalTender() {
     const readback = await bridge.readTenderByParkingSession(createCorrelationId(), session.parkingSessionId);
     if (!readback.ok) {
@@ -672,6 +751,15 @@ export function CashCapturePanel({
         configuredPaperWidthMm={config.receiptPaperWidthMm}
         paperWidthWarning={config.receiptPaperWidthWarning}
         onClose={() => setReceiptPreviewStatus({ kind: "idle" })}
+      />
+
+      <ReceiptPrintPanel
+        enabled={config.receiptPrintingEnabled}
+        configuredPrinterName={config.receiptPrinterName}
+        configuredPaperWidthMm={config.receiptPaperWidthMm}
+        receiptAvailable={receiptPreviewEligible}
+        status={receiptPrintStatus}
+        onPrint={() => void printReceipt()}
       />
 
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
@@ -1234,6 +1322,123 @@ function CentralPmsReceiptAvailabilityPanel({
           Retrieve / Check Receipt
         </button>
       )}
+    </section>
+  );
+}
+
+function ReceiptPrintPanel({
+  enabled,
+  configuredPrinterName,
+  configuredPaperWidthMm,
+  receiptAvailable,
+  status,
+  onPrint,
+}: {
+  enabled: boolean;
+  configuredPrinterName: string | null;
+  configuredPaperWidthMm: 57 | 58 | 80;
+  receiptAvailable: boolean;
+  status: ReceiptPrintStatus;
+  onPrint: () => void;
+}) {
+  if (!enabled && !receiptAvailable) {
+    return null;
+  }
+
+  if (!enabled) {
+    return (
+      <section className="central-pms-panel receipt-print unavailable" aria-label="Sales Invoice printing">
+        <h3>Sales Invoice printing</h3>
+        <p>Thermal printing is disabled.</p>
+        <p>Preview remains read-only. No print job was created.</p>
+      </section>
+    );
+  }
+
+  if (!receiptAvailable) {
+    return (
+      <section className="central-pms-panel receipt-print unavailable" aria-label="Sales Invoice printing">
+        <h3>Sales Invoice printing</h3>
+        <p>Ready only after the authoritative Sales Invoice presentation is available.</p>
+        <p>No fallback receipt will be printed.</p>
+      </section>
+    );
+  }
+
+  const jobs = status.kind === "ready" ? status.status.jobs : [];
+  const latestJob = jobs.at(-1);
+  const originalAccepted = jobs.some((job) => job.status === "SubmittedToSpooler" || job.status === "Completed" || job.status === "UnknownAfterRestart");
+  const pending = latestJob?.status === "Requested" || latestJob?.status === "Preparing" || latestJob?.status === "SubmissionPending";
+  const retryable = latestJob?.retryable === true;
+  const buttonText = originalAccepted ? "Reprint Sales Invoice" : "Print Sales Invoice";
+  const canPrint =
+    status.kind !== "loading"
+    && !pending
+    && status.kind !== "error"
+    && Boolean(configuredPrinterName)
+    && (latestJob?.status !== "UnknownAfterRestart" || false);
+
+  return (
+    <section
+      className={`central-pms-panel receipt-print ${latestJob?.status === "SubmittedToSpooler" ? "confirmed" : latestJob?.status?.includes("Failed") || latestJob?.status === "PrinterUnavailable" ? "blocked" : ""}`}
+      aria-label="Sales Invoice printing"
+      role={latestJob?.status?.includes("Failed") || latestJob?.status === "PrinterUnavailable" ? "alert" : "status"}
+    >
+      <div className="central-pms-status-row">
+        <h3>Sales Invoice printing</h3>
+        <strong>{latestJob?.statusLabel ?? (status.kind === "loading" ? status.message : "Ready to print")}</strong>
+      </div>
+
+      <dl className="central-pms-details">
+        <div>
+          <dt>Configured printer</dt>
+          <dd>{configuredPrinterName ?? "Not configured"}</dd>
+        </div>
+        <div>
+          <dt>Paper width</dt>
+          <dd>{configuredPaperWidthMm} mm</dd>
+        </div>
+        <div>
+          <dt>Last print attempt</dt>
+          <dd>{latestJob?.requestedAt ? formatDateTime(latestJob.requestedAt) : "None"}</dd>
+        </div>
+        <div>
+          <dt>Print classification</dt>
+          <dd>{latestJob?.classificationLabel ?? (originalAccepted ? "Reprint" : "Original")}</dd>
+        </div>
+        <div>
+          <dt>Copy sequence</dt>
+          <dd>{latestJob?.copySequence ? String(latestJob.copySequence) : "Not printed"}</dd>
+        </div>
+        <div>
+          <dt>Support reference</dt>
+          <dd>{latestJob?.correlationId ?? "Unavailable"}</dd>
+        </div>
+      </dl>
+
+      {status.kind === "error" && <p className="cash-error">{status.message}</p>}
+      {latestJob?.failureClassification && (
+        <p>Safe printer failure classification: {latestJob.failureClassification}</p>
+      )}
+      {latestJob?.status === "UnknownAfterRestart" && (
+        <p>Print result requires confirmation. The terminal will not silently resubmit this job after restart.</p>
+      )}
+      {retryable && <p>Retry is available after confirming the printer is ready.</p>}
+      {status.kind === "ready" && status.lastSubmit && (
+        <p>{status.lastSubmit.safeMessage}</p>
+      )}
+      {status.kind === "ready" && status.lastSubmit && (
+        <article className="receipt-print-output" aria-label="Prepared print output">
+          {status.lastSubmit.printDocument.lines.map((line, index) => (
+            <p key={`${line}-${index}`}>{line}</p>
+          ))}
+        </article>
+      )}
+      <p>Printing uses the stored authoritative Sales Invoice presentation. It does not retrieve another receipt or change payment, fiscal, ExitAuthorization, HikCentral, gate, or cash-drawer state.</p>
+
+      <button className="secondary-action" type="button" disabled={!canPrint} onClick={onPrint}>
+        {retryable ? "Retry Sales Invoice Print" : buttonText}
+      </button>
     </section>
   );
 }

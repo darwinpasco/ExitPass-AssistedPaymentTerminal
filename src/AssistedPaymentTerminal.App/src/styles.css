@@ -451,6 +451,28 @@ dl {
   font-weight: 800;
 }
 
+.receipt-print-output {
+  margin: 6px 0;
+  border: 1px solid #c8d3dc;
+  border-radius: 5px;
+  background: #fffdf8;
+  padding: 6px;
+  color: #111;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.receipt-print-output p {
+  margin: 1px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.receipt-print-output p:first-child {
+  font-weight: 900;
+}
+
 .receipt-preview-overlay {
   position: fixed;
   inset: 0;

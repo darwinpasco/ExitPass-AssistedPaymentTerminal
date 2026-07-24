@@ -386,7 +386,12 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
         bool receiptEnabled = true,
         string centralPmsBaseUrl = CentralPmsCashReceiptBridgeHandlerTests.BaseUrl,
         bool receiptPreviewEnabled = false,
-        string? receiptPaperWidthMm = null)
+        string? receiptPaperWidthMm = null,
+        bool receiptPrintingEnabled = false,
+        string? receiptPrinterName = null,
+        IReceiptPrinter? receiptPrinter = null,
+        string? siteTimeZoneId = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         var options = new LocalOperationsDatabaseOptions(
             DatabasePath,
@@ -406,7 +411,12 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
             centralPmsBaseUrl: centralPmsBaseUrl,
             submissionService: new TerminalCashPaymentSubmissionService(new ScriptedCentralPmsClient(), options),
             fiscalService: new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), options),
-            receiptService: new TerminalCashReceiptRetrievalService(receiptClient, options));
+            receiptService: new TerminalCashReceiptRetrievalService(receiptClient, options),
+            receiptPrintingEnabled: receiptPrintingEnabled,
+            receiptPrinterName: receiptPrinterName,
+            receiptPrinter: receiptPrinter,
+            siteTimeZoneId: siteTimeZoneId,
+            utcNow: utcNow);
     }
 
     public async Task<TerminalCashReceiptRetrievalCommand> CreateRecordedFiscalWithReceiptCommandAsync()

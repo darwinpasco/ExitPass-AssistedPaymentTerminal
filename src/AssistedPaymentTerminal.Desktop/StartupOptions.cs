@@ -13,7 +13,11 @@ public sealed record StartupOptions(
     bool EnableCentralPmsFiscalIssuance = false,
     bool EnableCentralPmsReceiptRetrieval = false,
     bool EnableReceiptPreview = false,
+    bool EnableReceiptPrinting = false,
     string? ReceiptPaperWidthMm = null,
+    string? ReceiptPrinterName = null,
+    string? ReceiptPrinterMode = null,
+    string? SiteTimeZoneId = null,
     string? CentralPmsBaseUrl = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
@@ -29,7 +33,11 @@ public sealed record StartupOptions(
         var enableCentralPmsFiscalIssuance = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE"));
         var enableCentralPmsReceiptRetrieval = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL"));
         var enableReceiptPreview = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_RECEIPT_PREVIEW"));
+        var enableReceiptPrinting = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_RECEIPT_PRINTING"));
         var receiptPaperWidthMm = Environment.GetEnvironmentVariable("APT_RECEIPT_PAPER_WIDTH_MM");
+        var receiptPrinterName = Environment.GetEnvironmentVariable("APT_RECEIPT_PRINTER_NAME");
+        var receiptPrinterMode = Environment.GetEnvironmentVariable("APT_RECEIPT_PRINTER_MODE");
+        var siteTimeZoneId = Environment.GetEnvironmentVariable("APT_SITE_TIME_ZONE_ID");
         var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
 
         foreach (var arg in args)
@@ -79,9 +87,25 @@ public sealed record StartupOptions(
             {
                 enableReceiptPreview = true;
             }
+            else if (arg.Equals("--enable-receipt-printing", StringComparison.OrdinalIgnoreCase))
+            {
+                enableReceiptPrinting = true;
+            }
             else if (arg.StartsWith("--receipt-paper-width-mm=", StringComparison.OrdinalIgnoreCase))
             {
                 receiptPaperWidthMm = arg["--receipt-paper-width-mm=".Length..];
+            }
+            else if (arg.StartsWith("--receipt-printer-name=", StringComparison.OrdinalIgnoreCase))
+            {
+                receiptPrinterName = arg["--receipt-printer-name=".Length..];
+            }
+            else if (arg.StartsWith("--receipt-printer-mode=", StringComparison.OrdinalIgnoreCase))
+            {
+                receiptPrinterMode = arg["--receipt-printer-mode=".Length..];
+            }
+            else if (arg.StartsWith("--site-time-zone-id=", StringComparison.OrdinalIgnoreCase))
+            {
+                siteTimeZoneId = arg["--site-time-zone-id=".Length..];
             }
             else if (arg.StartsWith("--central-pms-base-url=", StringComparison.OrdinalIgnoreCase))
             {
@@ -102,7 +126,11 @@ public sealed record StartupOptions(
             enableCentralPmsFiscalIssuance,
             enableCentralPmsReceiptRetrieval,
             enableReceiptPreview,
+            enableReceiptPrinting,
             string.IsNullOrWhiteSpace(receiptPaperWidthMm) ? null : receiptPaperWidthMm,
+            string.IsNullOrWhiteSpace(receiptPrinterName) ? null : receiptPrinterName,
+            string.IsNullOrWhiteSpace(receiptPrinterMode) ? null : receiptPrinterMode,
+            string.IsNullOrWhiteSpace(siteTimeZoneId) ? null : siteTimeZoneId,
             string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl);
     }
 

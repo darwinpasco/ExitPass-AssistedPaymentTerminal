@@ -289,7 +289,7 @@ public static class ReceiptPreviewBuilder
             ValueOrPlaceholder(presentation, ["terminalId", "terminalReference"], "terminalId", "TERMINAL ID", "[TERMINAL ID]")
         ], []));
 
-        sections.Add(new ReceiptPreviewSection("SALES INVOICE DETAILS", [
+        sections.Add(new ReceiptPreviewSection("SALES INVOICE", [
             ValueOrPlaceholder(presentation, ["fiscalDocumentNumber"], "fiscalDocumentNumber", "Sales Invoice No.", "[SALES INVOICE NO.]", command.FiscalDocumentNumber),
             ValueOrPlaceholder(presentation, ["issuedAt", "issuanceTimestamp", "issuedDate"], "issuedDate", "Issued Date", "[ISSUED DATE]")
         ], []));
