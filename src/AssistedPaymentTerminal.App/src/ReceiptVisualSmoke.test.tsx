@@ -82,6 +82,7 @@ describe("ReceiptVisualSmokeShell", () => {
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
     expect(bridge.getCentralPmsCashReceiptPreview).not.toHaveBeenCalled();
+    expect(bridge.submitCentralPmsCashReceiptPrint).not.toHaveBeenCalled();
   });
 });
 
@@ -93,6 +94,8 @@ function enabledConfig(): AptConfig {
     centralPmsFiscalIssuanceEnabled: true,
     centralPmsReceiptRetrievalEnabled: true,
     receiptPreviewEnabled: true,
+    receiptPrintingEnabled: true,
+    receiptPrinterName: "APT Controlled Printer",
     centralPmsBaseUrl: "http://127.0.0.1:5180",
   };
 }
@@ -218,6 +221,78 @@ function createSmokeBridge({ existingTender = false }: { existingTender?: boolea
       },
     })),
     submitOrReadbackCentralPmsCashFiscal: vi.fn(),
+    getCentralPmsCashReceiptPrintStatus: vi.fn(async (correlationId: string) => ({
+      ok: true,
+      command: "centralPmsCashReceiptPrint.getStatus",
+      correlationId,
+      payload: {
+        enabled: true,
+        configurationValid: true,
+        configurationMessage: "Configured",
+        command: unavailableReceiptCommand(tender, now),
+        jobs: [],
+      },
+    })),
+    submitCentralPmsCashReceiptPrint: vi.fn(async (correlationId: string) => ({
+      ok: true,
+      command: "centralPmsCashReceiptPrint.submit",
+      correlationId,
+      payload: {
+        safeMessage: "Submitted to controlled printer.",
+        job: {
+          printJobId: "print-job",
+          terminalCashTenderId: tender.id,
+          localReceiptRetrievalId: "receipt-command",
+          fiscalIssuanceReferenceId: "fiscal-reference",
+          posFiscalDocumentId: "pos-fiscal-document",
+          fiscalDocumentNumber: "SI-000001",
+          presentationVersion: "digital-sales-invoice-presentation-json-v1",
+          templateVersion: "digital-sales-invoice-json-v1",
+          authoritativePayloadHash: "sha256:receipt-payload",
+          semanticRequestHash: "sha256:fiscal-semantic",
+          paperWidthMm: 57,
+          paperProfileId: "receipt-paper-57",
+          configuredPrinterName: "APT Controlled Printer",
+          classification: "Original",
+          classificationLabel: "Original",
+          copySequence: 1,
+          status: "SubmittedToSpooler",
+          statusLabel: "Submitted to printer",
+          requestedAt: now,
+          requestedBy: null,
+          submissionStartedAt: now,
+          submittedToSpoolerAt: now,
+          completedAt: null,
+          failedAt: null,
+          failureClassification: null,
+          retryable: false,
+          windowsSpoolerJobId: "visual-smoke-spooler-1",
+          lastUpdatedAt: now,
+          correlationId: "corr-print",
+        },
+        printDocument: {
+          terminalCashTenderId: tender.id,
+          fiscalDocumentId: "pos-fiscal-document",
+          fiscalDocumentNumber: "SI-000001",
+          authoritativePayloadHash: "sha256:receipt-payload",
+          semanticRequestHash: "sha256:fiscal-semantic",
+          classification: "Original",
+          copySequence: 1,
+          reprintedAt: null,
+          reprintMarker: null,
+          paperProfile: {
+            id: "receipt-paper-57",
+            paperWidthMm: 57,
+            printableWidthMm: 48,
+            innerMarginMm: 4,
+            fontScale: 0.92,
+            monetaryColumnBehavior: "compact-right-aligned",
+            metadataDensity: "compact",
+          },
+          lines: ["SALES INVOICE", "Fiscal doc: SI-000001"],
+        },
+      },
+    })),
     getCentralPmsCashReceiptStatus: vi.fn(async (correlationId: string) => ({
       ok: true,
       command: "centralPmsCashReceipt.getStatus",

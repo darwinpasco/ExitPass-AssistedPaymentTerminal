@@ -28,7 +28,11 @@ $originalEnv = @{
   APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE
   APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL
   APT_ENABLE_RECEIPT_PREVIEW = $env:APT_ENABLE_RECEIPT_PREVIEW
+  APT_ENABLE_RECEIPT_PRINTING = $env:APT_ENABLE_RECEIPT_PRINTING
   APT_RECEIPT_PAPER_WIDTH_MM = $env:APT_RECEIPT_PAPER_WIDTH_MM
+  APT_RECEIPT_PRINTER_NAME = $env:APT_RECEIPT_PRINTER_NAME
+  APT_RECEIPT_PRINTER_MODE = $env:APT_RECEIPT_PRINTER_MODE
+  APT_SITE_TIME_ZONE_ID = $env:APT_SITE_TIME_ZONE_ID
   CENTRAL_PMS_BASE_URL = $env:CENTRAL_PMS_BASE_URL
 }
 
@@ -121,7 +125,11 @@ try {
   $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = "true"
   $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = "true"
   $env:APT_ENABLE_RECEIPT_PREVIEW = "true"
+  $env:APT_ENABLE_RECEIPT_PRINTING = "true"
   $env:APT_RECEIPT_PAPER_WIDTH_MM = "57"
+  $env:APT_RECEIPT_PRINTER_NAME = "APT Controlled Printer"
+  $env:APT_RECEIPT_PRINTER_MODE = "visual-smoke"
+  $env:APT_SITE_TIME_ZONE_ID = "Singapore Standard Time"
   $env:CENTRAL_PMS_BASE_URL = "http://127.0.0.1:$CentralPmsPort"
 
   $visualSmokeUrl = "http://127.0.0.1:$WebUiPort/?receiptVisualSmoke=1"
@@ -137,6 +145,16 @@ try {
   Write-Host "- Terminal failure"
   Write-Host "- Incomplete configuration"
   Write-Host "- Restart-recovery setup"
+  Write-Host ""
+  Write-Host "Controlled print checks:"
+  Write-Host "- Original print available"
+  Write-Host "- Reprint"
+  Write-Host "- Printer unavailable"
+  Write-Host "- Retryable printer failure"
+  Write-Host "- Unknown spooler outcome"
+  Write-Host "- Restart-recovery setup"
+  Write-Host "- Unsupported width or invalid printer configuration"
+  Write-Host "These scenarios use the controlled proof adapter and never target the default Windows printer."
   Write-Host ""
   Write-Host "Restart recovery: close the desktop window, then rerun this same command with:"
   Write-Host "-DatabasePath `"$databasePath`""
@@ -155,9 +173,13 @@ try {
     --enable-central-pms-fiscal-issuance `
     --enable-central-pms-receipt-retrieval `
     --enable-receipt-preview `
+    --enable-receipt-printing `
     --local-db-path=$databasePath `
     --central-pms-base-url=$env:CENTRAL_PMS_BASE_URL `
-    --receipt-paper-width-mm=57
+    --receipt-paper-width-mm=57 `
+    --receipt-printer-name="APT Controlled Printer" `
+    --receipt-printer-mode=visual-smoke `
+    --site-time-zone-id="Singapore Standard Time"
   if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
   }

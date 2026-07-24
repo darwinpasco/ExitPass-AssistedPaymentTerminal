@@ -23,8 +23,10 @@ export type AptConfig = {
   centralPmsFiscalIssuanceEnabled: boolean;
   centralPmsReceiptRetrievalEnabled: boolean;
   receiptPreviewEnabled: boolean;
+  receiptPrintingEnabled: boolean;
   receiptPaperWidthMm: 57 | 58 | 80;
   receiptPaperWidthWarning: string | null;
+  receiptPrinterName: string | null;
 };
 
 export type ConfigLoadResult =
@@ -119,8 +121,10 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       centralPmsFiscalIssuanceEnabled: raw.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE?.trim().toLowerCase() === "true",
       centralPmsReceiptRetrievalEnabled: raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL?.trim().toLowerCase() === "true",
       receiptPreviewEnabled: raw.APT_ENABLE_RECEIPT_PREVIEW?.trim().toLowerCase() === "true",
+      receiptPrintingEnabled: raw.APT_ENABLE_RECEIPT_PRINTING?.trim().toLowerCase() === "true",
       receiptPaperWidthMm: parseReceiptPaperWidth(raw.APT_RECEIPT_PAPER_WIDTH_MM).width,
       receiptPaperWidthWarning: parseReceiptPaperWidth(raw.APT_RECEIPT_PAPER_WIDTH_MM).warning,
+      receiptPrinterName: raw.APT_RECEIPT_PRINTER_NAME?.trim() || null,
     },
   };
 }
@@ -196,8 +200,16 @@ function applyDesktopFlags(raw: RawAptConfig): void {
     raw.APT_ENABLE_RECEIPT_PREVIEW = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_RECEIPT_PREVIEW;
   }
 
+  if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_RECEIPT_PRINTING) {
+    raw.APT_ENABLE_RECEIPT_PRINTING = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_RECEIPT_PRINTING;
+  }
+
   if (window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PAPER_WIDTH_MM !== undefined) {
     raw.APT_RECEIPT_PAPER_WIDTH_MM = window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PAPER_WIDTH_MM;
+  }
+
+  if (window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PRINTER_NAME !== undefined) {
+    raw.APT_RECEIPT_PRINTER_NAME = window.__APT_DESKTOP_FLAGS__.APT_RECEIPT_PRINTER_NAME;
   }
 
   if (window.__APT_DESKTOP_FLAGS__.CENTRAL_PMS_BASE_URL) {

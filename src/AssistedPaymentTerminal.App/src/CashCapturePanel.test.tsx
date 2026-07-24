@@ -9,6 +9,8 @@ import type {
   CashCustodySessionSnapshot,
   CashTenderSnapshot,
   CentralPmsCashFiscalStatus,
+  CentralPmsCashReceiptPrintStatus,
+  CentralPmsCashReceiptPrintSubmit,
   CentralPmsCashReceiptPreview,
   CentralPmsCashReceiptStatus,
   CentralPmsCashSubmissionStatus,
@@ -740,7 +742,7 @@ describe("CashCapturePanel", () => {
     expect(document.body).toHaveTextContent("Paper width: 57 mm");
     expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
     expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
-    expect(screen.getByText("SALES INVOICE")).toBeInTheDocument();
+    expect(screen.getAllByText("SALES INVOICE").length).toBeGreaterThan(0);
     expect(screen.getByText("GOVERNED REGISTERED BUSINESS NAME")).toBeInTheDocument();
     expect(screen.getByText("GOVERNED REGISTERED BUSINESS ADDRESS")).toBeInTheDocument();
     expect(screen.getByText("GOVERNED TIN")).toBeInTheDocument();
@@ -751,7 +753,8 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText("Unit price")).toBeInTheDocument();
     expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
     expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
-    expect(screen.getByText("SALES INVOICE DETAILS")).toBeInTheDocument();
+    expect(screen.queryByText("SALES INVOICE DETAILS")).not.toBeInTheDocument();
+    expect(screen.getAllByText("SALES INVOICE").length).toBeGreaterThan(0);
     expect(screen.getByText("Sales Invoice No.")).toBeInTheDocument();
     expect(screen.queryByText("Fiscal Identity")).not.toBeInTheDocument();
     expect(screen.queryByText("Fiscal document no.")).not.toBeInTheDocument();
@@ -782,6 +785,114 @@ describe("CashCapturePanel", () => {
     expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
     expect(document.body.textContent ?? "").not.toMatch(/merchant Name|site Name|display Amount|total Type|tender Type|change Display|message|VAT REG TIN|Demo Corporation|Sample TIN/i);
     expect(screen.queryByRole("button", { name: /Print|Reprint|Export|PDF|Email|SMS|Share/i })).not.toBeInTheDocument();
+  });
+
+  it("prints only an available authoritative receipt and does not retrieve another presentation", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({
+          id: "tender-001",
+          state: "CashReceived",
+          correlationId: "corr-001",
+        }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptRetrieveStatus: receiptStatus("Available"),
+      receiptPrintStatus: receiptPrintStatus([]),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Print Sales Invoice" }));
+
+    expect(bridge.submitCentralPmsCashReceiptPrint).toHaveBeenCalledTimes(1);
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+    expect(screen.getByText("Submitted to printer.")).toBeInTheDocument();
+    expect(screen.getByText("Submitted to printer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Prepared print output")).toHaveTextContent("SALES INVOICE");
+    expect(screen.getByLabelText("Prepared print output")).not.toHaveTextContent("REPRINTED:");
+    expect(screen.getByLabelText("Prepared print output")).not.toHaveTextContent("SALES INVOICE DETAILS");
+  });
+
+  it("renders durable REPRINTED marker above Sales Invoice for reprint output", async () => {
+    const reprintJob = receiptPrintJob({
+      classification: "Reprint",
+      classificationLabel: "Reprint",
+      copySequence: 2,
+      submittedToSpoolerAt: "2026-07-24T07:42:00Z",
+      windowsSpoolerJobId: "controlled-spooler-2",
+    });
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({
+          id: "tender-001",
+          state: "CashReceived",
+          correlationId: "corr-001",
+        }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPrintStatus: receiptPrintStatus([
+        receiptPrintJob({
+          classification: "Original",
+          classificationLabel: "Original",
+          copySequence: 1,
+          submittedToSpoolerAt: "2026-07-24T07:30:00Z",
+        }),
+      ]),
+      receiptPrintSubmit: receiptPrintSubmit(reprintJob),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reprint Sales Invoice" }));
+
+    const output = screen.getByLabelText("Prepared print output");
+    expect(output).toHaveTextContent("REPRINTED: 2026-07-24 15:42");
+    expect(output).toHaveTextContent("SALES INVOICE");
+    expect(output).not.toHaveTextContent("SALES INVOICE DETAILS");
+    expect((output.textContent ?? "").indexOf("REPRINTED: 2026-07-24 15:42")).toBeLessThan(
+      (output.textContent ?? "").indexOf("SALES INVOICE"),
+    );
+    expect(output).toHaveTextContent("Fiscal doc: SI-000001");
+  });
+
+  it("opening receipt preview does not create a print job", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview({ complete: true }),
+      receiptPrintStatus: receiptPrintStatus([]),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(screen.getByLabelText("Read-only receipt body")).toBeInTheDocument();
+    expect(bridge.submitCentralPmsCashReceiptPrint).not.toHaveBeenCalled();
   });
 
   it("uses authoritative values instead of corresponding placeholders when supplied", async () => {
@@ -1155,6 +1266,8 @@ class FakeBridge implements LocalJournalBridge {
   private readonly receiptStatus: CentralPmsCashReceiptStatus;
   private readonly receiptRetrieveStatus: CentralPmsCashReceiptStatus;
   private readonly receiptPreview: CentralPmsCashReceiptPreview;
+  private readonly receiptPrintStatus: CentralPmsCashReceiptPrintStatus;
+  private readonly receiptPrintSubmit: CentralPmsCashReceiptPrintSubmit;
   private readonly receiptPreviewFailure?: { code: string; message: string };
   private readonly initialReadback: LocalTenderReadback;
 
@@ -1300,6 +1413,20 @@ class FakeBridge implements LocalJournalBridge {
     };
   });
 
+  public getCentralPmsCashReceiptPrintStatus = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptPrintStatus>> => ({
+    ok: true,
+    command: "centralPmsCashReceiptPrint.getStatus",
+    correlationId,
+    payload: this.receiptPrintStatus,
+  }));
+
+  public submitCentralPmsCashReceiptPrint = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>> => ({
+    ok: true,
+    command: "centralPmsCashReceiptPrint.submit",
+    correlationId,
+    payload: this.receiptPrintSubmit,
+  }));
+
   public constructor(options: {
     duplicateOnStart?: boolean;
     centralStatus?: CentralPmsCashSubmissionStatus;
@@ -1309,6 +1436,8 @@ class FakeBridge implements LocalJournalBridge {
     receiptStatus?: CentralPmsCashReceiptStatus;
     receiptRetrieveStatus?: CentralPmsCashReceiptStatus;
     receiptPreview?: CentralPmsCashReceiptPreview;
+    receiptPrintStatus?: CentralPmsCashReceiptPrintStatus;
+    receiptPrintSubmit?: CentralPmsCashReceiptPrintSubmit;
     receiptPreviewFailure?: { code: string; message: string };
     initialReadback?: LocalTenderReadback;
   } = {}) {
@@ -1320,6 +1449,8 @@ class FakeBridge implements LocalJournalBridge {
     this.receiptStatus = options.receiptStatus ?? receiptStatus("Pending");
     this.receiptRetrieveStatus = options.receiptRetrieveStatus ?? this.receiptStatus;
     this.receiptPreview = options.receiptPreview ?? receiptPreview();
+    this.receiptPrintStatus = options.receiptPrintStatus ?? receiptPrintStatus();
+    this.receiptPrintSubmit = options.receiptPrintSubmit ?? receiptPrintSubmit();
     this.receiptPreviewFailure = options.receiptPreviewFailure;
     this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
@@ -1511,6 +1642,83 @@ function receiptStatus(
   };
 }
 
+function receiptPrintStatus(
+  jobs: CentralPmsCashReceiptPrintStatus["jobs"] = [],
+  overrides: Partial<CentralPmsCashReceiptPrintStatus> = {},
+): CentralPmsCashReceiptPrintStatus {
+  return {
+    enabled: true,
+    configurationValid: true,
+    configurationMessage: "Sales Invoice printing is configured.",
+    command: receiptStatus("Available").command,
+    jobs,
+    ...overrides,
+  };
+}
+
+function receiptPrintSubmit(
+  job: CentralPmsCashReceiptPrintStatus["jobs"][number] = receiptPrintJob(),
+): CentralPmsCashReceiptPrintSubmit {
+  const reprintMarker = job.classification === "Reprint" ? "REPRINTED: 2026-07-24 15:42" : null;
+  return {
+    job,
+    safeMessage: "Submitted to printer.",
+    printDocument: {
+      terminalCashTenderId: job.terminalCashTenderId,
+      fiscalDocumentId: job.posFiscalDocumentId,
+      fiscalDocumentNumber: job.fiscalDocumentNumber,
+      authoritativePayloadHash: job.authoritativePayloadHash,
+      semanticRequestHash: job.semanticRequestHash,
+      classification: job.classification,
+      copySequence: job.copySequence,
+      reprintedAt: job.classification === "Reprint" ? job.submittedToSpoolerAt : null,
+      reprintMarker,
+      paperProfile: receiptPreview({ complete: true }).paperProfile,
+      lines: reprintMarker
+        ? [reprintMarker, "SALES INVOICE", "Fiscal doc: SI-000001"]
+        : ["SALES INVOICE", "Fiscal doc: SI-000001"],
+    },
+  };
+}
+
+function receiptPrintJob(
+  overrides: Partial<CentralPmsCashReceiptPrintStatus["jobs"][number]> = {},
+): CentralPmsCashReceiptPrintStatus["jobs"][number] {
+  const now = new Date().toISOString();
+  return {
+    printJobId: "print-job-001",
+    terminalCashTenderId: "tender-001",
+    localReceiptRetrievalId: "receipt-command-001",
+    fiscalIssuanceReferenceId: "fiscal-reference-001",
+    posFiscalDocumentId: "pos-fiscal-document-001",
+    fiscalDocumentNumber: "SI-000001",
+    presentationVersion: "digital-sales-invoice-presentation-json-v1",
+    templateVersion: "digital-sales-invoice-json-v1",
+    authoritativePayloadHash: "sha256:receipt-payload",
+    semanticRequestHash: "sha256:fiscal-semantic",
+    paperWidthMm: 57,
+    paperProfileId: "receipt-paper-57",
+    configuredPrinterName: "APT Controlled Printer",
+    classification: "Original",
+    classificationLabel: "Original",
+    copySequence: 1,
+    status: "SubmittedToSpooler",
+    statusLabel: "Submitted to printer",
+    requestedAt: now,
+    requestedBy: null,
+    submissionStartedAt: now,
+    submittedToSpoolerAt: now,
+    completedAt: null,
+    failedAt: null,
+    failureClassification: null,
+    retryable: false,
+    windowsSpoolerJobId: "controlled-spooler-1",
+    lastUpdatedAt: now,
+    correlationId: "corr-print",
+    ...overrides,
+  };
+}
+
 function receiptPreview({
   voided = false,
   paperWidthMm = 57,
@@ -1595,7 +1803,7 @@ function receiptPreview({
           rows: [],
         },
         {
-          title: "SALES INVOICE DETAILS",
+          title: "SALES INVOICE",
           fields: [
             field("Sales Invoice No.", "SI-000001"),
             complete ? field("Issued Date", "GOVERNED ISSUED DATE", false, "issuedDate") : field("Issued Date", "[ISSUED DATE]", true, "issuedDate"),

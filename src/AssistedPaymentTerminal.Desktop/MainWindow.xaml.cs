@@ -24,6 +24,12 @@ public partial class MainWindow : Window
             EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance,
             EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
         var journal = new AssistedPaymentTerminal.LocalOperations.CashJournalService(localOptions);
+        IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
+        {
+            "controlled" => new ControlledReceiptPrinter(),
+            "visual-smoke" => new VisualSmokeReceiptPrinter(),
+            _ => new WindowsReceiptPrinter()
+        };
         _localJournalBridge = new LocalJournalBridgeHandler(
             journal,
             options.EnableNonLiveCashCapture,
@@ -41,7 +47,11 @@ public partial class MainWindow : Window
                 localOptions),
             new AssistedPaymentTerminal.LocalOperations.TerminalCashReceiptRetrievalService(
                 new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashReceiptClient(new HttpClient()),
-                localOptions));
+                localOptions),
+            receiptPrintingEnabled: options.EnableReceiptPrinting,
+            receiptPrinterName: options.ReceiptPrinterName,
+            receiptPrinter: receiptPrinter,
+            siteTimeZoneId: options.SiteTimeZoneId);
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -225,7 +235,9 @@ public partial class MainWindow : Window
                 APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE: "__APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE__",
                 APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL: "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
                 APT_ENABLE_RECEIPT_PREVIEW: "__APT_ENABLE_RECEIPT_PREVIEW__",
+                APT_ENABLE_RECEIPT_PRINTING: "__APT_ENABLE_RECEIPT_PRINTING__",
                 APT_RECEIPT_PAPER_WIDTH_MM: "__APT_RECEIPT_PAPER_WIDTH_MM__",
+                APT_RECEIPT_PRINTER_NAME: "__APT_RECEIPT_PRINTER_NAME__",
                 CENTRAL_PMS_BASE_URL: "__CENTRAL_PMS_BASE_URL__"
               };
               const originalError = console.error.bind(console);
@@ -259,8 +271,14 @@ public partial class MainWindow : Window
                 "__APT_ENABLE_RECEIPT_PREVIEW__",
                 _options.EnableReceiptPreview ? "true" : "false")
             .Replace(
+                "__APT_ENABLE_RECEIPT_PRINTING__",
+                _options.EnableReceiptPrinting ? "true" : "false")
+            .Replace(
                 "__APT_RECEIPT_PAPER_WIDTH_MM__",
                 JavaScriptStringEncode(_options.ReceiptPaperWidthMm ?? ""))
+            .Replace(
+                "__APT_RECEIPT_PRINTER_NAME__",
+                JavaScriptStringEncode(_options.ReceiptPrinterName ?? ""))
             .Replace(
                 "__CENTRAL_PMS_BASE_URL__",
                 JavaScriptStringEncode(_options.CentralPmsBaseUrl ?? "")));

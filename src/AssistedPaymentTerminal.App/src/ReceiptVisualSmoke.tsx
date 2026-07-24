@@ -10,7 +10,13 @@ export type ReceiptVisualSmokeScenarioId =
   | "available"
   | "terminal-failure"
   | "restart-recovery"
-  | "incomplete-configuration";
+  | "incomplete-configuration"
+  | "original-print"
+  | "reprint"
+  | "printer-unavailable"
+  | "retryable-printer-failure"
+  | "unknown-spooler-outcome"
+  | "unsupported-width";
 
 export type ReceiptVisualSmokeScenario = {
   id: ReceiptVisualSmokeScenarioId;
@@ -62,6 +68,54 @@ export const receiptVisualSmokeScenarios: ReceiptVisualSmokeScenario[] = [
     parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2005",
     expectedReceiptPosture: "Preview blocked safely; no placeholder invoice.",
   },
+  {
+    id: "original-print",
+    label: "Original print available",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3001",
+    ticketReference: "VISUAL-PRINT-ORIGINAL",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3001",
+    expectedReceiptPosture: "Authoritative receipt available; first accepted print is ORIGINAL.",
+  },
+  {
+    id: "reprint",
+    label: "Reprint",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3002",
+    ticketReference: "VISUAL-PRINT-REPRINT",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3002",
+    expectedReceiptPosture: "After an original accepted print, later cashier prints show REPRINTED with the accepted reprint timestamp above SALES INVOICE.",
+  },
+  {
+    id: "printer-unavailable",
+    label: "Printer unavailable",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3003",
+    ticketReference: "VISUAL-PRINT-UNAVAILABLE",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3003",
+    expectedReceiptPosture: "Safe printer-unavailable failure; receipt and fiscal state are unchanged.",
+  },
+  {
+    id: "retryable-printer-failure",
+    label: "Retryable printer failure",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3004",
+    ticketReference: "VISUAL-PRINT-RETRYABLE",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3004",
+    expectedReceiptPosture: "Retryable spooler failure creates a linked attempt without duplicate simultaneous jobs.",
+  },
+  {
+    id: "unknown-spooler-outcome",
+    label: "Unknown spooler outcome",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3005",
+    ticketReference: "VISUAL-PRINT-UNKNOWN",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3005",
+    expectedReceiptPosture: "Unknown printer result survives restart and is not silently resubmitted.",
+  },
+  {
+    id: "unsupported-width",
+    label: "Unsupported width",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3006",
+    ticketReference: "VISUAL-PRINT-WIDTH",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3006",
+    expectedReceiptPosture: "Unsupported width falls back safely to 57 mm with a configuration warning.",
+  },
 ];
 
 export function shouldUseReceiptVisualSmoke(
@@ -82,12 +136,24 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
       centralPmsFiscalIssuanceEnabled: true,
       centralPmsReceiptRetrievalEnabled: true,
       receiptPreviewEnabled: true,
+      receiptPrintingEnabled: true,
+      receiptPrinterName: "APT Controlled Printer",
       centralPmsConnectionMode: "mock",
     }),
     [config],
   );
-  const context = useMemo(() => buildTerminalContext(smokeConfig), [smokeConfig]);
-  const session = useMemo(() => buildScenarioSession(smokeConfig, scenario), [smokeConfig, scenario]);
+  const scenarioConfig = useMemo<AptConfig>(
+    () => scenario.id === "unsupported-width"
+      ? {
+          ...smokeConfig,
+          receiptPaperWidthMm: 57,
+          receiptPaperWidthWarning: "Unsupported APT_RECEIPT_PAPER_WIDTH_MM value '99'. Falling back to 57 mm.",
+        }
+      : smokeConfig,
+    [scenario.id, smokeConfig],
+  );
+  const context = useMemo(() => buildTerminalContext(scenarioConfig), [scenarioConfig]);
+  const session = useMemo(() => buildScenarioSession(scenarioConfig, scenario), [scenarioConfig, scenario]);
 
   return (
     <main
@@ -149,7 +215,7 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
           </dl>
         </section>
         <CashCapturePanel
-          config={smokeConfig}
+          config={scenarioConfig}
           context={context}
           session={session}
           tariffExpired={false}
