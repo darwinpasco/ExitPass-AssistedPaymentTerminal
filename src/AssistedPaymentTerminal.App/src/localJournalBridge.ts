@@ -322,6 +322,41 @@ export type CentralPmsCashReceiptPrintSubmit = {
   safeMessage: string;
 };
 
+export type SalesInvoicePrintHistoryIndicator = {
+  code: string;
+  label: string;
+  severity: "info" | "attention" | string;
+  message: string;
+};
+
+export type SalesInvoicePrintHistorySummary = {
+  hasHistory: boolean;
+  originalStatus: string;
+  reprintCount: number;
+  latestCopySequence: number | null;
+  latestStatus: string;
+  latestPrinterName: string | null;
+  latestPaperWidthMm: 57 | 58 | 80 | number | null;
+  latestAttemptAt: string | null;
+  requiresConfirmation: boolean;
+  attentionRequired: boolean;
+};
+
+export type SalesInvoicePrintHistory = {
+  scope: "terminalCashTenderId" | "fiscalDocumentId" | "recent" | string;
+  summary: SalesInvoicePrintHistorySummary;
+  jobs: CentralPmsCashReceiptPrintJob[];
+  indicators: SalesInvoicePrintHistoryIndicator[];
+};
+
+export type SalesInvoicePrintHistoryDetail = {
+  job: CentralPmsCashReceiptPrintJob;
+  statusExplanation: string;
+  shortAuthoritativePayloadHash: string | null;
+  shortSemanticRequestHash: string | null;
+  indicators: SalesInvoicePrintHistoryIndicator[];
+};
+
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -399,6 +434,22 @@ export interface LocalJournalBridge {
     correlationId: string,
     localCashTenderId: string,
   ): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>>;
+  getSalesInvoicePrintHistoryForTender(
+    correlationId: string,
+    localCashTenderId: string,
+  ): Promise<BridgeResult<SalesInvoicePrintHistory>>;
+  getSalesInvoicePrintHistoryForFiscalDocument(
+    correlationId: string,
+    fiscalDocumentId: string,
+  ): Promise<BridgeResult<SalesInvoicePrintHistory>>;
+  getRecentSalesInvoicePrintHistory(
+    correlationId: string,
+    maxResults?: number,
+  ): Promise<BridgeResult<SalesInvoicePrintHistory>>;
+  getSalesInvoicePrintHistoryDetail(
+    correlationId: string,
+    printJobId: string,
+  ): Promise<BridgeResult<SalesInvoicePrintHistoryDetail>>;
 }
 
 declare global {
@@ -440,6 +491,14 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashReceiptPrint.getStatus", correlationId, { localCashTenderId }),
     submitCentralPmsCashReceiptPrint: (correlationId, localCashTenderId) =>
       send("centralPmsCashReceiptPrint.submit", correlationId, { localCashTenderId }),
+    getSalesInvoicePrintHistoryForTender: (correlationId, localCashTenderId) =>
+      send("salesInvoicePrintHistory.getForTender", correlationId, { localCashTenderId }),
+    getSalesInvoicePrintHistoryForFiscalDocument: (correlationId, fiscalDocumentId) =>
+      send("salesInvoicePrintHistory.getForFiscalDocument", correlationId, { fiscalDocumentId }),
+    getRecentSalesInvoicePrintHistory: (correlationId, maxResults) =>
+      send("salesInvoicePrintHistory.getRecent", correlationId, { maxResults }),
+    getSalesInvoicePrintHistoryDetail: (correlationId, printJobId) =>
+      send("salesInvoicePrintHistory.getDetail", correlationId, { printJobId }),
   };
 }
 

@@ -50,6 +50,7 @@ public sealed class TerminalCashReceiptPrintJobService
 
     public async Task<IReadOnlyList<TerminalCashReceiptPrintJob>> GetJobsForTenderAsync(
         Guid terminalCashTenderId,
+        int maxResults = 100,
         CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -59,7 +60,52 @@ public sealed class TerminalCashReceiptPrintJobService
             .Where(job => job.TerminalCashTenderId == terminalCashTenderId)
             .OrderBy(job => job.CopySequence)
             .ThenBy(job => job.RequestedAt)
+            .Take(Math.Clamp(maxResults, 1, 250))
             .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<TerminalCashReceiptPrintJob>> GetJobsForFiscalDocumentAsync(
+        Guid fiscalDocumentId,
+        int maxResults = 100,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var dbContext = CreateDbContext();
+        return await dbContext.TerminalCashReceiptPrintJobs
+            .AsNoTracking()
+            .Where(job => job.PosFiscalDocumentId == fiscalDocumentId)
+            .OrderBy(job => job.CopySequence)
+            .ThenBy(job => job.RequestedAt)
+            .Take(Math.Clamp(maxResults, 1, 250))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<TerminalCashReceiptPrintJob>> GetRecentJobsAsync(
+        int maxResults = 50,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var dbContext = CreateDbContext();
+        return await dbContext.TerminalCashReceiptPrintJobs
+            .AsNoTracking()
+            .OrderByDescending(job => job.RequestedAt)
+            .ThenByDescending(job => job.LastUpdatedAt)
+            .Take(Math.Clamp(maxResults, 1, 250))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<TerminalCashReceiptPrintJob?> GetJobAsync(
+        Guid printJobId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var dbContext = CreateDbContext();
+        return await dbContext.TerminalCashReceiptPrintJobs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(job => job.Id == printJobId, cancellationToken)
             .ConfigureAwait(false);
     }
 

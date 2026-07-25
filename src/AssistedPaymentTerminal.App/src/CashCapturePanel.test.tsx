@@ -18,6 +18,8 @@ import type {
   LocalJournalHealth,
   LocalTenderReadback,
   RecordCashReceivedPayload,
+  SalesInvoicePrintHistory,
+  SalesInvoicePrintHistoryDetail,
   StartTenderPayload,
 } from "./localJournalBridge";
 import { mode1Config } from "./test/testConfig";
@@ -784,7 +786,7 @@ describe("CashCapturePanel", () => {
     expect(document.body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
     expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
     expect(document.body.textContent ?? "").not.toMatch(/merchant Name|site Name|display Amount|total Type|tender Type|change Display|message|VAT REG TIN|Demo Corporation|Sample TIN/i);
-    expect(screen.queryByRole("button", { name: /Print|Reprint|Export|PDF|Email|SMS|Share/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Print Sales Invoice|Reprint Sales Invoice|Export|PDF|Email|SMS|Share)$/i })).not.toBeInTheDocument();
   });
 
   it("prints only an available authoritative receipt and does not retrieve another presentation", async () => {
@@ -870,6 +872,102 @@ describe("CashCapturePanel", () => {
       (output.textContent ?? "").indexOf("SALES INVOICE"),
     );
     expect(output).toHaveTextContent("Fiscal doc: SI-000001");
+  });
+
+  it("shows read-only Sales Invoice print history summary, filters, and detail", async () => {
+    const original = receiptPrintJob({
+      printJobId: "print-job-original",
+      classification: "Original",
+      classificationLabel: "Original",
+      copySequence: 1,
+      requestedAt: "2026-07-24T07:30:00Z",
+      submittedToSpoolerAt: "2026-07-24T07:30:02Z",
+    });
+    const reprint = receiptPrintJob({
+      printJobId: "print-job-reprint",
+      classification: "Reprint",
+      classificationLabel: "Reprint",
+      copySequence: 2,
+      requestedAt: "2026-07-24T07:42:00Z",
+      submittedToSpoolerAt: "2026-07-24T07:42:03Z",
+      windowsSpoolerJobId: "controlled-spooler-2",
+    });
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-001" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPrintStatus: receiptPrintStatus([original, reprint]),
+      receiptPrintHistory: printHistory([original, reprint]),
+      receiptPrintHistoryDetail: printHistoryDetail(reprint),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
+
+    const historyPanel = await screen.findByLabelText("Sales Invoice Print History");
+    await waitFor(() => expect(within(historyPanel).getByText("Reprint count")).toBeInTheDocument());
+    await waitFor(() => expect(within(historyPanel).getByText("1")).toBeInTheDocument());
+    expect(within(historyPanel).getByText("Latest copy sequence")).toBeInTheDocument();
+    expect(within(historyPanel).getByText("2")).toBeInTheDocument();
+    expect(within(historyPanel).getByText("APT Controlled Printer")).toBeInTheDocument();
+    expect(within(historyPanel).getAllByText("Submitted to printer").length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Open Print History" }));
+    expect(screen.getByLabelText("Print history filters")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Original.*Copy sequence 1.*Submitted to printer/s })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Reprint.*Copy sequence 2.*Submitted to printer/s })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reprint" }));
+    expect(screen.queryByRole("button", { name: /Original.*Copy sequence 1/s })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Reprint.*Copy sequence 2/s }));
+
+    expect(await screen.findByLabelText("Print attempt detail")).toHaveTextContent("Physical paper output is not separately confirmed");
+    expect(screen.getByText("Payload hash evidence")).toBeInTheDocument();
+    expect(screen.queryByText(/\{\"presentation\"/)).not.toBeInTheDocument();
+    expect(bridge.getSalesInvoicePrintHistoryForTender).toHaveBeenCalled();
+    expect(bridge.getSalesInvoicePrintHistoryDetail).toHaveBeenCalledWith(expect.any(String), "print-job-reprint");
+  });
+
+  it("opening and filtering print history is read-only and creates no print or authority side effects", async () => {
+    const job = receiptPrintJob({ status: "UnknownAfterRestart", statusLabel: "Print result requires confirmation", failureClassification: "SPOOLER_OUTCOME_UNKNOWN_AFTER_RESTART" });
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-001" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPrintStatus: receiptPrintStatus([job]),
+      receiptPrintHistory: printHistory([job]),
+      receiptPrintHistoryDetail: printHistoryDetail(job),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open Print History" }));
+    await userEvent.click(screen.getByRole("button", { name: "Requires confirmation" }));
+    await userEvent.click(screen.getByRole("button", { name: /Original.*Print result requires confirmation/s }));
+
+    expect(screen.getByText(/will not resolve or resubmit/)).toBeInTheDocument();
+    expect(bridge.submitCentralPmsCashReceiptPrint).not.toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+    expect(bridge.getCentralPmsCashReceiptPreview).not.toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
   });
 
   it("opening receipt preview does not create a print job", async () => {
@@ -1268,6 +1366,8 @@ class FakeBridge implements LocalJournalBridge {
   private readonly receiptPreview: CentralPmsCashReceiptPreview;
   private readonly receiptPrintStatus: CentralPmsCashReceiptPrintStatus;
   private readonly receiptPrintSubmit: CentralPmsCashReceiptPrintSubmit;
+  private readonly receiptPrintHistory: SalesInvoicePrintHistory;
+  private readonly receiptPrintHistoryDetail: SalesInvoicePrintHistoryDetail;
   private readonly receiptPreviewFailure?: { code: string; message: string };
   private readonly initialReadback: LocalTenderReadback;
 
@@ -1427,6 +1527,34 @@ class FakeBridge implements LocalJournalBridge {
     payload: this.receiptPrintSubmit,
   }));
 
+  public getSalesInvoicePrintHistoryForTender = vi.fn(async (correlationId: string): Promise<BridgeResult<SalesInvoicePrintHistory>> => ({
+    ok: true,
+    command: "salesInvoicePrintHistory.getForTender",
+    correlationId,
+    payload: this.receiptPrintHistory,
+  }));
+
+  public getSalesInvoicePrintHistoryForFiscalDocument = vi.fn(async (correlationId: string): Promise<BridgeResult<SalesInvoicePrintHistory>> => ({
+    ok: true,
+    command: "salesInvoicePrintHistory.getForFiscalDocument",
+    correlationId,
+    payload: this.receiptPrintHistory,
+  }));
+
+  public getRecentSalesInvoicePrintHistory = vi.fn(async (correlationId: string): Promise<BridgeResult<SalesInvoicePrintHistory>> => ({
+    ok: true,
+    command: "salesInvoicePrintHistory.getRecent",
+    correlationId,
+    payload: this.receiptPrintHistory,
+  }));
+
+  public getSalesInvoicePrintHistoryDetail = vi.fn(async (correlationId: string): Promise<BridgeResult<SalesInvoicePrintHistoryDetail>> => ({
+    ok: true,
+    command: "salesInvoicePrintHistory.getDetail",
+    correlationId,
+    payload: this.receiptPrintHistoryDetail,
+  }));
+
   public constructor(options: {
     duplicateOnStart?: boolean;
     centralStatus?: CentralPmsCashSubmissionStatus;
@@ -1438,6 +1566,8 @@ class FakeBridge implements LocalJournalBridge {
     receiptPreview?: CentralPmsCashReceiptPreview;
     receiptPrintStatus?: CentralPmsCashReceiptPrintStatus;
     receiptPrintSubmit?: CentralPmsCashReceiptPrintSubmit;
+    receiptPrintHistory?: SalesInvoicePrintHistory;
+    receiptPrintHistoryDetail?: SalesInvoicePrintHistoryDetail;
     receiptPreviewFailure?: { code: string; message: string };
     initialReadback?: LocalTenderReadback;
   } = {}) {
@@ -1451,6 +1581,8 @@ class FakeBridge implements LocalJournalBridge {
     this.receiptPreview = options.receiptPreview ?? receiptPreview();
     this.receiptPrintStatus = options.receiptPrintStatus ?? receiptPrintStatus();
     this.receiptPrintSubmit = options.receiptPrintSubmit ?? receiptPrintSubmit();
+    this.receiptPrintHistory = options.receiptPrintHistory ?? printHistory(this.receiptPrintStatus.jobs);
+    this.receiptPrintHistoryDetail = options.receiptPrintHistoryDetail ?? printHistoryDetail(this.receiptPrintHistory.jobs[0] ?? receiptPrintJob());
     this.receiptPreviewFailure = options.receiptPreviewFailure;
     this.initialReadback = options.initialReadback ?? { tender: null, events: [] };
   }
@@ -1653,6 +1785,48 @@ function receiptPrintStatus(
     command: receiptStatus("Available").command,
     jobs,
     ...overrides,
+  };
+}
+
+function printHistory(jobs: CentralPmsCashReceiptPrintStatus["jobs"] = []): SalesInvoicePrintHistory {
+  const latest = jobs.at(-1) ?? null;
+  const original = jobs.find((job) => job.classification === "Original") ?? null;
+  const hasAttention = jobs.some((job) => job.status === "UnknownAfterRestart" || job.retryable);
+  return {
+    scope: "terminalCashTenderId",
+    summary: {
+      hasHistory: jobs.length > 0,
+      originalStatus: original?.statusLabel ?? "No print attempts recorded",
+      reprintCount: jobs.filter((job) => job.classification === "Reprint").length,
+      latestCopySequence: latest?.copySequence ?? null,
+      latestStatus: latest?.statusLabel ?? "No print attempts recorded",
+      latestPrinterName: latest?.configuredPrinterName ?? null,
+      latestPaperWidthMm: latest?.paperWidthMm ?? null,
+      latestAttemptAt: latest?.requestedAt ?? null,
+      requiresConfirmation: jobs.some((job) => job.status === "UnknownAfterRestart"),
+      attentionRequired: hasAttention,
+    },
+    jobs,
+    indicators: jobs.length === 0
+      ? [{ code: "NO_PRINT_HISTORY", label: "No print attempts recorded", severity: "info", message: "No local Sales Invoice print attempt is recorded for this scope." }]
+      : [
+          { code: "ORIGINAL_SUBMITTED", label: "Original submitted", severity: "info", message: "At least one original print attempt has local spooler evidence." },
+          ...(jobs.some((job) => job.status === "UnknownAfterRestart")
+            ? [{ code: "PRINT_RESULT_REQUIRES_CONFIRMATION", label: "Print result requires confirmation", severity: "attention", message: "A print submission was interrupted and the terminal will not silently resubmit it." }]
+            : []),
+        ],
+  };
+}
+
+function printHistoryDetail(job: CentralPmsCashReceiptPrintStatus["jobs"][number]): SalesInvoicePrintHistoryDetail {
+  return {
+    job,
+    statusExplanation: job.status === "SubmittedToSpooler"
+      ? "The Sales Invoice print attempt was accepted by the Windows printer queue. Physical paper output is not separately confirmed by this local evidence."
+      : "Submission had started before restart and the final printer result requires confirmation. This view will not resubmit the job.",
+    shortAuthoritativePayloadHash: "sha256:receipt-payload",
+    shortSemanticRequestHash: "sha256:fiscal-semantic",
+    indicators: printHistory([job]).indicators,
   };
 }
 

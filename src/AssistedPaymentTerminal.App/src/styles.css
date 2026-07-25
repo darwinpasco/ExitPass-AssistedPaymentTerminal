@@ -473,6 +473,65 @@ dl {
   font-weight: 900;
 }
 
+.print-history-expanded {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.receipt-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.receipt-history-toolbar .secondary-action.selected {
+  background: #0f6b55;
+}
+
+.receipt-history-list {
+  display: grid;
+  gap: 4px;
+}
+
+.receipt-history-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.7fr) minmax(96px, 0.9fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(52px, 0.5fr) minmax(130px, 1fr) minmax(110px, 1fr);
+  gap: 5px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px;
+  border: 1px solid #c8dce6;
+  border-radius: 5px;
+  background: #fff;
+  color: #102334;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.receipt-history-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.receipt-history-row:focus-visible {
+  outline: 3px solid #f0b429;
+  outline-offset: 2px;
+}
+
+.receipt-history-detail {
+  border: 1px solid #b9c8d4;
+  border-radius: 5px;
+  background: #fff;
+  padding: 6px;
+}
+
+.receipt-history-detail h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
 .receipt-preview-overlay {
   position: fixed;
   inset: 0;

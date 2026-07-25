@@ -391,6 +391,15 @@ internal static class ReceiptVisualSmokeParkingSessions
     public static readonly Guid TerminalFailure = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2003");
     public static readonly Guid RestartRecovery = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2004");
     public static readonly Guid IncompleteConfiguration = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2005");
+    public static readonly Guid HistoryEmpty = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4001");
+    public static readonly Guid HistoryOriginalSubmitted = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4002");
+    public static readonly Guid HistoryOriginalPlusReprints = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4003");
+    public static readonly Guid HistoryLatestFailed = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4004");
+    public static readonly Guid HistoryUnknownOutcome = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4005");
+    public static readonly Guid HistoryPrinterChanged = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4006");
+    public static readonly Guid HistoryWidthChanged = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4007");
+    public static readonly Guid HistoryInconsistentCopySequence = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4008");
+    public static readonly Guid HistoryRestartRecovery = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4009");
 
     public static Guid For(ReceiptStatusUiProofScenario scenario) =>
         scenario switch
@@ -410,6 +419,15 @@ internal static class ReceiptVisualSmokeTenders
     public static readonly Guid TerminalFailure = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2003");
     public static readonly Guid RestartRecovery = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2004");
     public static readonly Guid IncompleteConfiguration = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2005");
+    public static readonly Guid HistoryEmpty = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4001");
+    public static readonly Guid HistoryOriginalSubmitted = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4002");
+    public static readonly Guid HistoryOriginalPlusReprints = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4003");
+    public static readonly Guid HistoryLatestFailed = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4004");
+    public static readonly Guid HistoryUnknownOutcome = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4005");
+    public static readonly Guid HistoryPrinterChanged = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4006");
+    public static readonly Guid HistoryWidthChanged = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4007");
+    public static readonly Guid HistoryInconsistentCopySequence = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4008");
+    public static readonly Guid HistoryRestartRecovery = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee4009");
 
     public static ReceiptStatusUiProofScenario? ScenarioFor(Guid terminalCashTenderId) =>
         terminalCashTenderId switch
@@ -419,6 +437,15 @@ internal static class ReceiptVisualSmokeTenders
             var id when id == TerminalFailure => ReceiptStatusUiProofScenario.Unsupported,
             var id when id == RestartRecovery => ReceiptStatusUiProofScenario.Available,
             var id when id == IncompleteConfiguration => ReceiptStatusUiProofScenario.IncompleteConfiguration,
+            var id when id == HistoryEmpty => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryOriginalSubmitted => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryOriginalPlusReprints => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryLatestFailed => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryUnknownOutcome => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryPrinterChanged => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryWidthChanged => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryInconsistentCopySequence => ReceiptStatusUiProofScenario.Available,
+            var id when id == HistoryRestartRecovery => ReceiptStatusUiProofScenario.Available,
             _ => null
         };
 }

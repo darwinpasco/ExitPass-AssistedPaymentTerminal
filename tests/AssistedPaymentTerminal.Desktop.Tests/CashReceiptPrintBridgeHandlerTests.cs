@@ -79,6 +79,72 @@ public sealed class CashReceiptPrintBridgeHandlerTests
     }
 
     [Fact]
+    public async Task PrintHistoryForTenderIsReadOnlyAndShowsOriginalReprintEvidence()
+    {
+        using var database = ReceiptBridgeTestDatabase.Create();
+        var receipt = await StoreAvailableReceiptAsync(database);
+        var printClient = new ScriptedCentralPmsReceiptClient();
+        var printer = new ControlledReceiptPrinter();
+        var handler = database.CreateHandler(
+            printClient,
+            receiptPreviewEnabled: true,
+            receiptPrintingEnabled: true,
+            receiptPrinterName: "APT Controlled Printer",
+            receiptPrinter: printer);
+
+        using var first = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit, "corr-print-1", new { localCashTenderId = receipt.TerminalCashTenderId });
+        using var second = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit, "corr-print-2", new { localCashTenderId = receipt.TerminalCashTenderId });
+        Assert.True(first.RootElement.GetProperty("ok").GetBoolean());
+        Assert.True(second.RootElement.GetProperty("ok").GetBoolean());
+
+        using var history = await SendAsync(handler, LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForTender, "corr-history", new { localCashTenderId = receipt.TerminalCashTenderId });
+
+        Assert.True(history.RootElement.GetProperty("ok").GetBoolean());
+        var payload = history.RootElement.GetProperty("payload");
+        Assert.Equal("terminalCashTenderId", payload.GetProperty("scope").GetString());
+        Assert.Equal(1, payload.GetProperty("summary").GetProperty("reprintCount").GetInt32());
+        Assert.Equal("Submitted to printer", payload.GetProperty("summary").GetProperty("latestStatus").GetString());
+        Assert.Contains("Original submitted", payload.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal("Original", payload.GetProperty("jobs")[0].GetProperty("classification").GetString());
+        Assert.Equal("Reprint", payload.GetProperty("jobs")[1].GetProperty("classification").GetString());
+        Assert.Equal("controlled-spooler-1", payload.GetProperty("jobs")[0].GetProperty("windowsSpoolerJobId").GetString());
+        Assert.Empty(printClient.Operations);
+        Assert.Equal(2, printer.SubmittedDocuments.Count);
+    }
+
+    [Fact]
+    public async Task PrintHistoryDetailAndUnknownOutcomeExposeSafeReconciliationWithoutMutation()
+    {
+        using var database = ReceiptBridgeTestDatabase.Create();
+        var receipt = await StoreAvailableReceiptAsync(database);
+        var printClient = new ScriptedCentralPmsReceiptClient();
+        var printer = new ControlledReceiptPrinter(ControlledReceiptPrinterMode.UnknownOutcome);
+        var handler = database.CreateHandler(
+            printClient,
+            receiptPreviewEnabled: true,
+            receiptPrintingEnabled: true,
+            receiptPrinterName: "APT Controlled Printer",
+            receiptPrinter: printer);
+
+        using var submit = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit, "corr-unknown", new { localCashTenderId = receipt.TerminalCashTenderId });
+        var printJobId = submit.RootElement.GetProperty("payload").GetProperty("job").GetProperty("printJobId").GetGuid();
+        var before = await CountPrintJobsAsync(database.OptionsForPreviewTests, receipt.TerminalCashTenderId);
+
+        using var history = await SendAsync(handler, LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForTender, "corr-history", new { localCashTenderId = receipt.TerminalCashTenderId });
+        using var detail = await SendAsync(handler, LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetDetail, "corr-detail", new { printJobId });
+        var after = await CountPrintJobsAsync(database.OptionsForPreviewTests, receipt.TerminalCashTenderId);
+
+        Assert.True(history.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Contains("PRINT_RESULT_REQUIRES_CONFIRMATION", history.RootElement.GetRawText(), StringComparison.Ordinal);
+        Assert.True(detail.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Contains("will not resubmit", detail.RootElement.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("authoritativePresentationJson", detail.RootElement.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal(before, after);
+        Assert.Empty(printClient.Operations);
+        Assert.Single(printer.SubmittedDocuments);
+    }
+
+    [Fact]
     public async Task PendingReceiptCannotPrintAndDoesNotCreatePrintJob()
     {
         using var database = ReceiptBridgeTestDatabase.Create();

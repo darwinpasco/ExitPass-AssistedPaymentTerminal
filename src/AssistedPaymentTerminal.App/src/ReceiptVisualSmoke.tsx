@@ -16,7 +16,16 @@ export type ReceiptVisualSmokeScenarioId =
   | "printer-unavailable"
   | "retryable-printer-failure"
   | "unknown-spooler-outcome"
-  | "unsupported-width";
+  | "unsupported-width"
+  | "history-empty"
+  | "history-original-submitted"
+  | "history-original-plus-reprints"
+  | "history-latest-failed"
+  | "history-unknown-outcome"
+  | "history-printer-changed"
+  | "history-width-changed"
+  | "history-inconsistent-copy-sequence"
+  | "history-restart-recovery";
 
 export type ReceiptVisualSmokeScenario = {
   id: ReceiptVisualSmokeScenarioId;
@@ -115,6 +124,78 @@ export const receiptVisualSmokeScenarios: ReceiptVisualSmokeScenario[] = [
     ticketReference: "VISUAL-PRINT-WIDTH",
     parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3006",
     expectedReceiptPosture: "Unsupported width falls back safely to 57 mm with a configuration warning.",
+  },
+  {
+    id: "history-empty",
+    label: "No print history",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4001",
+    ticketReference: "VISUAL-HISTORY-EMPTY",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4001",
+    expectedReceiptPosture: "Sales Invoice is available; local print history shows an empty state.",
+  },
+  {
+    id: "history-original-submitted",
+    label: "Original submitted",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4002",
+    ticketReference: "VISUAL-HISTORY-ORIGINAL",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4002",
+    expectedReceiptPosture: "Print history shows Original, copy sequence 1, and submitted-to-printer wording without physical-output overclaim.",
+  },
+  {
+    id: "history-original-plus-reprints",
+    label: "Original plus reprints",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4003",
+    ticketReference: "VISUAL-HISTORY-REPRINTS",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4003",
+    expectedReceiptPosture: "Print history shows Original and Reprint rows with unchanged fiscal document identity.",
+  },
+  {
+    id: "history-latest-failed",
+    label: "Latest attempt failed",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4004",
+    ticketReference: "VISUAL-HISTORY-FAILED",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4004",
+    expectedReceiptPosture: "Print history keeps previous submitted evidence visible while the latest failure is safely labeled.",
+  },
+  {
+    id: "history-unknown-outcome",
+    label: "Unknown outcome",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4005",
+    ticketReference: "VISUAL-HISTORY-UNKNOWN",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4005",
+    expectedReceiptPosture: "Print result requires confirmation; no resolve, retry, or reprint action is introduced by history.",
+  },
+  {
+    id: "history-printer-changed",
+    label: "Printer changed",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4006",
+    ticketReference: "VISUAL-HISTORY-PRINTER-CHANGED",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4006",
+    expectedReceiptPosture: "Local reconciliation attention flags printer changes across copies.",
+  },
+  {
+    id: "history-width-changed",
+    label: "Paper width changed",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4007",
+    ticketReference: "VISUAL-HISTORY-WIDTH-CHANGED",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4007",
+    expectedReceiptPosture: "Local reconciliation attention flags paper-width changes across copies.",
+  },
+  {
+    id: "history-inconsistent-copy-sequence",
+    label: "Inconsistent copy sequence",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4008",
+    ticketReference: "VISUAL-HISTORY-COPY-SEQUENCE",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4008",
+    expectedReceiptPosture: "Local reconciliation attention flags duplicate copy sequence without repairing records.",
+  },
+  {
+    id: "history-restart-recovery",
+    label: "Print history restart recovery",
+    terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee4009",
+    ticketReference: "VISUAL-HISTORY-RESTART",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa4009",
+    expectedReceiptPosture: "Restart with the same SQLite journal preserves print history and creates no new print attempt.",
   },
 ];
 
