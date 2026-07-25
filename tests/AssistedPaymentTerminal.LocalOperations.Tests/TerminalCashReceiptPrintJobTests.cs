@@ -97,6 +97,37 @@ public sealed class TerminalCashReceiptPrintJobTests
         Assert.NotEqual(firstReprint.SubmittedToSpoolerAt, secondReprint.SubmittedToSpoolerAt);
     }
 
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task ReadOnlyHistoryQueriesAreBoundedAndDeterministicallyOrdered()
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await SeedAvailableReceiptAsync(database);
+        var service = new TerminalCashReceiptPrintJobService(database.Options);
+
+        var original = await service.RequestPrintJobAsync(receipt, "APT Controlled Printer", 57, "receipt-paper-57", "corr-original");
+        original = await service.MarkSubmittedToSpoolerAsync(original.Id, "spooler-1", DateTimeOffset.Parse("2026-07-24T07:30:00Z"));
+        var reprint = await service.RequestPrintJobAsync(receipt, "APT Controlled Printer", 80, "receipt-paper-80", "corr-reprint");
+        reprint = await service.MarkSubmittedToSpoolerAsync(reprint.Id, "spooler-2", DateTimeOffset.Parse("2026-07-24T07:42:00Z"));
+
+        var byFiscalDocument = await service.GetJobsForFiscalDocumentAsync(receipt.PosFiscalDocumentId);
+        var detail = await service.GetJobAsync(reprint.Id);
+        var recent = await service.GetRecentJobsAsync(maxResults: 1);
+        var byTender = await service.GetJobsForTenderAsync(receipt.TerminalCashTenderId);
+
+        Assert.Collection(
+            byFiscalDocument,
+            job => Assert.Equal(1, job.CopySequence),
+            job => Assert.Equal(2, job.CopySequence));
+        Assert.Equal(reprint.Id, detail?.Id);
+        var recentJob = Assert.Single(recent);
+        Assert.Equal(reprint.Id, recentJob.Id);
+        Assert.Collection(
+            byTender,
+            job => Assert.Equal(original.Id, job.Id),
+            job => Assert.Equal(reprint.Id, job.Id));
+    }
+
     private static async Task<TerminalCashReceiptRetrievalCommand> SeedAvailableReceiptAsync(TestDatabase database)
     {
         await using var dbContext = database.CreateService().CreateDbContext();

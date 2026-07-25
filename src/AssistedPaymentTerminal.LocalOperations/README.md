@@ -26,6 +26,14 @@ Supported governed paper widths are 57 mm, 58 mm, and 80 mm. Width changes may a
 
 Spooler acceptance is local device evidence, not proof of physical paper output. Unknown outcomes after restart are preserved and are not silently resubmitted. Retry is allowed only for retryable printer failures and creates a separate linked attempt.
 
+## Sales Invoice Print History
+
+Print history is read-only visibility over durable `terminal_cash_receipt_print_jobs` records. It exposes local evidence for cashier and supervisor review, including Original/Reprint classification, copy sequence, configured printer, paper width, spooler job ID when available, safe failure classification, retryability, timestamps, support reference, presentation/template versions, and shortened hash evidence.
+
+History and reconciliation indicators are local operational evidence only. They may flag no original spooler evidence, unknown outcomes, latest retryable failure, printer or paper-width changes, duplicate copy sequence, missing evidence, or inconsistent fiscal/presentation identity. They do not derive legal or fiscal conclusions and do not claim physical paper output unless the printer subsystem provides that evidence.
+
+Opening, filtering, or viewing print-history detail must not create a print job, submit to a printer, retrieve a receipt, submit payment, request fiscal issuance, issue or mutate ExitAuthorization, call HikCentral, command a gate, or trigger a cash drawer. Unknown outcomes remain visible as requiring confirmation; this history slice does not resolve, retry, cancel, delete, or repair historical records.
+
 Runtime proof:
 
 ```powershell

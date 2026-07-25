@@ -17,6 +17,8 @@ import {
   type LocalJournalBridge,
   type LocalJournalHealth,
   type LocalTenderReadback,
+  type SalesInvoicePrintHistory,
+  type SalesInvoicePrintHistoryDetail,
 } from "./localJournalBridge";
 
 type PanelStatus =
@@ -61,6 +63,12 @@ type ReceiptPrintStatus =
   | { kind: "ready"; status: CentralPmsCashReceiptPrintStatus; correlationId: string; lastSubmit?: CentralPmsCashReceiptPrintSubmit }
   | { kind: "error"; message: string; correlationId: string };
 
+type ReceiptPrintHistoryStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "ready"; history: SalesInvoicePrintHistory; correlationId: string; detail?: SalesInvoicePrintHistoryDetail }
+  | { kind: "error"; message: string; correlationId: string };
+
 const defaultBridge = createWebViewLocalJournalBridge();
 const denominations = [
   { code: "PHP-1000", value: 1000 },
@@ -98,6 +106,9 @@ export function CashCapturePanel({
   const [receiptStatus, setReceiptStatus] = useState<ReceiptPanelStatus>({ kind: "idle" });
   const [receiptPreviewStatus, setReceiptPreviewStatus] = useState<ReceiptPreviewStatus>({ kind: "idle" });
   const [receiptPrintStatus, setReceiptPrintStatus] = useState<ReceiptPrintStatus>({ kind: "idle" });
+  const [receiptPrintHistoryStatus, setReceiptPrintHistoryStatus] = useState<ReceiptPrintHistoryStatus>({ kind: "idle" });
+  const [receiptPrintHistoryOpen, setReceiptPrintHistoryOpen] = useState(false);
+  const [receiptPrintHistoryFilter, setReceiptPrintHistoryFilter] = useState<"All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation">("All");
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -111,6 +122,9 @@ export function CashCapturePanel({
     setReceiptStatus({ kind: "idle" });
     setReceiptPreviewStatus({ kind: "idle" });
     setReceiptPrintStatus({ kind: "idle" });
+    setReceiptPrintHistoryStatus({ kind: "idle" });
+    setReceiptPrintHistoryOpen(false);
+    setReceiptPrintHistoryFilter("All");
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
@@ -337,6 +351,35 @@ export function CashCapturePanel({
     };
   }, [bridge, config.receiptPrintingEnabled, existingTender?.id, receiptPrintEligible]);
 
+  useEffect(() => {
+    if (!existingTender || !receiptPrintEligible) {
+      setReceiptPrintHistoryStatus({ kind: "idle" });
+      setReceiptPrintHistoryOpen(false);
+      return;
+    }
+
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+    setReceiptPrintHistoryStatus({ kind: "loading", message: "Loading Sales Invoice print history..." });
+
+    async function loadHistory() {
+      const result = await bridge.getSalesInvoicePrintHistoryForTender(correlationId, existingTender!.id);
+      if (cancelled) return;
+
+      if (result.ok) {
+        setReceiptPrintHistoryStatus({ kind: "ready", history: result.payload, correlationId });
+      } else {
+        setReceiptPrintHistoryStatus({ kind: "error", message: result.error.message, correlationId });
+      }
+    }
+
+    void loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, existingTender?.id, receiptPrintEligible]);
+
   const denominationPayload = useMemo(
     () =>
       denominations.map((denomination) => ({
@@ -562,8 +605,45 @@ export function CashCapturePanel({
         correlationId,
         lastSubmit: result.payload,
       });
+      const historyResult = await bridge.getSalesInvoicePrintHistoryForTender(createCorrelationId(), existingTender.id);
+      if (historyResult.ok) {
+        setReceiptPrintHistoryStatus({ kind: "ready", history: historyResult.payload, correlationId });
+      }
     } else {
       setReceiptPrintStatus({ kind: "error", message: result.error.message, correlationId });
+    }
+  }
+
+  async function openPrintHistoryDetail(printJobId: string) {
+    const currentHistory = receiptPrintHistoryStatus.kind === "ready" ? receiptPrintHistoryStatus.history : null;
+    const correlationId = createCorrelationId();
+    const result = await bridge.getSalesInvoicePrintHistoryDetail(correlationId, printJobId);
+
+    if (result.ok) {
+      setReceiptPrintHistoryStatus({
+        kind: "ready",
+        history: currentHistory ?? {
+          scope: "terminalCashTenderId",
+          summary: {
+            hasHistory: true,
+            originalStatus: result.payload.job.statusLabel,
+            reprintCount: result.payload.job.classification === "Reprint" ? 1 : 0,
+            latestCopySequence: result.payload.job.copySequence,
+            latestStatus: result.payload.job.statusLabel,
+            latestPrinterName: result.payload.job.configuredPrinterName,
+            latestPaperWidthMm: result.payload.job.paperWidthMm,
+            latestAttemptAt: result.payload.job.requestedAt,
+            requiresConfirmation: result.payload.job.status === "UnknownAfterRestart",
+            attentionRequired: result.payload.indicators.some((indicator) => indicator.severity === "attention"),
+          },
+          jobs: [result.payload.job],
+          indicators: result.payload.indicators,
+        },
+        correlationId,
+        detail: result.payload,
+      });
+    } else {
+      setReceiptPrintHistoryStatus({ kind: "error", message: result.error.message, correlationId });
     }
   }
 
@@ -760,6 +840,17 @@ export function CashCapturePanel({
         receiptAvailable={receiptPreviewEligible}
         status={receiptPrintStatus}
         onPrint={() => void printReceipt()}
+      />
+
+      <SalesInvoicePrintHistoryPanel
+        receiptAvailable={receiptPreviewEligible}
+        status={receiptPrintHistoryStatus}
+        open={receiptPrintHistoryOpen}
+        filter={receiptPrintHistoryFilter}
+        onOpen={() => setReceiptPrintHistoryOpen(true)}
+        onClose={() => setReceiptPrintHistoryOpen(false)}
+        onFilter={setReceiptPrintHistoryFilter}
+        onDetail={(printJobId) => void openPrintHistoryDetail(printJobId)}
       />
 
       <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
@@ -1439,6 +1530,173 @@ function ReceiptPrintPanel({
       <button className="secondary-action" type="button" disabled={!canPrint} onClick={onPrint}>
         {retryable ? "Retry Sales Invoice Print" : buttonText}
       </button>
+    </section>
+  );
+}
+
+function SalesInvoicePrintHistoryPanel({
+  receiptAvailable,
+  status,
+  open,
+  filter,
+  onOpen,
+  onClose,
+  onFilter,
+  onDetail,
+}: {
+  receiptAvailable: boolean;
+  status: ReceiptPrintHistoryStatus;
+  open: boolean;
+  filter: "All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation";
+  onOpen: () => void;
+  onClose: () => void;
+  onFilter: (filter: "All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation") => void;
+  onDetail: (printJobId: string) => void;
+}) {
+  if (!receiptAvailable && status.kind === "idle") {
+    return null;
+  }
+
+  const history = status.kind === "ready" ? status.history : null;
+  const summary = history?.summary;
+  const jobs = history?.jobs ?? [];
+  const filteredJobs = jobs.filter((job) => {
+    if (filter === "All") return true;
+    if (filter === "Original" || filter === "Reprint") return job.classification === filter;
+    if (filter === "Requires confirmation") return job.status === "UnknownAfterRestart";
+    if (filter === "Submitted") return job.status === "SubmittedToSpooler" || job.status === "Completed";
+    return job.status === "PrinterUnavailable" || job.status === "PreparationFailed" || job.status === "SpoolerSubmissionFailed";
+  });
+  const latestAttempt = summary?.latestAttemptAt ? formatDateTime(summary.latestAttemptAt) : "None";
+
+  return (
+    <section className="central-pms-panel receipt-print-history" aria-label="Sales Invoice Print History">
+      <div className="central-pms-status-row">
+        <h3>Sales Invoice Print History</h3>
+        <strong>{status.kind === "loading" ? status.message : summary?.latestStatus ?? "No print attempts recorded"}</strong>
+      </div>
+
+      {status.kind === "error" && <p className="cash-error">{status.message}</p>}
+
+      <dl className="central-pms-details">
+        <div>
+          <dt>Original status</dt>
+          <dd>{summary?.originalStatus ?? "No print attempts recorded"}</dd>
+        </div>
+        <div>
+          <dt>Reprint count</dt>
+          <dd>{summary ? String(summary.reprintCount) : "0"}</dd>
+        </div>
+        <div>
+          <dt>Latest copy sequence</dt>
+          <dd>{summary?.latestCopySequence ? String(summary.latestCopySequence) : "None"}</dd>
+        </div>
+        <div>
+          <dt>Printer</dt>
+          <dd>{summary?.latestPrinterName ?? "No printer evidence"}</dd>
+        </div>
+        <div>
+          <dt>Paper width</dt>
+          <dd>{summary?.latestPaperWidthMm ? `${summary.latestPaperWidthMm} mm` : "No width evidence"}</dd>
+        </div>
+        <div>
+          <dt>Latest attempt</dt>
+          <dd>{latestAttempt}</dd>
+        </div>
+      </dl>
+
+      {summary?.requiresConfirmation && <p>Print result requires confirmation. This read-only history view will not resolve or resubmit it.</p>}
+      {history?.indicators.some((indicator) => indicator.severity === "attention") && (
+        <div className="status-notice warning" role="status">
+          <strong>Local reconciliation attention</strong>
+          {history.indicators.filter((indicator) => indicator.severity === "attention").map((indicator) => (
+            <p key={indicator.code}>{indicator.label}: {indicator.message}</p>
+          ))}
+        </div>
+      )}
+      {history?.jobs.length === 0 && <p>No print attempts recorded.</p>}
+      <p>Local history shows printer-submission evidence only. It does not overclaim physical paper output.</p>
+
+      {!open ? (
+        <button className="secondary-action" type="button" onClick={onOpen}>
+          Open Print History
+        </button>
+      ) : (
+        <div className="print-history-expanded">
+          <div className="receipt-history-toolbar" role="group" aria-label="Print history filters">
+            {(["All", "Original", "Reprint", "Submitted", "Failed", "Requires confirmation"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={filter === value ? "secondary-action selected" : "secondary-action"}
+                aria-pressed={filter === value}
+                onClick={() => onFilter(value)}
+              >
+                {value}
+              </button>
+            ))}
+            <button className="secondary-action" type="button" onClick={onClose}>
+              Close Print History
+            </button>
+          </div>
+
+          <div className="receipt-history-list" aria-label="Print attempts">
+            {filteredJobs.length === 0 ? (
+              <p>No print attempts match this filter.</p>
+            ) : (
+              filteredJobs.map((job) => (
+                <button
+                  key={job.printJobId}
+                  type="button"
+                  className="receipt-history-row"
+                  onClick={() => onDetail(job.printJobId)}
+                >
+                  <span>{job.classificationLabel}</span>
+                  <span>Copy sequence {job.copySequence}</span>
+                  <span>{job.statusLabel}</span>
+                  <span>{job.configuredPrinterName}</span>
+                  <span>{job.paperWidthMm} mm</span>
+                  <span>{formatDateTime(job.requestedAt)}</span>
+                  <span>{job.status === "UnknownAfterRestart" ? "Attention" : "Support reference available"}</span>
+                </button>
+              ))
+            )}
+          </div>
+
+          {status.kind === "ready" && status.detail && (
+            <article className="receipt-history-detail" aria-label="Print attempt detail">
+              <h4>Print Attempt Detail</h4>
+              <p>{status.detail.statusExplanation}</p>
+              <dl className="central-pms-details">
+                <PreviewMeta label="Support reference" value={status.detail.job.correlationId} />
+                <PreviewMeta label="Print job ID" value={status.detail.job.printJobId} />
+                <PreviewMeta label="Terminal cash tender ID" value={status.detail.job.terminalCashTenderId} />
+                <PreviewMeta label="Fiscal document ID" value={status.detail.job.posFiscalDocumentId} />
+                <PreviewMeta label="Sales Invoice No." value={status.detail.job.fiscalDocumentNumber} />
+                <PreviewMeta label="Classification" value={status.detail.job.classificationLabel} />
+                <PreviewMeta label="Copy sequence" value={String(status.detail.job.copySequence)} />
+                <PreviewMeta label="Printer" value={status.detail.job.configuredPrinterName} />
+                <PreviewMeta label="Paper width" value={`${status.detail.job.paperWidthMm} mm`} />
+                <PreviewMeta label="Presentation version" value={status.detail.job.presentationVersion} />
+                <PreviewMeta label="Template version" value={status.detail.job.templateVersion} />
+                <PreviewMeta label="Payload hash evidence" value={status.detail.shortAuthoritativePayloadHash} />
+                <PreviewMeta label="Semantic hash evidence" value={status.detail.shortSemanticRequestHash} />
+                <PreviewMeta label="Windows spooler job ID" value={status.detail.job.windowsSpoolerJobId} />
+                <PreviewMeta label="Requested at" value={formatDateTime(status.detail.job.requestedAt)} />
+                <PreviewMeta label="Submission started at" value={status.detail.job.submissionStartedAt ? formatDateTime(status.detail.job.submissionStartedAt) : null} />
+                <PreviewMeta label="Submitted to printer at" value={status.detail.job.submittedToSpoolerAt ? formatDateTime(status.detail.job.submittedToSpoolerAt) : null} />
+                <PreviewMeta label="Completed at" value={status.detail.job.completedAt ? formatDateTime(status.detail.job.completedAt) : null} />
+                <PreviewMeta label="Failed at" value={status.detail.job.failedAt ? formatDateTime(status.detail.job.failedAt) : null} />
+                <PreviewMeta label="Failure classification" value={status.detail.job.failureClassification} />
+                <PreviewMeta label="Retryable" value={status.detail.job.retryable ? "Yes" : "No"} />
+              </dl>
+              {status.detail.indicators.map((indicator) => (
+                <p key={indicator.code}>{indicator.label}: {indicator.message}</p>
+              ))}
+            </article>
+          )}
+        </div>
+      )}
     </section>
   );
 }

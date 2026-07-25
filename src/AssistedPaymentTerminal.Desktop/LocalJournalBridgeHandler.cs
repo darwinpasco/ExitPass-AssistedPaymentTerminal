@@ -26,7 +26,11 @@ public sealed class LocalJournalBridgeHandler
         LocalJournalBridgeCommand.CentralPmsCashReceiptRetrieveOrCheck,
         LocalJournalBridgeCommand.CentralPmsCashReceiptGetPreview,
         LocalJournalBridgeCommand.CentralPmsCashReceiptPrintGetStatus,
-        LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit
+        LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit,
+        LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForTender,
+        LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForFiscalDocument,
+        LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetRecent,
+        LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetDetail
     ];
 
     private readonly CashJournalService _journal;
@@ -188,6 +192,10 @@ public sealed class LocalJournalBridgeHandler
                 LocalJournalBridgeCommand.CentralPmsCashReceiptGetPreview => await GetCentralPmsCashReceiptPreviewAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashReceiptPrintGetStatus => await GetCentralPmsCashReceiptPrintStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashReceiptPrintSubmit => await SubmitCentralPmsCashReceiptPrintAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForTender => await GetSalesInvoicePrintHistoryForTenderAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetForFiscalDocument => await GetSalesInvoicePrintHistoryForFiscalDocumentAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetRecent => await GetRecentSalesInvoicePrintHistoryAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.SalesInvoicePrintHistoryGetDetail => await GetSalesInvoicePrintHistoryDetailAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => SerializeFailure(request.Command, request.CorrelationId, "unsupported_command", "Unsupported local journal bridge command.")
             };
         }
@@ -658,7 +666,7 @@ public sealed class LocalJournalBridgeHandler
         CancellationToken cancellationToken)
     {
         var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
-        var jobs = await _printJobService.GetJobsForTenderAsync(payload.LocalCashTenderId, cancellationToken).ConfigureAwait(false);
+        var jobs = await _printJobService.GetJobsForTenderAsync(payload.LocalCashTenderId, cancellationToken: cancellationToken).ConfigureAwait(false);
         var receipt = await _receiptService.GetReceiptRetrievalByTenderAsync(payload.LocalCashTenderId, cancellationToken).ConfigureAwait(false);
         var configuration = ReceiptPrintConfiguration();
 
@@ -671,6 +679,74 @@ public sealed class LocalJournalBridgeHandler
                 configuration.Message,
                 receipt is null ? null : CentralPmsCashReceiptCommandSnapshot.FromEntity(receipt),
                 jobs.Select(CentralPmsCashReceiptPrintJobSnapshot.FromEntity).ToArray()));
+    }
+
+    private async Task<string> GetSalesInvoicePrintHistoryForTenderAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
+        var jobs = await _printJobService.GetJobsForTenderAsync(
+                payload.LocalCashTenderId,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            CentralPmsCashReceiptPrintHistoryResponse.FromJobs("terminalCashTenderId", jobs));
+    }
+
+    private async Task<string> GetSalesInvoicePrintHistoryForFiscalDocumentAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptFiscalDocumentPayload>(request);
+        var jobs = await _printJobService.GetJobsForFiscalDocumentAsync(
+                payload.FiscalDocumentId,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            CentralPmsCashReceiptPrintHistoryResponse.FromJobs("fiscalDocumentId", jobs));
+    }
+
+    private async Task<string> GetRecentSalesInvoicePrintHistoryAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? new CentralPmsCashReceiptRecentPrintHistoryPayload(null)
+            : ReadPayload<CentralPmsCashReceiptRecentPrintHistoryPayload>(request);
+        var jobs = await _printJobService.GetRecentJobsAsync(payload.MaxResults ?? 50, cancellationToken).ConfigureAwait(false);
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            CentralPmsCashReceiptPrintHistoryResponse.FromJobs("recent", jobs));
+    }
+
+    private async Task<string> GetSalesInvoicePrintHistoryDetailAsync(
+        LocalJournalBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<CentralPmsCashReceiptPrintJobPayload>(request);
+        var job = await _printJobService.GetJobAsync(payload.PrintJobId, cancellationToken).ConfigureAwait(false);
+        if (job is null)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "print_job_not_found",
+                "No local Sales Invoice print attempt exists for the requested support reference.");
+        }
+
+        return SerializeSuccess(
+            request.Command,
+            request.CorrelationId,
+            CentralPmsCashReceiptPrintHistoryDetailResponse.FromJob(job));
     }
 
     private async Task<string> SubmitCentralPmsCashReceiptPrintAsync(
@@ -998,6 +1074,12 @@ public sealed record CentralPmsCashFiscalPayload(Guid LocalCashTenderId);
 
 public sealed record CentralPmsCashReceiptPayload(Guid LocalCashTenderId);
 
+public sealed record CentralPmsCashReceiptFiscalDocumentPayload(Guid FiscalDocumentId);
+
+public sealed record CentralPmsCashReceiptPrintJobPayload(Guid PrintJobId);
+
+public sealed record CentralPmsCashReceiptRecentPrintHistoryPayload(int? MaxResults = null);
+
 public sealed record CentralPmsCashSubmissionStatusResponse(
     bool Enabled,
     bool ConfigurationValid,
@@ -1148,6 +1230,214 @@ public sealed record CentralPmsCashReceiptPrintSubmitResponse(
     CentralPmsCashReceiptPrintJobSnapshot Job,
     ReceiptPrintDocument PrintDocument,
     string SafeMessage);
+
+public sealed record CentralPmsCashReceiptPrintHistoryResponse(
+    string Scope,
+    CentralPmsCashReceiptPrintHistorySummary Summary,
+    IReadOnlyList<CentralPmsCashReceiptPrintJobSnapshot> Jobs,
+    IReadOnlyList<CentralPmsCashReceiptPrintHistoryIndicator> Indicators)
+{
+    public static CentralPmsCashReceiptPrintHistoryResponse FromJobs(
+        string scope,
+        IReadOnlyList<TerminalCashReceiptPrintJob> jobs) =>
+        new(
+            scope,
+            CentralPmsCashReceiptPrintHistorySummary.FromJobs(jobs),
+            jobs.Select(CentralPmsCashReceiptPrintJobSnapshot.FromEntity).ToArray(),
+            CentralPmsCashReceiptPrintHistoryIndicator.FromJobs(jobs));
+}
+
+public sealed record CentralPmsCashReceiptPrintHistoryDetailResponse(
+    CentralPmsCashReceiptPrintJobSnapshot Job,
+    string StatusExplanation,
+    string? ShortAuthoritativePayloadHash,
+    string? ShortSemanticRequestHash,
+    IReadOnlyList<CentralPmsCashReceiptPrintHistoryIndicator> Indicators)
+{
+    public static CentralPmsCashReceiptPrintHistoryDetailResponse FromJob(TerminalCashReceiptPrintJob job) =>
+        new(
+            CentralPmsCashReceiptPrintJobSnapshot.FromEntity(job),
+            job.Status switch
+            {
+                TerminalCashReceiptPrintJobStatus.SubmittedToSpooler => "The Sales Invoice print attempt was accepted by the Windows printer queue. Physical paper output is not separately confirmed by this local evidence.",
+                TerminalCashReceiptPrintJobStatus.Completed => "The local printer subsystem reported completion for this Sales Invoice print attempt.",
+                TerminalCashReceiptPrintJobStatus.UnknownAfterRestart => "Submission had started before restart and the final printer result requires confirmation. This view will not resubmit the job.",
+                TerminalCashReceiptPrintJobStatus.PrinterUnavailable => "The configured printer was unavailable. Receipt and fiscal records were not changed.",
+                TerminalCashReceiptPrintJobStatus.SpoolerSubmissionFailed => "Windows printer submission failed. Receipt and fiscal records were not changed.",
+                TerminalCashReceiptPrintJobStatus.PreparationFailed => "The stored authoritative presentation could not be prepared for printing.",
+                TerminalCashReceiptPrintJobStatus.Requested => "Print was requested and persisted before printer submission.",
+                TerminalCashReceiptPrintJobStatus.Preparing => "The Sales Invoice was being prepared for printer submission.",
+                TerminalCashReceiptPrintJobStatus.SubmissionPending => "The Sales Invoice was being sent to the Windows printer queue.",
+                _ => "Local print attempt evidence is available."
+            },
+            ShortHash(job.AuthoritativePayloadHash),
+            ShortHash(job.SemanticRequestHash),
+            CentralPmsCashReceiptPrintHistoryIndicator.FromJobs(new[] { job }));
+
+    private static string? ShortHash(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= 24 ? trimmed : $"{trimmed[..24]}...";
+    }
+}
+
+public sealed record CentralPmsCashReceiptPrintHistorySummary(
+    bool HasHistory,
+    string OriginalStatus,
+    int ReprintCount,
+    int? LatestCopySequence,
+    string LatestStatus,
+    string? LatestPrinterName,
+    int? LatestPaperWidthMm,
+    DateTimeOffset? LatestAttemptAt,
+    bool RequiresConfirmation,
+    bool AttentionRequired)
+{
+    public static CentralPmsCashReceiptPrintHistorySummary FromJobs(IReadOnlyList<TerminalCashReceiptPrintJob> jobs)
+    {
+        if (jobs.Count == 0)
+        {
+            return new(
+                false,
+                "No print attempts recorded",
+                0,
+                null,
+                "No print attempts recorded",
+                null,
+                null,
+                null,
+                false,
+                false);
+        }
+
+        var latest = jobs.OrderByDescending(job => job.RequestedAt).ThenByDescending(job => job.LastUpdatedAt).First();
+        var original = jobs
+            .Where(job => job.Classification == TerminalCashReceiptPrintClassification.Original)
+            .OrderByDescending(job => job.RequestedAt)
+            .FirstOrDefault();
+        var indicators = CentralPmsCashReceiptPrintHistoryIndicator.FromJobs(jobs);
+
+        return new(
+            true,
+            original is null ? "No original print attempt recorded" : CentralPmsCashReceiptPrintJobSnapshot.FromEntity(original).StatusLabel,
+            jobs.Count(job => job.Classification == TerminalCashReceiptPrintClassification.Reprint),
+            latest.CopySequence,
+            CentralPmsCashReceiptPrintJobSnapshot.FromEntity(latest).StatusLabel,
+            latest.ConfiguredPrinterName,
+            latest.PaperWidthMm,
+            latest.RequestedAt,
+            jobs.Any(job => job.Status == TerminalCashReceiptPrintJobStatus.UnknownAfterRestart),
+            indicators.Any(indicator => string.Equals(indicator.Severity, "attention", StringComparison.Ordinal)));
+    }
+}
+
+public sealed record CentralPmsCashReceiptPrintHistoryIndicator(
+    string Code,
+    string Label,
+    string Severity,
+    string Message)
+{
+    private static readonly TerminalCashReceiptPrintJobStatus[] SpoolerAcceptedOrUnknown =
+    [
+        TerminalCashReceiptPrintJobStatus.SubmittedToSpooler,
+        TerminalCashReceiptPrintJobStatus.Completed,
+        TerminalCashReceiptPrintJobStatus.UnknownAfterRestart
+    ];
+
+    public static IReadOnlyList<CentralPmsCashReceiptPrintHistoryIndicator> FromJobs(IReadOnlyList<TerminalCashReceiptPrintJob> jobs)
+    {
+        var indicators = new List<CentralPmsCashReceiptPrintHistoryIndicator>();
+        if (jobs.Count == 0)
+        {
+            indicators.Add(new("NO_PRINT_HISTORY", "No print attempts recorded", "info", "No local Sales Invoice print attempt is recorded for this scope."));
+            return indicators;
+        }
+
+        if (jobs.Any(job => job.Status == TerminalCashReceiptPrintJobStatus.UnknownAfterRestart))
+        {
+            indicators.Add(new("PRINT_RESULT_REQUIRES_CONFIRMATION", "Print result requires confirmation", "attention", "A print submission was interrupted and the terminal will not silently resubmit it."));
+        }
+
+        var latest = jobs.OrderByDescending(job => job.RequestedAt).ThenByDescending(job => job.LastUpdatedAt).First();
+        if (latest.Retryable && latest.Status is TerminalCashReceiptPrintJobStatus.PrinterUnavailable or TerminalCashReceiptPrintJobStatus.SpoolerSubmissionFailed)
+        {
+            indicators.Add(new("LATEST_RETRYABLE_FAILURE", "Latest attempt failed", "attention", "The latest local print attempt failed retryably. This history view does not retry it."));
+        }
+
+        if (!jobs.Any(job => job.Classification == TerminalCashReceiptPrintClassification.Original && SpoolerAcceptedOrUnknown.Contains(job.Status)))
+        {
+            indicators.Add(new("NO_ORIGINAL_SPOOLER_ACCEPTANCE", "No original submitted evidence", "attention", "No original print attempt has spooler-accepted or unknown-after-submission local evidence."));
+        }
+        else
+        {
+            indicators.Add(new("ORIGINAL_SUBMITTED", "Original submitted", "info", "At least one original print attempt has local spooler or unknown-after-submission evidence."));
+        }
+
+        var reprintCount = jobs.Count(job => job.Classification == TerminalCashReceiptPrintClassification.Reprint);
+        if (reprintCount > 0)
+        {
+            indicators.Add(new("REPRINT_COUNT", $"Reprint count: {reprintCount}", "info", "Reprint attempts remain linked to the same fiscal document evidence."));
+        }
+
+        if (jobs.Select(job => job.ConfiguredPrinterName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+        {
+            indicators.Add(new("PRINTER_CHANGED_BETWEEN_COPIES", "Printer changed between copies", "attention", "Different printer queues are recorded across this copy chain."));
+        }
+
+        if (jobs.Select(job => job.PaperWidthMm).Distinct().Count() > 1)
+        {
+            indicators.Add(new("PAPER_WIDTH_CHANGED_BETWEEN_COPIES", "Paper width changed between copies", "attention", "Different paper widths are recorded across this copy chain."));
+        }
+
+        if (jobs.GroupBy(job => job.CopySequence).Any(group => group.Count() > 1))
+        {
+            indicators.Add(new("DUPLICATE_COPY_SEQUENCE", "Duplicate copy sequence", "attention", "More than one local print attempt uses the same copy sequence."));
+        }
+
+        if (jobs.Any(job => job.Classification == TerminalCashReceiptPrintClassification.Reprint)
+            && !jobs.Any(job => job.Classification == TerminalCashReceiptPrintClassification.Original && SpoolerAcceptedOrUnknown.Contains(job.Status)))
+        {
+            indicators.Add(new("REPRINT_WITHOUT_ORIGINAL_BOUNDARY", "Reprint without original boundary", "attention", "A reprint exists without local evidence that the original boundary was consumed."));
+        }
+
+        if (jobs.Select(job => job.PosFiscalDocumentId).Distinct().Count() > 1)
+        {
+            indicators.Add(new("INCONSISTENT_FISCAL_DOCUMENT_IDENTITY", "Inconsistent fiscal document identity", "attention", "Print attempts in this view do not all reference the same fiscal document."));
+        }
+
+        if (jobs.Select(job => job.AuthoritativePayloadHash).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).Count() > 1)
+        {
+            indicators.Add(new("INCONSISTENT_PRESENTATION_HASH", "Inconsistent presentation hash", "attention", "Print attempts in this view do not all reference the same authoritative presentation hash."));
+        }
+
+        if (jobs.Any(job => job.PosFiscalDocumentId == Guid.Empty || string.IsNullOrWhiteSpace(job.FiscalDocumentNumber)))
+        {
+            indicators.Add(new("MISSING_FISCAL_IDENTITY", "Missing fiscal identity", "attention", "One or more print attempts are missing fiscal document evidence."));
+        }
+
+        if (jobs.Any(job => string.IsNullOrWhiteSpace(job.ConfiguredPrinterName)))
+        {
+            indicators.Add(new("MISSING_PRINTER_EVIDENCE", "Missing printer evidence", "attention", "One or more print attempts are missing configured printer evidence."));
+        }
+
+        if (jobs.Any(job => job.Status == TerminalCashReceiptPrintJobStatus.SubmittedToSpooler && job.SubmittedToSpoolerAt is null))
+        {
+            indicators.Add(new("SUBMITTED_TIMESTAMP_MISSING", "Submitted timestamp missing", "attention", "A submitted attempt is missing its local spooler-submission timestamp."));
+        }
+
+        if (indicators.Count == 0)
+        {
+            indicators.Add(new("PRINT_HISTORY_COMPLETE", "Print history complete for local journal", "info", "No local print-history attention condition was detected."));
+        }
+
+        return indicators;
+    }
+}
 
 public sealed record CentralPmsCashReceiptPrintJobSnapshot(
     Guid PrintJobId,
