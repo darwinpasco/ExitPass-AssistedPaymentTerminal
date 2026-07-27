@@ -69,6 +69,47 @@ describe("CashCapturePanel", () => {
 
     expect(screen.getByLabelText("Change due")).toHaveValue("25.00");
   });
+  it("shows pre-cash wording and creates no local custody record before the command", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({ config: enabledConfig(), bridge });
+
+    await screen.findByText("Local cash custody capture");
+    expect(await screen.findByText("Cash has not yet been recorded at this terminal.")).toBeInTheDocument();
+    expect(screen.getByText(/Complete denomination entry and attest physical receipt before recording CASH_RECEIVED/)).toBeInTheDocument();
+    expect(screen.queryByText(/State at local cash capture:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/I attest/)).not.toBeChecked();
+    expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
+    expect(bridge.startTender).not.toHaveBeenCalled();
+    expect(bridge.recordCashReceived).not.toHaveBeenCalled();
+  });
+
+  it("checking attestation alone does not create CASH_RECEIVED", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({ config: enabledConfig(), bridge });
+    await screen.findByText("Local cash custody capture");
+
+    await userEvent.click(screen.getByLabelText(/I attest/));
+
+    expect(screen.getByLabelText(/I attest/)).toBeChecked();
+    expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
+    expect(bridge.startTender).not.toHaveBeenCalled();
+    expect(bridge.recordCashReceived).not.toHaveBeenCalled();
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+  });
+
+  it("records CASH_RECEIVED exactly once through the irreversible command", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({ config: enabledConfig(), bridge });
+
+    await recordCashReceived();
+
+    expect(bridge.createOrGetDevelopmentSession).toHaveBeenCalledTimes(1);
+    expect(bridge.startTender).toHaveBeenCalledTimes(1);
+    expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
+    expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
+  });
 
   it("renders all supported Philippine denomination inputs in descending order", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
@@ -1340,10 +1381,14 @@ function activeSession(): ResolveVendorParkingResponse {
     lookupOutcome: "resolved",
     plateNumber: "NCR-4421",
     ticketReference: "APT-ACTIVE-1001",
+    entryTimestamp: new Date(now - 120000).toISOString(),
     entryTime: new Date(now - 120000).toISOString(),
+    tariffCalculatedAt: new Date(now).toISOString(),
     currentFeeCalculationTime: new Date(now).toISOString(),
+    authoritativeAmountMinorUnits: 12500,
     netPayableMinorUnits: 12500,
     currency: "PHP",
+    tariffValidUntil: new Date(now + 900000).toISOString(),
     tariffExpiresAt: new Date(now + 900000).toISOString(),
     feeValidUntil: new Date(now + 900000).toISOString(),
     parkingStatus: "Active",
@@ -1351,6 +1396,17 @@ function activeSession(): ResolveVendorParkingResponse {
     statutoryDiscountApplied: false,
     effectiveTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
     vendorSystemId: "VENDOR-PMS-DEV",
+    sessionReadiness: "RESOLVED_PAYABLE",
+    tariffReadiness: "CURRENT",
+    paymentEligibility: "ELIGIBLE",
+    terminalCashAvailability: "AVAILABLE",
+    fiscalReadiness: "READY",
+    salesInvoiceConfigurationReadiness: "READY",
+    cashAcceptanceReadiness: "READY",
+    readyForCashAcceptance: true,
+    blockingReasonCodes: [],
+    retryable: false,
+    safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
     correlationId: "corr-session",
   };
 }

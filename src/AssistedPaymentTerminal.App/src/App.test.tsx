@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+﻿import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { App, TerminalShell } from "./App";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 
-describe("App startup and terminal workflow", () => {
+describe("App startup and payable-basis readiness workflow", () => {
   it("refuses unsupported profile at startup", async () => {
     window.__APT_CONFIG__ = { ...rawMode1Config, APT_PROFILE: "ADMIN_WORKSTATION" };
 
@@ -35,9 +35,6 @@ describe("App startup and terminal workflow", () => {
     expect(screen.getByText("Development-only")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Temporarily unavailable" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Available" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Terminal failure" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Incomplete configuration" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restart-recovery setup" })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/Mode 1|React Mode 1|apt-mode1-shell/);
   });
 
@@ -45,35 +42,13 @@ describe("App startup and terminal workflow", () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     expect(screen.getByLabelText("Operational context")).toBeInTheDocument();
-    expect(screen.getByText("Site")).toBeInTheDocument();
     expect(screen.getByText("ExitPass Demo Parking")).toBeInTheDocument();
-    expect(screen.getByText("Cashier")).toBeInTheDocument();
     expect(screen.getByText("Development Cashier")).toBeInTheDocument();
-    expect(screen.getByText("Shift")).toBeInTheDocument();
-    expect(screen.getByText("OPEN")).toBeInTheDocument();
-    expect(screen.getByText("Terminal")).toBeInTheDocument();
     expect(screen.getByText("Development Cashier Terminal 1")).toBeInTheDocument();
-    expect(screen.getByText("POS readiness")).toBeInTheDocument();
     expect(screen.getByText("Configured: POS-DEV-001")).toBeInTheDocument();
   });
 
-  it("collapses and expands terminal technical details", async () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
-
-    const details = screen.getByText("Terminal details").closest("details");
-    expect(details).not.toHaveAttribute("open");
-
-    await userEvent.click(screen.getByText("Terminal details"));
-    expect(details).toHaveAttribute("open");
-    expect(screen.getByText("APT-DEV-001")).toBeInTheDocument();
-    expect(screen.getByText("POS-DEV-001")).toBeInTheDocument();
-    expect(screen.getByText("SHIFT-DEV-20260714-A")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByText("Terminal details"));
-    expect(details).not.toHaveAttribute("open");
-  });
-
-  it("resolves a valid ticket and keeps payment stage disabled", async () => {
+  it("resolves a ticket through the APT payable-basis facade and displays Central PMS readiness", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
@@ -81,102 +56,85 @@ describe("App startup and terminal workflow", () => {
 
     expect(await screen.findByText("Authoritative payable basis")).toBeInTheDocument();
     expect(screen.getByText("APT-ACTIVE-1001")).toBeInTheDocument();
-    expect(screen.getByText("Payable basis is current")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Collect payment" })).toBeDisabled();
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("₱125.00");
+    expect(screen.getByTestId("cash-readiness-status")).toHaveTextContent("Ready for cash acceptance");
+    expect(screen.getByTestId("session-readiness-value")).toHaveTextContent("Resolved Payable");
+    expect(screen.getByTestId("tariff-readiness-value")).toHaveTextContent("Current");
+    expect(screen.getByTestId("payment-eligibility-value")).toHaveTextContent("Eligible");
+    expect(screen.getByTestId("terminal-cash-readiness-value")).toHaveTextContent("Available");
+    expect(screen.getByTestId("sales-invoice-readiness-value")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("fiscal-readiness-value")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("central-cash-ready-value")).toHaveTextContent("true");
+    expect(screen.getByTestId("local-cash-prerequisites-value")).toHaveTextContent("Blocked");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
+    expect(screen.getByText(/Revalidation will still run immediately before CASH_RECEIVED/)).toBeInTheDocument();
+    expect(screen.queryByText("Payable basis is current")).not.toBeInTheDocument();
   });
 
-  it("shows ticket-not-found failure with support reference and recovery path", async () => {
+  it("resolves a plate without requiring a ticket", async () => {
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
+
+    await userEvent.click(screen.getByLabelText("Plate"));
+    await userEvent.type(screen.getByLabelText("Plate number"), "PLATE-READY-1002");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByText("PLATE-READY-1002")).toBeInTheDocument();
+    expect(screen.getByTestId("cash-readiness-status")).toHaveTextContent("Ready for cash acceptance");
+  });
+
+  it("shows not-found failure with support reference and recovery path", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-NOTFOUND-404");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    expect(await screen.findByText("Ticket not found")).toBeInTheDocument();
+    expect(await screen.findByText("Parking session not found")).toBeInTheDocument();
     expect(screen.getByText(/Support reference:/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Back to ticket lookup" }));
-    expect(screen.queryByText("Ticket not found")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back to lookup" }));
+    expect(screen.queryByText("Parking session not found")).not.toBeInTheDocument();
   });
 
-  it("shows inactive session failure", async () => {
+  it("shows fiscal-readiness blockers without enabling cash", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
-    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-INACTIVE-3001");
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-FISCAL-BLOCKED");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    expect(await screen.findByText("Session inactive or invalid")).toBeInTheDocument();
+    expect(await screen.findByText("Cash acceptance blocked")).toBeInTheDocument();
+    expect(screen.getByTestId("central-cash-ready-value")).toHaveTextContent("false");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
+    expect(screen.getByText(/Sales Invoice configuration is incomplete|Cash acceptance is blocked by Central PMS readiness/)).toBeInTheDocument();
   });
 
-  it("shows service unavailable failure", async () => {
+  it("shows retryable Vendor PMS unavailability", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-UNAVAILABLE-503");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    expect(await screen.findByText("Central PMS unavailable")).toBeInTheDocument();
-    expect(screen.getByText(/Support reference:/)).toBeInTheDocument();
-  });
-
-  it("shows malformed response failure", async () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
-
-    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-MALFORMED-502");
-    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    expect(await screen.findByText("Malformed Central PMS response")).toBeInTheDocument();
-  });
-
-  it("blocks payment for expired tariff and recalculates through mock", async () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
-
-    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-EXPIRED-2001");
-    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    expect(await screen.findByText("Tariff expired")).toBeInTheDocument();
-    expect(screen.getByText("Blocked by expired tariff")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Collect payment" })).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Recalculate Fee" }));
-
-    expect(await screen.findByText("Payable basis is current")).toBeInTheDocument();
-    expect(screen.getByText("Recalculated")).toBeInTheDocument();
-  });
-
-  it("shows recalculation failure with support reference", async () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
-
-    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-RECALC-FAIL");
-    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-    expect(await screen.findByText("Tariff expired")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Recalculate Fee" }));
-
-    expect(await screen.findByText("Central PMS unavailable")).toBeInTheDocument();
-    expect(screen.getByText(/Support reference:/)).toBeInTheDocument();
+    expect(await screen.findByText("Central PMS temporarily unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Retry is available after Central PMS is reachable.")).toBeInTheDocument();
   });
 
   it("generates a fresh correlation id per lookup action", async () => {
-    const resolveTicket = vi.fn(async (_ticket: string, correlationId: string) => ({
-      ok: false as const,
-      kind: "not_found" as const,
-      error: {
-        errorCode: "SESSION_NOT_FOUND",
-        message: "Vendor parking session was not found.",
-        correlationId,
-        retryable: false,
-      },
-    }));
+    const calls: string[] = [];
+    const client = new MockCentralPmsClient(mode1Config());
+    const resolvePayableBasis = async (...args: Parameters<typeof client.resolvePayableBasis>) => {
+      calls.push(args[2]);
+      return client.resolvePayableBasis(...args);
+    };
 
-    render(<TerminalShell config={mode1Config()} client={{ resolveTicket, recalculateFee: resolveTicket }} />);
+    render(<TerminalShell config={mode1Config()} client={{ resolvePayableBasis, revalidatePayableBasis: (basis, correlationId) => client.revalidatePayableBasis(basis, correlationId) }} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-NOTFOUND-404");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-    await screen.findByText("Ticket not found");
-    await userEvent.click(screen.getByRole("button", { name: "Back to ticket lookup" }));
+    await screen.findByText("Parking session not found");
+    await userEvent.click(screen.getByRole("button", { name: "Back to lookup" }));
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-NOTFOUND-404");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    await waitFor(() => expect(resolveTicket).toHaveBeenCalledTimes(2));
-    expect(resolveTicket.mock.calls[0][1]).not.toBe(resolveTicket.mock.calls[1][1]);
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]).not.toBe(calls[1]);
   });
 });

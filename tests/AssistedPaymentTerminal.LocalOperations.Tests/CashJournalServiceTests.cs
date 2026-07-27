@@ -1,4 +1,4 @@
-using AssistedPaymentTerminal.LocalOperations;
+﻿using AssistedPaymentTerminal.LocalOperations;
 using Xunit;
 
 namespace AssistedPaymentTerminal.LocalOperations.Tests;
@@ -211,6 +211,77 @@ public sealed class CashJournalServiceTests
             $"Default database path '{defaultPath}' must not be inside repository '{repositoryPath}'.");
     }
 
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task SavesAndReadsLatestPayableBasisState()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+
+        var saved = await service.SavePayableBasisStateAsync(PayableBasisRequest("ticket", "APT-ACTIVE-1001", ready: true));
+        var latest = await service.GetLatestPayableBasisStateAsync("APT-DEV-001", "11111111-1111-4111-8111-111111111111");
+
+        Assert.Equal(saved.Id, latest!.Id);
+        Assert.Equal("APT-ACTIVE-1001", latest.LookupReferenceValue);
+        Assert.True(latest.ReadyForCashAcceptance);
+        Assert.Empty(latest.BlockingReasonCodes);
+        Assert.Equal("corr-payable", latest.CentralPmsCorrelationId);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task PayableBasisStateSurvivesRestartWithoutCreatingCashTender()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        await service.SavePayableBasisStateAsync(PayableBasisRequest("plate", "PLATE-READY-1002", ready: false));
+
+        var restarted = database.CreateService();
+        var latest = await restarted.GetLatestPayableBasisStateAsync("APT-DEV-001", "11111111-1111-4111-8111-111111111111");
+        var tender = await restarted.GetCashTenderByParkingSessionAsync("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001");
+
+        Assert.NotNull(latest);
+        Assert.Equal("plate", latest!.LookupReferenceType);
+        Assert.False(latest.ReadyForCashAcceptance);
+        Assert.Contains("SALES_INVOICE_CONFIGURATION_NOT_READY", latest.BlockingReasonCodes);
+        Assert.Null(tender);
+    }
+
+    private static SavePayableBasisStateRequest PayableBasisRequest(string referenceType, string referenceValue, bool ready) =>
+        new(
+            LocalWorkflowId: $"11111111-1111-4111-8111-111111111111:APT-DEV-001:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+            LookupReferenceType: referenceType,
+            LookupReferenceValue: referenceValue,
+            ParkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+            TariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+            SiteId: "11111111-1111-4111-8111-111111111111",
+            SiteGroupId: "22222222-2222-4222-8222-222222222222",
+            SitePosServerId: "POS-DEV-001",
+            TerminalId: "APT-DEV-001",
+            AuthoritativeAmountMinorUnits: 12500,
+            Currency: "PHP",
+            TariffCalculatedAt: DateTimeOffset.UtcNow,
+            TariffValidUntil: DateTimeOffset.UtcNow.AddMinutes(15),
+            FeeValidUntil: DateTimeOffset.UtcNow.AddMinutes(15),
+            ParkingStatus: "Active",
+            PaymentStatus: "Unpaid",
+            SessionReadiness: "RESOLVED_PAYABLE",
+            TariffReadiness: "CURRENT",
+            PaymentEligibility: "ELIGIBLE",
+            TerminalCashAvailability: "AVAILABLE",
+            FiscalReadiness: ready ? "READY" : "NOT_READY",
+            SalesInvoiceConfigurationReadiness: ready ? "READY" : "INCOMPLETE",
+            CashAcceptanceReadiness: ready ? "READY" : "BLOCKED",
+            ReadyForCashAcceptance: ready,
+            BlockingReasonCodes: ready ? Array.Empty<string>() : new[] { "SALES_INVOICE_CONFIGURATION_NOT_READY" },
+            Retryable: false,
+            SafeUserFacingClassification: ready ? "READY_FOR_CASH_ACCEPTANCE" : "FISCAL_READINESS_FAILED",
+            CentralPmsCorrelationId: "corr-payable",
+            RevalidationOutcome: null,
+            CashierAcknowledgementRequired: false,
+            AmountChanged: false,
+            PriorDisplayedAmountMinorUnits: null);
     private static async Task<CashCustodySessionSnapshot> CreateSessionAsync(CashJournalService service)
     {
         var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());

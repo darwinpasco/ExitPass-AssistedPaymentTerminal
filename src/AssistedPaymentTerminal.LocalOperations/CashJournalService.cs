@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace AssistedPaymentTerminal.LocalOperations;
@@ -406,6 +406,145 @@ public sealed class CashJournalService
             .OrderBy(attempt => attempt.AttemptSequence)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+    }
+
+
+    public async Task<PayableBasisStateSnapshot> SavePayableBasisStateAsync(
+        SavePayableBasisStateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        await EnsurePayableBasisStateSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+
+        var now = request.RecordedAt ?? DateTimeOffset.UtcNow;
+        var state = await dbContext.TerminalCashPayableBasisStates
+            .SingleOrDefaultAsync(value => value.LocalWorkflowId == request.LocalWorkflowId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (state is null)
+        {
+            state = new TerminalCashPayableBasisState
+            {
+                Id = Guid.NewGuid(),
+                LocalWorkflowId = request.LocalWorkflowId,
+                ResolvedAt = now
+            };
+            dbContext.TerminalCashPayableBasisStates.Add(state);
+        }
+
+        state.LookupReferenceType = request.LookupReferenceType;
+        state.LookupReferenceValue = request.LookupReferenceValue;
+        state.ParkingSessionId = request.ParkingSessionId;
+        state.TariffSnapshotId = request.TariffSnapshotId;
+        state.SiteId = request.SiteId;
+        state.SiteGroupId = request.SiteGroupId;
+        state.SitePosServerId = request.SitePosServerId;
+        state.TerminalId = request.TerminalId;
+        state.AuthoritativeAmountMinorUnits = request.AuthoritativeAmountMinorUnits;
+        state.Currency = request.Currency;
+        state.TariffCalculatedAt = request.TariffCalculatedAt;
+        state.TariffValidUntil = request.TariffValidUntil;
+        state.FeeValidUntil = request.FeeValidUntil;
+        state.ParkingStatus = request.ParkingStatus;
+        state.PaymentStatus = request.PaymentStatus;
+        state.SessionReadiness = request.SessionReadiness;
+        state.TariffReadiness = request.TariffReadiness;
+        state.PaymentEligibility = request.PaymentEligibility;
+        state.TerminalCashAvailability = request.TerminalCashAvailability;
+        state.FiscalReadiness = request.FiscalReadiness;
+        state.SalesInvoiceConfigurationReadiness = request.SalesInvoiceConfigurationReadiness;
+        state.CashAcceptanceReadiness = request.CashAcceptanceReadiness;
+        state.ReadyForCashAcceptance = request.ReadyForCashAcceptance;
+        state.BlockingReasonCodesJson = System.Text.Json.JsonSerializer.Serialize(request.BlockingReasonCodes);
+        state.Retryable = request.Retryable;
+        state.SafeUserFacingClassification = request.SafeUserFacingClassification;
+        state.CentralPmsCorrelationId = request.CentralPmsCorrelationId;
+        state.RevalidationOutcome = request.RevalidationOutcome;
+        state.CashierAcknowledgementRequired = request.CashierAcknowledgementRequired;
+        state.AmountChanged = request.AmountChanged;
+        state.PriorDisplayedAmountMinorUnits = request.PriorDisplayedAmountMinorUnits;
+        state.LastRevalidatedAt = string.IsNullOrWhiteSpace(request.RevalidationOutcome) ? state.LastRevalidatedAt : now;
+        state.UpdatedAt = now;
+
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return PayableBasisStateSnapshot.FromEntity(state);
+    }
+
+    public async Task<PayableBasisStateSnapshot?> GetLatestPayableBasisStateAsync(
+        string terminalId,
+        string siteId,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        await EnsurePayableBasisStateSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+
+        var state = await dbContext.TerminalCashPayableBasisStates
+            .AsNoTracking()
+            .Where(value => value.TerminalId == terminalId)
+            .Where(value => value.SiteId == siteId)
+            .OrderByDescending(value => value.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return state is null ? null : PayableBasisStateSnapshot.FromEntity(state);
+    }
+
+    private static async Task EnsurePayableBasisStateSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        await dbContext.Database.ExecuteSqlRawAsync(
+            @"CREATE TABLE IF NOT EXISTS terminal_cash_payable_basis_states (
+                Id TEXT NOT NULL CONSTRAINT PK_terminal_cash_payable_basis_states PRIMARY KEY,
+                LocalWorkflowId TEXT NOT NULL,
+                LookupReferenceType TEXT NOT NULL,
+                LookupReferenceValue TEXT NOT NULL,
+                ParkingSessionId TEXT NOT NULL,
+                TariffSnapshotId TEXT NOT NULL,
+                SiteId TEXT NOT NULL,
+                SiteGroupId TEXT NOT NULL,
+                SitePosServerId TEXT NULL,
+                TerminalId TEXT NOT NULL,
+                AuthoritativeAmountMinorUnits INTEGER NOT NULL,
+                Currency TEXT NOT NULL,
+                TariffCalculatedAt INTEGER NULL,
+                TariffValidUntil INTEGER NOT NULL,
+                FeeValidUntil INTEGER NULL,
+                ParkingStatus TEXT NOT NULL,
+                PaymentStatus TEXT NOT NULL,
+                SessionReadiness TEXT NULL,
+                TariffReadiness TEXT NULL,
+                PaymentEligibility TEXT NULL,
+                TerminalCashAvailability TEXT NULL,
+                FiscalReadiness TEXT NULL,
+                SalesInvoiceConfigurationReadiness TEXT NULL,
+                CashAcceptanceReadiness TEXT NULL,
+                ReadyForCashAcceptance INTEGER NOT NULL,
+                BlockingReasonCodesJson TEXT NOT NULL,
+                Retryable INTEGER NOT NULL,
+                SafeUserFacingClassification TEXT NOT NULL,
+                CentralPmsCorrelationId TEXT NOT NULL,
+                RevalidationOutcome TEXT NULL,
+                CashierAcknowledgementRequired INTEGER NOT NULL,
+                AmountChanged INTEGER NOT NULL,
+                PriorDisplayedAmountMinorUnits INTEGER NULL,
+                ResolvedAt INTEGER NOT NULL,
+                LastRevalidatedAt INTEGER NULL,
+                UpdatedAt INTEGER NOT NULL
+            );",
+            cancellationToken).ConfigureAwait(false);
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_terminal_cash_payable_basis_states_LocalWorkflowId ON terminal_cash_payable_basis_states (LocalWorkflowId);",
+            cancellationToken).ConfigureAwait(false);
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_terminal_cash_payable_basis_states_TerminalId_SiteId_UpdatedAt ON terminal_cash_payable_basis_states (TerminalId, SiteId, UpdatedAt);",
+            cancellationToken).ConfigureAwait(false);
     }
 
     public CashJournalDbContext CreateDbContext()

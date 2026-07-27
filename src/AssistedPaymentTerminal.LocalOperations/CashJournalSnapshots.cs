@@ -1,4 +1,4 @@
-namespace AssistedPaymentTerminal.LocalOperations;
+﻿namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed record CashCustodySessionSnapshot(
     Guid Id,
@@ -97,4 +97,82 @@ public sealed record CashDenominationEntrySnapshot(
 {
     public static CashDenominationEntrySnapshot FromEntity(CashDenominationEntry entry) =>
         new(entry.Id, entry.DenominationCode, entry.DenominationValue, entry.Quantity);
+}
+
+public sealed record PayableBasisStateSnapshot(
+    Guid Id,
+    string LocalWorkflowId,
+    string LookupReferenceType,
+    string LookupReferenceValue,
+    string ParkingSessionId,
+    string TariffSnapshotId,
+    string SiteId,
+    string SiteGroupId,
+    string? SitePosServerId,
+    string TerminalId,
+    long AuthoritativeAmountMinorUnits,
+    string Currency,
+    DateTimeOffset? TariffCalculatedAt,
+    DateTimeOffset TariffValidUntil,
+    DateTimeOffset? FeeValidUntil,
+    string ParkingStatus,
+    string PaymentStatus,
+    string? SessionReadiness,
+    string? TariffReadiness,
+    string? PaymentEligibility,
+    string? TerminalCashAvailability,
+    string? FiscalReadiness,
+    string? SalesInvoiceConfigurationReadiness,
+    string? CashAcceptanceReadiness,
+    bool ReadyForCashAcceptance,
+    IReadOnlyList<string> BlockingReasonCodes,
+    bool Retryable,
+    string SafeUserFacingClassification,
+    string CentralPmsCorrelationId,
+    string? RevalidationOutcome,
+    bool CashierAcknowledgementRequired,
+    bool AmountChanged,
+    long? PriorDisplayedAmountMinorUnits,
+    DateTimeOffset ResolvedAt,
+    DateTimeOffset? LastRevalidatedAt,
+    DateTimeOffset UpdatedAt)
+{
+    public static PayableBasisStateSnapshot FromEntity(TerminalCashPayableBasisState state) =>
+        new(
+            state.Id,
+            state.LocalWorkflowId,
+            state.LookupReferenceType,
+            state.LookupReferenceValue,
+            state.ParkingSessionId,
+            state.TariffSnapshotId,
+            state.SiteId,
+            state.SiteGroupId,
+            state.SitePosServerId,
+            state.TerminalId,
+            state.AuthoritativeAmountMinorUnits,
+            state.Currency,
+            state.TariffCalculatedAt,
+            state.TariffValidUntil,
+            state.FeeValidUntil,
+            state.ParkingStatus,
+            state.PaymentStatus,
+            state.SessionReadiness,
+            state.TariffReadiness,
+            state.PaymentEligibility,
+            state.TerminalCashAvailability,
+            state.FiscalReadiness,
+            state.SalesInvoiceConfigurationReadiness,
+            state.CashAcceptanceReadiness,
+            state.ReadyForCashAcceptance,
+            System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<string>>(state.BlockingReasonCodesJson) ?? Array.Empty<string>(),
+            state.Retryable,
+            state.SafeUserFacingClassification,
+            state.CentralPmsCorrelationId,
+            state.RevalidationOutcome,
+            state.CashierAcknowledgementRequired,
+            state.AmountChanged,
+            state.PriorDisplayedAmountMinorUnits,
+            state.ResolvedAt,
+            state.LastRevalidatedAt,
+            state.UpdatedAt);
 }

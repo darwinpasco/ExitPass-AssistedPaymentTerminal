@@ -1,4 +1,4 @@
-namespace AssistedPaymentTerminal.LocalOperations;
+﻿namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed record CreateCashCustodySessionRequest(
     string CashierId,
@@ -36,3 +36,38 @@ public sealed record CashDenominationLine(
     string DenominationCode,
     decimal DenominationValue,
     int Quantity);
+
+public sealed record SavePayableBasisStateRequest(
+    string LocalWorkflowId,
+    string LookupReferenceType,
+    string LookupReferenceValue,
+    string ParkingSessionId,
+    string TariffSnapshotId,
+    string SiteId,
+    string SiteGroupId,
+    string? SitePosServerId,
+    string TerminalId,
+    long AuthoritativeAmountMinorUnits,
+    string Currency,
+    DateTimeOffset? TariffCalculatedAt,
+    DateTimeOffset TariffValidUntil,
+    DateTimeOffset? FeeValidUntil,
+    string ParkingStatus,
+    string PaymentStatus,
+    string? SessionReadiness,
+    string? TariffReadiness,
+    string? PaymentEligibility,
+    string? TerminalCashAvailability,
+    string? FiscalReadiness,
+    string? SalesInvoiceConfigurationReadiness,
+    string? CashAcceptanceReadiness,
+    bool ReadyForCashAcceptance,
+    IReadOnlyList<string> BlockingReasonCodes,
+    bool Retryable,
+    string SafeUserFacingClassification,
+    string CentralPmsCorrelationId,
+    string? RevalidationOutcome,
+    bool CashierAcknowledgementRequired,
+    bool AmountChanged,
+    long? PriorDisplayedAmountMinorUnits,
+    DateTimeOffset? RecordedAt = null);

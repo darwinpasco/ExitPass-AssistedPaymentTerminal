@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace AssistedPaymentTerminal.LocalOperations;
@@ -26,6 +26,8 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
     public DbSet<TerminalCashReceiptRetrievalAttempt> TerminalCashReceiptRetrievalAttempts => Set<TerminalCashReceiptRetrievalAttempt>();
 
     public DbSet<TerminalCashReceiptPrintJob> TerminalCashReceiptPrintJobs => Set<TerminalCashReceiptPrintJob>();
+
+    public DbSet<TerminalCashPayableBasisState> TerminalCashPayableBasisStates => Set<TerminalCashPayableBasisState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -251,6 +253,43 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.HasIndex(attempt => new { attempt.LocalReceiptRetrievalId, attempt.AttemptSequence }).IsUnique();
         });
 
+
+        modelBuilder.Entity<TerminalCashPayableBasisState>(entity =>
+        {
+            entity.ToTable("terminal_cash_payable_basis_states");
+            entity.HasKey(state => state.Id);
+            entity.Property(state => state.LocalWorkflowId).HasMaxLength(256).IsRequired();
+            entity.Property(state => state.LookupReferenceType).HasMaxLength(32).IsRequired();
+            entity.Property(state => state.LookupReferenceValue).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.ParkingSessionId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.TariffSnapshotId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.SiteId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.SiteGroupId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.SitePosServerId).HasMaxLength(128);
+            entity.Property(state => state.TerminalId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.Currency).HasMaxLength(3).IsRequired();
+            entity.Property(state => state.ParkingStatus).HasMaxLength(64).IsRequired();
+            entity.Property(state => state.PaymentStatus).HasMaxLength(64).IsRequired();
+            entity.Property(state => state.SessionReadiness).HasMaxLength(128);
+            entity.Property(state => state.TariffReadiness).HasMaxLength(128);
+            entity.Property(state => state.PaymentEligibility).HasMaxLength(128);
+            entity.Property(state => state.TerminalCashAvailability).HasMaxLength(128);
+            entity.Property(state => state.FiscalReadiness).HasMaxLength(128);
+            entity.Property(state => state.SalesInvoiceConfigurationReadiness).HasMaxLength(128);
+            entity.Property(state => state.CashAcceptanceReadiness).HasMaxLength(128);
+            entity.Property(state => state.BlockingReasonCodesJson).IsRequired();
+            entity.Property(state => state.SafeUserFacingClassification).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.CentralPmsCorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(state => state.RevalidationOutcome).HasMaxLength(128);
+            entity.Property(state => state.TariffCalculatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(state => state.TariffValidUntil).HasConversion(dateTimeOffsetConverter);
+            entity.Property(state => state.FeeValidUntil).HasConversion(dateTimeOffsetConverter);
+            entity.Property(state => state.ResolvedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(state => state.LastRevalidatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(state => state.UpdatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasIndex(state => state.LocalWorkflowId).IsUnique();
+            entity.HasIndex(state => new { state.TerminalId, state.SiteId, state.UpdatedAt });
+        });
         modelBuilder.Entity<TerminalCashReceiptPrintJob>(entity =>
         {
             entity.ToTable("terminal_cash_receipt_print_jobs");

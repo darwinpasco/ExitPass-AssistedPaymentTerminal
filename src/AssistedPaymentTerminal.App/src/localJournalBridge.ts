@@ -1,4 +1,4 @@
-export type BridgeResult<T> =
+﻿export type BridgeResult<T> =
   | { ok: true; command: string; correlationId: string; payload: T }
   | { ok: false; command: string; correlationId: string; error: BridgeError };
 
@@ -357,6 +357,48 @@ export type SalesInvoicePrintHistoryDetail = {
   indicators: SalesInvoicePrintHistoryIndicator[];
 };
 
+
+export type PayableBasisStatePayload = {
+  localWorkflowId: string;
+  lookupReferenceType: "ticket" | "plate";
+  lookupReferenceValue: string;
+  parkingSessionId: string;
+  tariffSnapshotId: string;
+  siteId: string;
+  siteGroupId: string;
+  sitePosServerId?: string | null;
+  terminalId: string;
+  authoritativeAmountMinorUnits: number;
+  currency: string;
+  tariffCalculatedAt?: string | null;
+  tariffValidUntil: string;
+  feeValidUntil?: string | null;
+  parkingStatus: string;
+  paymentStatus: string;
+  sessionReadiness?: string | null;
+  tariffReadiness?: string | null;
+  paymentEligibility?: string | null;
+  terminalCashAvailability?: string | null;
+  fiscalReadiness?: string | null;
+  salesInvoiceConfigurationReadiness?: string | null;
+  cashAcceptanceReadiness?: string | null;
+  readyForCashAcceptance: boolean;
+  blockingReasonCodes: string[];
+  retryable: boolean;
+  safeUserFacingClassification: string;
+  centralPmsCorrelationId: string;
+  revalidationOutcome?: string | null;
+  cashierAcknowledgementRequired: boolean;
+  amountChanged: boolean;
+  priorDisplayedAmountMinorUnits?: number | null;
+};
+
+export type PayableBasisStateSnapshot = PayableBasisStatePayload & {
+  id: string;
+  resolvedAt: string;
+  lastRevalidatedAt: string | null;
+  updatedAt: string;
+};
 export type CreateDevelopmentSessionPayload = {
   cashierId: string;
   authenticatedCashierSessionReference: string;
@@ -391,6 +433,8 @@ export type RecordCashReceivedPayload = {
 
 export interface LocalJournalBridge {
   health(correlationId: string): Promise<BridgeResult<LocalJournalHealth>>;
+  savePayableBasisState?(correlationId: string, payload: PayableBasisStatePayload): Promise<BridgeResult<PayableBasisStateSnapshot>>;
+  getLatestPayableBasisState?(correlationId: string, terminalId: string, siteId: string): Promise<BridgeResult<PayableBasisStateSnapshot | null>>;
   createOrGetDevelopmentSession(
     correlationId: string,
     payload: CreateDevelopmentSessionPayload,
@@ -467,6 +511,9 @@ declare global {
 export function createWebViewLocalJournalBridge(): LocalJournalBridge {
   return {
     health: (correlationId) => send("localJournal.health", correlationId, {}),
+    savePayableBasisState: (correlationId, payload) => send("payableBasisState.save", correlationId, payload),
+    getLatestPayableBasisState: (correlationId, terminalId, siteId) =>
+      send("payableBasisState.getLatest", correlationId, { terminalId, siteId }),
     createOrGetDevelopmentSession: (correlationId, payload) =>
       send("localJournal.createOrGetDevelopmentSession", correlationId, payload),
     startTender: (correlationId, payload) => send("localJournal.startTender", correlationId, payload),

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using AssistedPaymentTerminal.LocalOperations;
 using Xunit;
 
@@ -161,6 +161,67 @@ public sealed class LocalJournalBridgeHandlerTests
         Assert.Equal("malformed_request", response.RootElement.GetProperty("error").GetProperty("code").GetString());
     }
 
+
+    [Fact]
+    public async Task PayableBasisStateBridgeCommandsPersistAndRestorePreCashEvidence()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var handler = database.CreateHandler(enabled: true);
+
+        var saved = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.PayableBasisStateSave,
+            "corr-payable-save",
+            new
+            {
+                localWorkflowId = $"{SiteId}:terminal-bridge:{ParkingSessionStartId}",
+                lookupReferenceType = "ticket",
+                lookupReferenceValue = "APT-ACTIVE-1001",
+                parkingSessionId = ParkingSessionStartId,
+                tariffSnapshotId = TariffSnapshotId,
+                siteId = SiteId,
+                siteGroupId = SiteGroupId,
+                sitePosServerId = "pos-bridge",
+                terminalId = "terminal-bridge",
+                authoritativeAmountMinorUnits = 12500,
+                currency = "PHP",
+                tariffCalculatedAt = DateTimeOffset.UtcNow,
+                tariffValidUntil = DateTimeOffset.UtcNow.AddMinutes(15),
+                feeValidUntil = DateTimeOffset.UtcNow.AddMinutes(15),
+                parkingStatus = "Active",
+                paymentStatus = "Unpaid",
+                sessionReadiness = "RESOLVED_PAYABLE",
+                tariffReadiness = "CURRENT",
+                paymentEligibility = "ELIGIBLE",
+                terminalCashAvailability = "AVAILABLE",
+                fiscalReadiness = "READY",
+                salesInvoiceConfigurationReadiness = "READY",
+                cashAcceptanceReadiness = "READY",
+                readyForCashAcceptance = true,
+                blockingReasonCodes = Array.Empty<string>(),
+                retryable = false,
+                safeUserFacingClassification = "READY_FOR_CASH_ACCEPTANCE",
+                centralPmsCorrelationId = "central-corr-payable",
+                revalidationOutcome = (string?)null,
+                cashierAcknowledgementRequired = false,
+                amountChanged = false,
+                priorDisplayedAmountMinorUnits = (long?)null
+            });
+
+        Assert.True(saved.RootElement.GetProperty("ok").GetBoolean());
+
+        var restored = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.PayableBasisStateGetLatest,
+            "corr-payable-get",
+            new { terminalId = "terminal-bridge", siteId = SiteId });
+
+        Assert.True(restored.RootElement.GetProperty("ok").GetBoolean());
+        var payload = restored.RootElement.GetProperty("payload");
+        Assert.Equal("APT-ACTIVE-1001", payload.GetProperty("lookupReferenceValue").GetString());
+        Assert.True(payload.GetProperty("readyForCashAcceptance").GetBoolean());
+        Assert.Equal("central-corr-payable", payload.GetProperty("centralPmsCorrelationId").GetString());
+    }
     private static async Task<Guid> CreateSessionAsync(LocalJournalBridgeHandler handler)
     {
         using var response = await SendAsync(
