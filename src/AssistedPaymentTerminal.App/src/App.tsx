@@ -387,7 +387,7 @@ export function TerminalShell({
                   <SessionSummary basis={displayedBasis} restored={lookupState.status === "resolved" && lookupState.source === "restored"} />
                   <ReadinessPanel basis={displayedBasis} tariffExpired={tariffExpired} />
                   {!localPrerequisitesReady && (
-                    <StatusNotice tone="danger" title="Local cash prerequisites unavailable">
+                    <StatusNotice tone="danger" title="Local cash prerequisites unavailable" dataTestId="local-cash-prerequisites-notice">
                       Local cash capture is disabled in this terminal profile. Local prerequisites can only restrict Central PMS readiness.
                     </StatusNotice>
                   )}
@@ -449,16 +449,16 @@ function PreCashBoundaryPanel({
         : "Cash acceptance remains blocked";
 
   return (
-    <section className="status-notice info" aria-label="Pre-cash acceptance boundary">
+    <section className="status-notice info" aria-label="Pre-cash acceptance boundary" data-testid="pre-cash-boundary">
       <h3>Pre-cash acceptance</h3>
       <p>{statusText}</p>
       <p>CASH_RECEIVED has not occurred. Continue to Cash runs Central PMS revalidation before local cash custody can be recorded.</p>
       <dl className="central-pms-details">
-        <div><dt>readyForCashAcceptance</dt><dd>{basis.readyForCashAcceptance ? "true" : "false"}</dd></div>
-        <div><dt>Local prerequisites</dt><dd>{localPrerequisitesReady ? "Satisfied" : "Blocked"}</dd></div>
+        <div><dt>readyForCashAcceptance</dt><dd data-testid="central-cash-ready-value">{basis.readyForCashAcceptance ? "true" : "false"}</dd></div>
+        <div><dt>Local prerequisites</dt><dd data-testid="local-cash-prerequisites-value">{localPrerequisitesReady ? "Satisfied" : "Blocked"}</dd></div>
         <div><dt>Tariff snapshot</dt><dd>{basis.tariffSnapshotId}</dd></div>
       </dl>
-      <button type="button" className="primary-action" disabled={disabled} onClick={onContinue}>
+      <button type="button" className="primary-action" disabled={disabled} onClick={onContinue} data-testid="continue-to-cash">
         Continue to Cash
       </button>
     </section>
@@ -545,11 +545,11 @@ function SessionSummary({ basis, restored }: { basis: PayableBasisResponse; rest
   ];
 
   return (
-    <section className="session-summary" aria-label="Resolved parking session">
+    <section className="session-summary" aria-label="Resolved parking session" data-testid="payable-basis-summary">
       <div className="amount-band">
         <div>
           <p className="eyebrow">Authoritative payable basis</p>
-          <strong>{amount}</strong>
+          <strong data-testid="payable-basis-amount">{amount}</strong>
         </div>
         <span className={basis.readyForCashAcceptance ? "status-badge success" : "status-badge"}>{restored ? "Previously resolved" : basis.readyForCashAcceptance ? "Ready" : "Blocked"}</span>
       </div>
@@ -565,19 +565,19 @@ function SessionSummary({ basis, restored }: { basis: PayableBasisResponse; rest
 function ReadinessPanel({ basis, tariffExpired }: { basis: PayableBasisResponse; tariffExpired: boolean }) {
   const ready = basis.readyForCashAcceptance && !tariffExpired;
   const dimensions = [
-    ["Session", basis.sessionReadiness ?? basis.parkingStatus],
-    ["Tariff", tariffExpired ? "EXPIRED" : basis.tariffReadiness ?? "UNKNOWN"],
-    ["Payment eligibility", basis.paymentEligibility ?? basis.paymentStatus],
-    ["Terminal cash", basis.terminalCashAvailability ?? "UNKNOWN"],
-    ["Sales Invoice configuration", basis.salesInvoiceConfigurationReadiness ?? "UNKNOWN"],
-    ["Fiscal readiness", basis.fiscalReadiness ?? "UNKNOWN"],
+    { label: "Session", value: basis.sessionReadiness ?? basis.parkingStatus, testId: "session-readiness-value" },
+    { label: "Tariff", value: tariffExpired ? "EXPIRED" : basis.tariffReadiness ?? "UNKNOWN", testId: "tariff-readiness-value" },
+    { label: "Payment eligibility", value: basis.paymentEligibility ?? basis.paymentStatus, testId: "payment-eligibility-value" },
+    { label: "Terminal cash", value: basis.terminalCashAvailability ?? "UNKNOWN", testId: "terminal-cash-readiness-value" },
+    { label: "Sales Invoice configuration", value: basis.salesInvoiceConfigurationReadiness ?? "UNKNOWN", testId: "sales-invoice-readiness-value" },
+    { label: "Fiscal readiness", value: basis.fiscalReadiness ?? "UNKNOWN", testId: "fiscal-readiness-value" },
   ];
 
   return (
-    <StatusNotice tone={ready ? "success" : basis.retryable ? "info" : "danger"} title={ready ? "Ready for cash acceptance" : "Cash acceptance blocked"}>
+    <StatusNotice tone={ready ? "success" : basis.retryable ? "info" : "danger"} title={ready ? "Ready for cash acceptance" : "Cash acceptance blocked"} dataTestId="cash-readiness-status">
       <p>{ready ? "Central PMS confirmed all pre-cash readiness checks. Revalidation will still run immediately before CASH_RECEIVED." : blockerMessage(basis)}</p>
       <dl className="central-pms-details">
-        {dimensions.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{friendlyCode(value)}</dd></div>)}
+        {dimensions.map((dimension) => <div key={dimension.label}><dt>{dimension.label}</dt><dd data-testid={dimension.testId}>{friendlyCode(dimension.value)}</dd></div>)}
       </dl>
       {basis.blockingReasonCodes.length > 0 && (
         <details>
@@ -649,8 +649,18 @@ function FailureNotice({ result, onReset }: { result: Exclude<CentralPmsResult, 
   );
 }
 
-function StatusNotice({ tone, title, children }: { tone: "info" | "success" | "danger"; title: string; children: React.ReactNode }) {
-  return <section className={`status-notice ${tone}`} role={tone === "danger" ? "alert" : "status"}><h3>{title}</h3><div>{children}</div></section>;
+function StatusNotice({
+  tone,
+  title,
+  children,
+  dataTestId,
+}: {
+  tone: "info" | "success" | "danger";
+  title: string;
+  children: React.ReactNode;
+  dataTestId?: string;
+}) {
+  return <section className={`status-notice ${tone}`} role={tone === "danger" ? "alert" : "status"} data-testid={dataTestId}><h3>{title}</h3><div>{children}</div></section>;
 }
 
 function basisFromState(state: PayableBasisStateSnapshot): PayableBasisResponse {
@@ -704,7 +714,7 @@ function blockerMessage(basis: PayableBasisResponse): string {
     AMOUNT_CHANGED: "Parking fee changed before cash acceptance.",
     VENDOR_PMS_UNAVAILABLE: "Central PMS or Vendor PMS is temporarily unavailable.",
   };
-  return basis.safeMessage ?? messages[first] ?? friendlyCode(first);
+  return messages[first] ?? basis.safeMessage ?? friendlyCode(first);
 }
 
 function friendlyCode(value?: string | null): string {

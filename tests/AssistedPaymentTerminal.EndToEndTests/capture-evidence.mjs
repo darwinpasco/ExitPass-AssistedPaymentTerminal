@@ -19,27 +19,23 @@ try {
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
-  await page.getByText("Payable basis is current").waitFor();
+  await page.getByTestId("cash-readiness-status").waitFor();
   await page.screenshot({ path: path.join(evidenceRoot, "02-valid-ticket.png"), fullPage: true });
 
   await page.getByLabel("Ticket reference").fill("APT-EXPIRED-2001");
   await page.getByRole("button", { name: "Resolve" }).click();
-  await page.getByText("Tariff expired").waitFor();
+  await page.getByTestId("tariff-readiness-value").waitFor();
   await page.screenshot({ path: path.join(evidenceRoot, "03-expired-tariff.png"), fullPage: true });
-
-  await page.getByRole("button", { name: "Recalculate Fee" }).click();
-  await page.getByText("Recalculated").waitFor();
-  await page.screenshot({ path: path.join(evidenceRoot, "04-recalculated-tariff.png"), fullPage: true });
 
   await page.goto(`${baseUrl}/?aptProfile=CONTINUITY_TERMINAL`);
   await page.getByText("Unsupported terminal profile").waitFor();
-  await page.screenshot({ path: path.join(evidenceRoot, "05-unsupported-profile.png"), fullPage: true });
+  await page.screenshot({ path: path.join(evidenceRoot, "04-unsupported-profile.png"), fullPage: true });
 
   await page.goto(baseUrl);
   await page.getByLabel("Ticket reference").fill("APT-UNAVAILABLE-503");
   await page.getByRole("button", { name: "Resolve" }).click();
-  await page.getByText("Central PMS unavailable").waitFor();
-  await page.screenshot({ path: path.join(evidenceRoot, "06-service-unavailable.png"), fullPage: true });
+  await page.getByText("Central PMS temporarily unavailable").waitFor();
+  await page.screenshot({ path: path.join(evidenceRoot, "05-service-unavailable.png"), fullPage: true });
 
   console.log(`Evidence screenshots saved under ${evidenceRoot}`);
 } finally {

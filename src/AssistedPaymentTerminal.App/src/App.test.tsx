@@ -56,8 +56,19 @@ describe("App startup and payable-basis readiness workflow", () => {
 
     expect(await screen.findByText("Authoritative payable basis")).toBeInTheDocument();
     expect(screen.getByText("APT-ACTIVE-1001")).toBeInTheDocument();
-    expect(screen.getByText("Ready for cash acceptance")).toBeInTheDocument();
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("₱125.00");
+    expect(screen.getByTestId("cash-readiness-status")).toHaveTextContent("Ready for cash acceptance");
+    expect(screen.getByTestId("session-readiness-value")).toHaveTextContent("Resolved Payable");
+    expect(screen.getByTestId("tariff-readiness-value")).toHaveTextContent("Current");
+    expect(screen.getByTestId("payment-eligibility-value")).toHaveTextContent("Eligible");
+    expect(screen.getByTestId("terminal-cash-readiness-value")).toHaveTextContent("Available");
+    expect(screen.getByTestId("sales-invoice-readiness-value")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("fiscal-readiness-value")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("central-cash-ready-value")).toHaveTextContent("true");
+    expect(screen.getByTestId("local-cash-prerequisites-value")).toHaveTextContent("Blocked");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
     expect(screen.getByText(/Revalidation will still run immediately before CASH_RECEIVED/)).toBeInTheDocument();
+    expect(screen.queryByText("Payable basis is current")).not.toBeInTheDocument();
   });
 
   it("resolves a plate without requiring a ticket", async () => {
@@ -68,7 +79,7 @@ describe("App startup and payable-basis readiness workflow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     expect(await screen.findByText("PLATE-READY-1002")).toBeInTheDocument();
-    expect(screen.getByText("Ready for cash acceptance")).toBeInTheDocument();
+    expect(screen.getByTestId("cash-readiness-status")).toHaveTextContent("Ready for cash acceptance");
   });
 
   it("shows not-found failure with support reference and recovery path", async () => {
@@ -90,6 +101,8 @@ describe("App startup and payable-basis readiness workflow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     expect(await screen.findByText("Cash acceptance blocked")).toBeInTheDocument();
+    expect(screen.getByTestId("central-cash-ready-value")).toHaveTextContent("false");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
     expect(screen.getByText(/Sales Invoice configuration is incomplete|Cash acceptance is blocked by Central PMS readiness/)).toBeInTheDocument();
   });
 
