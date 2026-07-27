@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import type { ResolveVendorParkingResponse } from "./api/centralPmsTypes";
 import { CashCapturePanel } from "./CashCapturePanel";
 import type { AptConfig } from "./config";
@@ -323,16 +323,31 @@ function buildScenarioSession(config: AptConfig, scenario: ReceiptVisualSmokeSce
     lookupOutcome: "RESOLVED",
     plateNumber: "APT-2026",
     ticketReference: scenario.ticketReference,
+    entryTimestamp: issued,
     entryTime: issued,
+    tariffCalculatedAt: issued,
     currentFeeCalculationTime: issued,
+    authoritativeAmountMinorUnits: 12500,
     netPayableMinorUnits: 12500,
     currency: "PHP",
+    tariffValidUntil: expires,
     tariffExpiresAt: expires,
     feeValidUntil: expires,
     parkingStatus: "ACTIVE",
     paymentStatus: "UNPAID",
     statutoryDiscountApplied: false,
     vendorSystemId: config.vendorSystemId,
+    sessionReadiness: "RESOLVED_PAYABLE",
+    tariffReadiness: "CURRENT",
+    paymentEligibility: "ELIGIBLE",
+    terminalCashAvailability: "AVAILABLE",
+    fiscalReadiness: "READY",
+    salesInvoiceConfigurationReadiness: "READY",
+    cashAcceptanceReadiness: "READY",
+    readyForCashAcceptance: true,
+    blockingReasonCodes: [],
+    retryable: false,
+    safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
     correlationId: `receipt-visual-smoke:${scenario.id}`,
   };
 }

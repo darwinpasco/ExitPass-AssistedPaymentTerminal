@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,6 +18,8 @@ public sealed class LocalJournalBridgeHandler
         LocalJournalBridgeCommand.StartTender,
         LocalJournalBridgeCommand.RecordCashReceived,
         LocalJournalBridgeCommand.ReadTenderByParkingSession,
+        LocalJournalBridgeCommand.PayableBasisStateSave,
+        LocalJournalBridgeCommand.PayableBasisStateGetLatest,
         LocalJournalBridgeCommand.CentralPmsCashSubmissionGetStatus,
         LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback,
         LocalJournalBridgeCommand.CentralPmsCashFiscalGetStatus,
@@ -183,6 +185,8 @@ public sealed class LocalJournalBridgeHandler
                 LocalJournalBridgeCommand.StartTender => await StartTenderAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.RecordCashReceived => await RecordCashReceivedAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.ReadTenderByParkingSession => await ReadTenderByParkingSessionAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.PayableBasisStateSave => await SavePayableBasisStateAsync(request, cancellationToken).ConfigureAwait(false),
+                LocalJournalBridgeCommand.PayableBasisStateGetLatest => await GetLatestPayableBasisStateAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashSubmissionGetStatus => await GetCentralPmsCashSubmissionStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback => await SubmitOrReadbackCentralPmsCashSubmissionAsync(request, cancellationToken).ConfigureAwait(false),
                 LocalJournalBridgeCommand.CentralPmsCashFiscalGetStatus => await GetCentralPmsCashFiscalStatusAsync(request, cancellationToken).ConfigureAwait(false),
@@ -292,6 +296,57 @@ public sealed class LocalJournalBridgeHandler
         return BridgeResult(request, result);
     }
 
+
+    private async Task<string> SavePayableBasisStateAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<SavePayableBasisStatePayload>(request);
+        var result = await _journal.SavePayableBasisStateAsync(new SavePayableBasisStateRequest(
+            payload.LocalWorkflowId,
+            payload.LookupReferenceType,
+            payload.LookupReferenceValue,
+            payload.ParkingSessionId,
+            payload.TariffSnapshotId,
+            payload.SiteId,
+            payload.SiteGroupId,
+            payload.SitePosServerId,
+            payload.TerminalId,
+            payload.AuthoritativeAmountMinorUnits,
+            payload.Currency,
+            payload.TariffCalculatedAt,
+            payload.TariffValidUntil,
+            payload.FeeValidUntil,
+            payload.ParkingStatus,
+            payload.PaymentStatus,
+            payload.SessionReadiness,
+            payload.TariffReadiness,
+            payload.PaymentEligibility,
+            payload.TerminalCashAvailability,
+            payload.FiscalReadiness,
+            payload.SalesInvoiceConfigurationReadiness,
+            payload.CashAcceptanceReadiness,
+            payload.ReadyForCashAcceptance,
+            payload.BlockingReasonCodes,
+            payload.Retryable,
+            payload.SafeUserFacingClassification,
+            payload.CentralPmsCorrelationId,
+            payload.RevalidationOutcome,
+            payload.CashierAcknowledgementRequired,
+            payload.AmountChanged,
+            payload.PriorDisplayedAmountMinorUnits), cancellationToken).ConfigureAwait(false);
+
+        return SerializeSuccess(request.Command, request.CorrelationId, result);
+    }
+
+    private async Task<string> GetLatestPayableBasisStateAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
+    {
+        var payload = ReadPayload<GetLatestPayableBasisStatePayload>(request);
+        var result = await _journal.GetLatestPayableBasisStateAsync(
+            payload.TerminalId,
+            payload.SiteId,
+            cancellationToken).ConfigureAwait(false);
+
+        return SerializeSuccess(request.Command, request.CorrelationId, result);
+    }
     private async Task<string> GetCentralPmsCashSubmissionStatusAsync(
         LocalJournalBridgeRequest request,
         CancellationToken cancellationToken)
@@ -1606,3 +1661,41 @@ public sealed record CentralPmsCashReceiptCommandSnapshot(
             command.CreatedAt,
             command.UpdatedAt);
 }
+
+public sealed record SavePayableBasisStatePayload(
+    string LocalWorkflowId,
+    string LookupReferenceType,
+    string LookupReferenceValue,
+    string ParkingSessionId,
+    string TariffSnapshotId,
+    string SiteId,
+    string SiteGroupId,
+    string? SitePosServerId,
+    string TerminalId,
+    long AuthoritativeAmountMinorUnits,
+    string Currency,
+    DateTimeOffset? TariffCalculatedAt,
+    DateTimeOffset TariffValidUntil,
+    DateTimeOffset? FeeValidUntil,
+    string ParkingStatus,
+    string PaymentStatus,
+    string? SessionReadiness,
+    string? TariffReadiness,
+    string? PaymentEligibility,
+    string? TerminalCashAvailability,
+    string? FiscalReadiness,
+    string? SalesInvoiceConfigurationReadiness,
+    string? CashAcceptanceReadiness,
+    bool ReadyForCashAcceptance,
+    IReadOnlyList<string> BlockingReasonCodes,
+    bool Retryable,
+    string SafeUserFacingClassification,
+    string CentralPmsCorrelationId,
+    string? RevalidationOutcome,
+    bool CashierAcknowledgementRequired,
+    bool AmountChanged,
+    long? PriorDisplayedAmountMinorUnits);
+
+public sealed record GetLatestPayableBasisStatePayload(
+    string TerminalId,
+    string SiteId);

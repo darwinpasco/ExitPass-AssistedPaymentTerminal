@@ -2,6 +2,7 @@ param(
   [int]$WebUiPort = 5179,
   [int]$CentralPmsPort = 5180,
   [string]$DatabasePath,
+  [switch]$PayableBasisVisualSmoke,
   [switch]$CleanupDatabaseOnExit
 )
 
@@ -132,20 +133,40 @@ try {
   $env:APT_SITE_TIME_ZONE_ID = "Singapore Standard Time"
   $env:CENTRAL_PMS_BASE_URL = "http://127.0.0.1:$CentralPmsPort"
 
-  $visualSmokeUrl = "http://127.0.0.1:$WebUiPort/?receiptVisualSmoke=1"
-  Write-Host "Development-only receipt visual smoke launcher"
+  $visualSmokeUrl = if ($PayableBasisVisualSmoke) {
+    "http://127.0.0.1:$WebUiPort/?payableBasisVisualSmoke=1"
+  } else {
+    "http://127.0.0.1:$WebUiPort/?receiptVisualSmoke=1"
+  }
+  Write-Host $(if ($PayableBasisVisualSmoke) { "Development-only payable-basis visual smoke launcher" } else { "Development-only receipt visual smoke launcher" })
   Write-Host "WebView URL: $visualSmokeUrl"
   Write-Host "Desktop window: ExitPass Assisted Payment Terminal"
   Write-Host "Central PMS fixture: $env:CENTRAL_PMS_BASE_URL"
   Write-Host "SQLite journal: $databasePath"
   Write-Host ""
-  Write-Host "Scenario buttons in the desktop window:"
-  Write-Host "- Temporarily unavailable"
-  Write-Host "- Available"
-  Write-Host "- Terminal failure"
-  Write-Host "- Incomplete configuration"
-  Write-Host "- Restart-recovery setup"
-  Write-Host ""
+  if ($PayableBasisVisualSmoke) {
+    Write-Host "Scenario buttons in the desktop window:"
+    Write-Host "- Ticket ready for cash"
+    Write-Host "- Plate ready for cash"
+    Write-Host "- Fiscal readiness blocked"
+    Write-Host "- Session already paid"
+    Write-Host "- Vendor PMS temporarily unavailable"
+    Write-Host "- Revalidation passed unchanged"
+    Write-Host "- Revalidation amount changed"
+    Write-Host "- Restart recovery before cash acceptance"
+    Write-Host ""
+    Write-Host "Restart recovery: choose Restart recovery before cash acceptance, click Resolve, then click Simulate restart."
+    Write-Host "The restored state remains before CASH_RECEIVED and requires revalidation before cash capture."
+    Write-Host ""
+  } else {
+    Write-Host "Scenario buttons in the desktop window:"
+    Write-Host "- Temporarily unavailable"
+    Write-Host "- Available"
+    Write-Host "- Terminal failure"
+    Write-Host "- Incomplete configuration"
+    Write-Host "- Restart-recovery setup"
+    Write-Host ""
+  }
   Write-Host "Controlled print checks:"
   Write-Host "- Original print available"
   Write-Host "- Reprint"

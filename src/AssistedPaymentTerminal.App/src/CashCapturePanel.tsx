@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
-import type { ResolveVendorParkingResponse } from "./api/centralPmsTypes";
+import type { PayableBasisResponse } from "./api/centralPmsTypes";
 import type { TerminalContext } from "./terminalContext";
 import {
   createWebViewLocalJournalBridge,
@@ -24,7 +24,7 @@ import {
 type PanelStatus =
   | { kind: "idle" }
   | { kind: "checking"; message: string }
-  | { kind: "ready"; health: LocalJournalHealth; session: CashCustodySessionSnapshot; readback: LocalTenderReadback }
+  | { kind: "ready"; health: LocalJournalHealth; readback: LocalTenderReadback }
   | { kind: "success"; tender: CashTenderSnapshot; readback: LocalTenderReadback; correlationId: string }
   | { kind: "conflict"; existingTenderId?: string; existingState?: string; message: string; correlationId: string }
   | { kind: "error"; message: string };
@@ -86,17 +86,25 @@ export function CashCapturePanel({
   context,
   session,
   tariffExpired,
+  cashAcceptanceReady = !tariffExpired,
+  cashAcceptanceBlockedMessage = "Central PMS has not marked this payable basis ready for cash acceptance.",
+  onBeforeCashReceived,
+  onLocalPrerequisiteFailure,
   bridge = defaultBridge,
   developmentFixtureLocalCashTenderId,
 }: {
   config: AptConfig;
   context: TerminalContext;
-  session: ResolveVendorParkingResponse;
+  session: PayableBasisResponse;
   tariffExpired: boolean;
+  cashAcceptanceReady?: boolean;
+  cashAcceptanceBlockedMessage?: string;
+  onBeforeCashReceived?: (session: PayableBasisResponse) => Promise<{ ok: true; basis: PayableBasisResponse } | { ok: false; message: string }>;
+  onLocalPrerequisiteFailure?: (message: string | null) => void;
   bridge?: LocalJournalBridge;
   developmentFixtureLocalCashTenderId?: string;
 }) {
-  const amountDue = session.netPayableMinorUnits / 100;
+  const amountDue = session.authoritativeAmountMinorUnits / 100;
   const [amountTenderedText, setAmountTenderedText] = useState(amountDue.toFixed(2));
   const [cashierAttested, setCashierAttested] = useState(false);
   const [denominationCounts, setDenominationCounts] = useState<Record<string, number>>({});
@@ -128,7 +136,7 @@ export function CashCapturePanel({
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
-    if (!config.nonLiveCashCaptureEnabled || tariffExpired) {
+    if (!config.nonLiveCashCaptureEnabled || tariffExpired || !cashAcceptanceReady) {
       return;
     }
 
@@ -145,30 +153,12 @@ export function CashCapturePanel({
         return;
       }
 
-      const sessionResult = await bridge.createOrGetDevelopmentSession(createCorrelationId(), {
-        cashierId: context.cashierId,
-        authenticatedCashierSessionReference: `dev-auth:${context.cashierId}:${context.shiftId}`,
-        cashierShiftId: context.shiftId,
-        terminalId: context.terminalId,
-        siteId: context.siteId,
-        siteGroupId: context.siteGroupId,
-        posServerId: context.posServerId,
-        openingCashAmount: 0,
-      });
-
-      if (cancelled) return;
-      if (!sessionResult.ok) {
-        setStatus({ kind: "error", message: sessionResult.error.message });
-        return;
-      }
-
       const readback = await bridge.readTenderByParkingSession(createCorrelationId(), session.parkingSessionId);
       if (cancelled) return;
 
       setStatus({
         kind: "ready",
         health: health.payload,
-        session: sessionResult.payload,
         readback: readback.ok ? readback.payload : { tender: null, events: [] },
       });
     }
@@ -178,7 +168,7 @@ export function CashCapturePanel({
     return () => {
       cancelled = true;
     };
-  }, [bridge, config.nonLiveCashCaptureEnabled, context, session.parkingSessionId, tariffExpired]);
+  }, [bridge, cashAcceptanceReady, config.nonLiveCashCaptureEnabled, context, session.parkingSessionId, tariffExpired]);
 
   const existingTender =
     status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender ?? status.tender : null;
@@ -415,28 +405,49 @@ export function CashCapturePanel({
       return;
     }
 
-    if (status.kind !== "ready" && status.kind !== "success") {
+    if (status.kind !== "ready") {
       setStatus({ kind: "error", message: "Local journal is not ready." });
       return;
     }
 
-    const cashSession = status.kind === "ready" ? status.session : undefined;
-    if (!cashSession) {
-      setStatus({ kind: "error", message: "Local cash-custody session is not available." });
+    const revalidation = onBeforeCashReceived ? await onBeforeCashReceived(session) : { ok: true as const, basis: session };
+    if (!revalidation.ok) {
+      onLocalPrerequisiteFailure?.(revalidation.message);
+      setStatus({ kind: "error", message: revalidation.message });
+      setCashierAttested(false);
       return;
     }
 
+    onLocalPrerequisiteFailure?.(null);
+    const authoritativeBasis = revalidation.basis;
     const correlationId = createCorrelationId();
-    const tariffSnapshotId = session.effectiveTariffSnapshotId ?? session.tariffSnapshotId;
+    const sessionResult = await bridge.createOrGetDevelopmentSession(createCorrelationId(), {
+      cashierId: context.cashierId,
+      authenticatedCashierSessionReference: `dev-auth:${context.cashierId}:${context.shiftId}`,
+      cashierShiftId: context.shiftId,
+      terminalId: context.terminalId,
+      siteId: context.siteId,
+      siteGroupId: context.siteGroupId,
+      posServerId: context.posServerId,
+      openingCashAmount: 0,
+    });
+
+    if (!sessionResult.ok) {
+      setStatus({ kind: "error", message: sessionResult.error.message });
+      return;
+    }
+
+    const cashSession = sessionResult.payload;
+    const tariffSnapshotId = authoritativeBasis.tariffSnapshotId;
     const started = await bridge.startTender(correlationId, {
       ...(developmentFixtureLocalCashTenderId ? { localCashTenderId: developmentFixtureLocalCashTenderId } : {}),
       cashCustodySessionId: cashSession.id,
-      parkingSessionId: session.parkingSessionId,
+      parkingSessionId: authoritativeBasis.parkingSessionId,
       tariffSnapshotId,
-      currency: session.currency,
-      amountDue,
+      currency: authoritativeBasis.currency,
+      amountDue: authoritativeBasis.authoritativeAmountMinorUnits / 100,
       amountTendered,
-      localIdempotencyIdentity: `local-cash:${session.parkingSessionId}:${tariffSnapshotId}`,
+      localIdempotencyIdentity: `local-cash:${authoritativeBasis.parkingSessionId}:${tariffSnapshotId}`,
     });
 
     if (!started.ok) {
@@ -455,7 +466,7 @@ export function CashCapturePanel({
       return;
     }
 
-    const readback = await bridge.readTenderByParkingSession(createCorrelationId(), session.parkingSessionId);
+    const readback = await bridge.readTenderByParkingSession(createCorrelationId(), authoritativeBasis.parkingSessionId);
     setStatus({
       kind: "success",
       tender: received.payload,
@@ -662,11 +673,11 @@ export function CashCapturePanel({
   }
 
   async function attemptDuplicateTender() {
-    if (status.kind !== "ready" && status.kind !== "success") {
+    if (status.kind !== "success") {
       return;
     }
 
-    const cashSessionId = status.kind === "ready" ? status.session.id : status.readback.tender?.cashCustodySessionId;
+    const cashSessionId = status.readback.tender?.cashCustodySessionId;
     if (!cashSessionId) {
       return;
     }
@@ -675,7 +686,7 @@ export function CashCapturePanel({
     const duplicate = await bridge.startTender(correlationId, {
       cashCustodySessionId: cashSessionId,
       parkingSessionId: session.parkingSessionId,
-      tariffSnapshotId: session.effectiveTariffSnapshotId ?? session.tariffSnapshotId,
+      tariffSnapshotId: session.tariffSnapshotId,
       currency: session.currency,
       amountDue,
       amountTendered: amountDue,
@@ -705,7 +716,15 @@ export function CashCapturePanel({
       </div>
 
       <div className="authority-warning" role="status">
-        <strong>State at local cash capture:</strong> Cash received locally. At this checkpoint, canonical payment had not yet been submitted and fiscal issuance had not yet started. Exit authorization was unavailable.
+        {existingTender?.currentLocalState === "CashReceived" || status.kind === "success" ? (
+          <>
+            <strong>State at local cash capture:</strong> Cash received locally. At this checkpoint, canonical payment had not yet been submitted and fiscal issuance had not yet started. Exit authorization was unavailable.
+          </>
+        ) : (
+          <>
+            <strong>Cash has not yet been recorded at this terminal.</strong> Complete denomination entry and attest physical receipt before recording CASH_RECEIVED.
+          </>
+        )}
       </div>
 
       {status.kind === "checking" && <p className="support-line">{status.message}</p>}
@@ -785,7 +804,7 @@ export function CashCapturePanel({
             I attest: cash received at this terminal.
           </label>
 
-          <button type="button" onClick={() => void recordCashReceived()}>
+          <button type="button" disabled={!cashAcceptanceReady || status.kind === "checking"} onClick={() => void recordCashReceived()}>
             Record Cash Received
           </button>
         </>

@@ -1,4 +1,4 @@
-namespace AssistedPaymentTerminal.Desktop;
+﻿namespace AssistedPaymentTerminal.Desktop;
 
 public static class LocalJournalBridgeCommand
 {
@@ -8,6 +8,8 @@ public static class LocalJournalBridgeCommand
     public const string StartTender = "localJournal.startTender";
     public const string RecordCashReceived = "localJournal.recordCashReceived";
     public const string ReadTenderByParkingSession = "localJournal.readTenderByParkingSession";
+    public const string PayableBasisStateSave = "payableBasisState.save";
+    public const string PayableBasisStateGetLatest = "payableBasisState.getLatest";
     public const string CentralPmsCashSubmissionGetStatus = "centralPmsCashSubmission.getStatus";
     public const string CentralPmsCashSubmissionSubmitOrReadback = "centralPmsCashSubmission.submitOrReadback";
     public const string CentralPmsCashFiscalGetStatus = "centralPmsCashFiscal.getStatus";
