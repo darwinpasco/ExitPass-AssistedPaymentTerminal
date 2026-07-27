@@ -3,6 +3,7 @@ param(
   [int]$CentralPmsPort = 5180,
   [string]$DatabasePath,
   [switch]$PayableBasisVisualSmoke,
+  [switch]$TransactionCompletionVisualSmoke,
   [switch]$CleanupDatabaseOnExit
 )
 
@@ -133,18 +134,41 @@ try {
   $env:APT_SITE_TIME_ZONE_ID = "Singapore Standard Time"
   $env:CENTRAL_PMS_BASE_URL = "http://127.0.0.1:$CentralPmsPort"
 
-  $visualSmokeUrl = if ($PayableBasisVisualSmoke) {
+  $visualSmokeUrl = if ($TransactionCompletionVisualSmoke) {
+    "http://127.0.0.1:$WebUiPort/?transactionCompletionVisualSmoke=1"
+  } elseif ($PayableBasisVisualSmoke) {
     "http://127.0.0.1:$WebUiPort/?payableBasisVisualSmoke=1"
   } else {
     "http://127.0.0.1:$WebUiPort/?receiptVisualSmoke=1"
   }
-  Write-Host $(if ($PayableBasisVisualSmoke) { "Development-only payable-basis visual smoke launcher" } else { "Development-only receipt visual smoke launcher" })
+  Write-Host $(if ($TransactionCompletionVisualSmoke) { "Development-only transaction-completion visual smoke launcher" } elseif ($PayableBasisVisualSmoke) { "Development-only payable-basis visual smoke launcher" } else { "Development-only receipt visual smoke launcher" })
   Write-Host "WebView URL: $visualSmokeUrl"
   Write-Host "Desktop window: ExitPass Assisted Payment Terminal"
   Write-Host "Central PMS fixture: $env:CENTRAL_PMS_BASE_URL"
   Write-Host "SQLite journal: $databasePath"
   Write-Host ""
-  if ($PayableBasisVisualSmoke) {
+  if ($TransactionCompletionVisualSmoke) {
+    Write-Host "Scenario buttons in the desktop window:"
+    Write-Host "- CASH_RECEIVED awaiting submission"
+    Write-Host "- Terminal-cash submission accepted"
+    Write-Host "- Terminal-cash submission retryable"
+    Write-Host "- Payment finality pending"
+    Write-Host "- Payment final, fiscal pending"
+    Write-Host "- Fiscal retryable"
+    Write-Host "- Fiscal document recorded, receipt unavailable"
+    Write-Host "- Receipt available"
+    Write-Host "- Terminal payment failure"
+    Write-Host "- Terminal fiscal failure"
+    Write-Host "- Receipt malformed or unsupported"
+    Write-Host "- Restart after CASH_RECEIVED"
+    Write-Host "- Restart during payment pending"
+    Write-Host "- Restart during fiscal pending"
+    Write-Host "- Restart with receipt available"
+    Write-Host ""
+    Write-Host "ExitAuthorization pending/available scenarios are excluded because no APT-usable Central PMS ExitAuthorization readback contract was found."
+    Write-Host "Restart recovery: select a restart scenario and verify the same CASH_RECEIVED tender identity remains visible after relaunching with the same database."
+    Write-Host ""
+  } elseif ($PayableBasisVisualSmoke) {
     Write-Host "Scenario buttons in the desktop window:"
     Write-Host "- Ticket ready for cash"
     Write-Host "- Plate ready for cash"

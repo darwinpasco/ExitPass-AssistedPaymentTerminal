@@ -10,6 +10,10 @@ import {
   PayableBasisVisualSmokeShell,
   shouldUsePayableBasisVisualSmoke,
 } from "./PayableBasisVisualSmoke";
+import {
+  TransactionCompletionVisualSmokeShell,
+  shouldUseTransactionCompletionVisualSmoke,
+} from "./TransactionCompletionVisualSmoke";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type PayableBasisStateSnapshot } from "./localJournalBridge";
 
@@ -67,6 +71,10 @@ export function App() {
 
   if (shouldUseReceiptVisualSmoke(window.location.search)) {
     return <ReceiptVisualSmokeShell config={configResult.config} />;
+  }
+
+  if (shouldUseTransactionCompletionVisualSmoke(window.location.search)) {
+    return <TransactionCompletionVisualSmokeShell config={configResult.config} />;
   }
 
   return <TerminalShell config={configResult.config} client={createCentralPmsClient(configResult.config)} />;

@@ -302,6 +302,7 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
           tariffExpired={false}
           bridge={bridge}
           developmentFixtureLocalCashTenderId={scenario.terminalCashTenderId}
+          autoAdvanceAfterCashReceived={false}
         />
       </div>
     </main>

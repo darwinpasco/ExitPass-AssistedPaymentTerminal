@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import type { PayableBasisResponse } from "./api/centralPmsTypes";
@@ -92,6 +92,7 @@ export function CashCapturePanel({
   onLocalPrerequisiteFailure,
   bridge = defaultBridge,
   developmentFixtureLocalCashTenderId,
+  autoAdvanceAfterCashReceived = true,
 }: {
   config: AptConfig;
   context: TerminalContext;
@@ -103,6 +104,7 @@ export function CashCapturePanel({
   onLocalPrerequisiteFailure?: (message: string | null) => void;
   bridge?: LocalJournalBridge;
   developmentFixtureLocalCashTenderId?: string;
+  autoAdvanceAfterCashReceived?: boolean;
 }) {
   const amountDue = session.authoritativeAmountMinorUnits / 100;
   const [amountTenderedText, setAmountTenderedText] = useState(amountDue.toFixed(2));
@@ -117,6 +119,9 @@ export function CashCapturePanel({
   const [receiptPrintHistoryStatus, setReceiptPrintHistoryStatus] = useState<ReceiptPrintHistoryStatus>({ kind: "idle" });
   const [receiptPrintHistoryOpen, setReceiptPrintHistoryOpen] = useState(false);
   const [receiptPrintHistoryFilter, setReceiptPrintHistoryFilter] = useState<"All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation">("All");
+  const autoSubmissionKeys = useRef(new Set<string>());
+  const autoFiscalKeys = useRef(new Set<string>());
+  const autoReceiptKeys = useRef(new Set<string>());
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -182,6 +187,14 @@ export function CashCapturePanel({
   const receiptCommand = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
   const receiptPreviewEligible = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided";
   const receiptPrintEligible = receiptPreviewEligible && config.receiptPrintingEnabled;
+  const transactionState = buildCashierTransactionState({
+    localTender: existingTender,
+    centralPmsStatus,
+    fiscalStatus,
+    receiptStatus,
+    receiptPreviewEligible,
+    exitAuthorizationContractAvailable: false,
+  });
 
   useEffect(() => {
     if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
@@ -369,6 +382,86 @@ export function CashCapturePanel({
       cancelled = true;
     };
   }, [bridge, existingTender?.id, receiptPrintEligible]);
+
+  useEffect(() => {
+    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !centralPmsConfig.valid) {
+      return;
+    }
+
+    if (centralPmsStatus.kind !== "ready") {
+      return;
+    }
+
+    const command = centralPmsStatus.status.command;
+    const eligibleStatuses = new Set([undefined, "Pending", "ReadbackRequired", "RetryPending"]);
+    if (!eligibleStatuses.has(command?.status)) {
+      return;
+    }
+
+    const key = `${existingTender.id}:payment:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
+    if (autoSubmissionKeys.current.has(key)) {
+      return;
+    }
+
+    autoSubmissionKeys.current.add(key);
+    void submitOrReadbackCentralPms();
+  }, [autoAdvanceAfterCashReceived, centralPmsConfig.valid, centralPmsStatus, existingTender?.id, existingTender?.currentLocalState]);
+
+  useEffect(() => {
+    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed || !fiscalConfig.valid) {
+      return;
+    }
+
+    if (fiscalStatus.kind !== "ready") {
+      return;
+    }
+
+    const command = fiscalStatus.status.command;
+    const eligibleStatuses = new Set([undefined, "Pending", "ReadbackRequired", "RetryPending", "Unknown"]);
+    if (!eligibleStatuses.has(command?.status)) {
+      return;
+    }
+
+    const key = `${existingTender.id}:fiscal:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
+    if (autoFiscalKeys.current.has(key)) {
+      return;
+    }
+
+    autoFiscalKeys.current.add(key);
+    void submitOrReadbackFiscal();
+  }, [autoAdvanceAfterCashReceived, canonicalPaymentConfirmed, existingTender?.id, existingTender?.currentLocalState, fiscalConfig.valid, fiscalStatus]);
+
+  useEffect(() => {
+    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed || !fiscalRecorded || !receiptConfig.valid) {
+      return;
+    }
+
+    if (receiptStatus.kind !== "ready") {
+      return;
+    }
+
+    const command = receiptStatus.status.command;
+    const eligibleStatuses = new Set([undefined, "Pending", "NotReady", "RetryPending", "Unavailable"]);
+    if (!eligibleStatuses.has(command?.status) || command?.lastRetryable === false) {
+      return;
+    }
+
+    const key = `${existingTender.id}:receipt:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
+    if (autoReceiptKeys.current.has(key)) {
+      return;
+    }
+
+    autoReceiptKeys.current.add(key);
+    void retrieveOrCheckReceipt();
+  }, [
+    autoAdvanceAfterCashReceived,
+    canonicalPaymentConfirmed,
+    existingTender?.id,
+    existingTender?.currentLocalState,
+    fiscalRecorded,
+    receiptConfig.valid,
+    receiptStatus,
+  ]);
 
   const denominationPayload = useMemo(
     () =>
@@ -820,6 +913,10 @@ export function CashCapturePanel({
         </div>
       )}
 
+      {existingTender?.currentLocalState === "CashReceived" && (
+        <CashierTransactionStatePanel state={transactionState} />
+      )}
+
       {config.centralPmsCashSubmissionEnabled && existingTender?.currentLocalState === "CashReceived" && (
         <CentralPmsCanonicalPaymentPanel
           centralPmsStatus={centralPmsStatus}
@@ -934,6 +1031,197 @@ function centralPmsReceiptConfig(config: AptConfig): { valid: boolean; message: 
   }
 }
 
+type CashierTransactionState = {
+  custody: string;
+  terminalCashSubmission: string;
+  paymentFinality: string;
+  fiscalIssuance: string;
+  receiptPresentation: string;
+  exitAuthorization: string;
+  completion: "TRANSACTION_IN_PROGRESS" | "TRANSACTION_REQUIRES_RETRY" | "TRANSACTION_REQUIRES_SUPPORT" | "TRANSACTION_COMPLETE";
+  headline: string;
+  supportReference: string | null;
+  latestUpdatedAt: string | null;
+  terminalCashTenderId: string | null;
+  paymentConfirmationId: string | null;
+  fiscalDocumentNumber: string | null;
+};
+
+function buildCashierTransactionState({
+  localTender,
+  centralPmsStatus,
+  fiscalStatus,
+  receiptStatus,
+  receiptPreviewEligible,
+  exitAuthorizationContractAvailable,
+}: {
+  localTender: CashTenderSnapshot | null;
+  centralPmsStatus: CentralPmsPanelStatus;
+  fiscalStatus: FiscalPanelStatus;
+  receiptStatus: ReceiptPanelStatus;
+  receiptPreviewEligible: boolean;
+  exitAuthorizationContractAvailable: boolean;
+}): CashierTransactionState {
+  const paymentCommand = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
+  const fiscalCommand = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
+  const receiptCommand = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
+  const paymentTerminal = paymentCommand?.status === "Conflict" || paymentCommand?.status === "Rejected" || centralPmsStatus.kind === "error";
+  const fiscalTerminal = fiscalCommand?.status === "Conflict" || fiscalCommand?.status === "Rejected" || fiscalStatus.kind === "error";
+  const receiptTerminal =
+    receiptCommand?.status === "Inconsistent"
+    || receiptCommand?.status === "Rejected"
+    || receiptCommand?.status === "Unsupported"
+    || receiptCommand?.status === "Malformed"
+    || receiptStatus.kind === "error";
+  const retryRequired =
+    paymentCommand?.status === "RetryPending"
+    || fiscalCommand?.status === "RetryPending"
+    || fiscalCommand?.status === "ReadbackRequired"
+    || fiscalCommand?.status === "Unknown"
+    || receiptCommand?.status === "RetryPending"
+    || receiptCommand?.status === "Unavailable"
+    || receiptCommand?.status === "NotReady";
+  const paymentFinal = paymentCommand?.status === "Confirmed";
+  const fiscalRecorded = fiscalCommand?.status === "Recorded";
+  const receiptAvailable = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided" || receiptPreviewEligible;
+  const exitAuthorization = exitAuthorizationContractAvailable ? "EXIT_AUTHORIZATION_NOT_EVALUATED" : "EXIT_AUTHORIZATION_READBACK_CONTRACT_MISSING";
+  const authorizationBlocked = receiptAvailable && !exitAuthorizationContractAvailable;
+  // Completion requires durable cash custody plus authoritative payment, fiscal, receipt, and ExitAuthorization readback; no local ExitAuthorization inference is allowed.
+  const complete = Boolean(localTender?.currentLocalState === "CashReceived" && paymentFinal && fiscalRecorded && receiptAvailable && exitAuthorizationContractAvailable);
+
+  let completion: CashierTransactionState["completion"] = "TRANSACTION_IN_PROGRESS";
+  if (paymentTerminal || fiscalTerminal || receiptTerminal || authorizationBlocked) {
+    completion = "TRANSACTION_REQUIRES_SUPPORT";
+  } else if (retryRequired) {
+    completion = "TRANSACTION_REQUIRES_RETRY";
+  } else if (complete) {
+    completion = "TRANSACTION_COMPLETE";
+  }
+
+  return {
+    custody: localTender?.currentLocalState === "CashReceived" ? "CASH_RECEIVED" : "CASH_NOT_RECEIVED",
+    terminalCashSubmission: mapPaymentSubmissionState(paymentCommand, centralPmsStatus),
+    paymentFinality: mapPaymentFinalityState(paymentCommand, centralPmsStatus),
+    fiscalIssuance: mapFiscalState(fiscalCommand, fiscalStatus),
+    receiptPresentation: mapReceiptState(receiptCommand, receiptStatus),
+    exitAuthorization,
+    completion,
+    headline: completionLabel(completion),
+    supportReference:
+      receiptCommand?.lastCentralPmsCorrelationId
+      ?? receiptCommand?.retrievalCorrelationId
+      ?? fiscalCommand?.fiscalCorrelationId
+      ?? paymentCommand?.originalCorrelationId
+      ?? localTender?.correlationId
+      ?? null,
+    latestUpdatedAt: receiptCommand?.updatedAt ?? fiscalCommand?.updatedAt ?? paymentCommand?.updatedAt ?? localTender?.updatedAt ?? null,
+    terminalCashTenderId: localTender?.id ?? paymentCommand?.terminalCashTenderId ?? fiscalCommand?.terminalCashTenderId ?? receiptCommand?.terminalCashTenderId ?? null,
+    paymentConfirmationId: paymentCommand?.canonicalPaymentConfirmationId ?? receiptCommand?.canonicalPaymentConfirmationId ?? null,
+    fiscalDocumentNumber: receiptCommand?.fiscalDocumentNumber ?? fiscalCommand?.fiscalDocumentNumber ?? null,
+  };
+}
+
+function mapPaymentSubmissionState(command: CentralPmsCashSubmissionStatus["command"], status: CentralPmsPanelStatus): string {
+  if (status.kind === "unavailable") return "TERMINAL_CASH_SUBMISSION_RETRYABLE";
+  if (status.kind === "error") return "TERMINAL_CASH_SUBMISSION_RETRYABLE";
+  if (!command) return "TERMINAL_CASH_NOT_SUBMITTED";
+  if (command.status === "Confirmed") return "TERMINAL_CASH_SUBMISSION_ACCEPTED";
+  if (command.status === "Conflict" || command.status === "Rejected") return "TERMINAL_CASH_SUBMISSION_FAILED";
+  if (command.status === "RetryPending") return "TERMINAL_CASH_SUBMISSION_RETRYABLE";
+  if (command.status === "ReadbackRequired") return "TERMINAL_CASH_SUBMISSION_ACCEPTED";
+  if (command.status === "Submitting") return "TERMINAL_CASH_SUBMISSION_PENDING";
+  return "TERMINAL_CASH_SUBMISSION_PENDING";
+}
+
+function mapPaymentFinalityState(command: CentralPmsCashSubmissionStatus["command"], status: CentralPmsPanelStatus): string {
+  if (command?.status === "Confirmed") return "PAYMENT_FINAL";
+  if (command?.status === "Conflict" || command?.status === "Rejected") return "PAYMENT_FINALITY_FAILED";
+  if (command?.status === "RetryPending" || status.kind === "error" || status.kind === "unavailable") return "PAYMENT_FINALITY_RETRYABLE";
+  if (command?.status === "ReadbackRequired" || command?.status === "Submitting") return "PAYMENT_FINALITY_PENDING";
+  return "PAYMENT_FINALITY_PENDING";
+}
+
+function mapFiscalState(command: CentralPmsCashFiscalStatus["command"], status: FiscalPanelStatus): string {
+  if (status.kind === "idle") return "FISCAL_NOT_STARTED";
+  if (status.kind === "loading") return "FISCAL_REQUESTED";
+  if (status.kind === "unavailable" || status.kind === "error") return "FISCAL_RETRYABLE";
+  if (!command) return "FISCAL_NOT_STARTED";
+  if (command.status === "Recorded") return "FISCAL_DOCUMENT_RECORDED";
+  if (command.status === "Conflict" || command.status === "Rejected") return "FISCAL_TERMINAL_FAILURE";
+  if (command.status === "RetryPending" || command.status === "ReadbackRequired") return "FISCAL_RETRYABLE";
+  if (command.status === "Unknown") return "FISCAL_UNKNOWN";
+  return command.status === "Pending" ? "FISCAL_PENDING" : "FISCAL_REQUESTED";
+}
+
+function mapReceiptState(command: CentralPmsCashReceiptStatus["command"], status: ReceiptPanelStatus): string {
+  if (status.kind === "idle") return "RECEIPT_NOT_REQUESTED";
+  if (status.kind === "loading") return "RECEIPT_PENDING";
+  if (status.kind === "unavailable" || status.kind === "error") return "RECEIPT_TEMPORARILY_UNAVAILABLE";
+  if (!command) return "RECEIPT_NOT_REQUESTED";
+  if (command.status === "Available") return "RECEIPT_AVAILABLE";
+  if (command.status === "Voided") return "RECEIPT_VOIDED";
+  if (command.status === "NotReady") return "RECEIPT_PENDING";
+  if (command.status === "RetryPending" || command.status === "Unavailable") return "RECEIPT_TEMPORARILY_UNAVAILABLE";
+  if (command.status === "Unsupported") return "RECEIPT_UNSUPPORTED";
+  if (command.status === "Malformed") return "RECEIPT_MALFORMED";
+  if (command.status === "Rejected" || command.status === "Inconsistent") return "RECEIPT_TERMINAL_FAILURE";
+  return "RECEIPT_PENDING";
+}
+
+function completionLabel(completion: CashierTransactionState["completion"]): string {
+  switch (completion) {
+    case "TRANSACTION_COMPLETE":
+      return "Transaction complete";
+    case "TRANSACTION_REQUIRES_RETRY":
+      return "Transaction requires retry";
+    case "TRANSACTION_REQUIRES_SUPPORT":
+      return "Transaction requires support";
+    default:
+      return "Transaction in progress";
+  }
+}
+
+function friendlyState(value: string): string {
+  return value.replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
+}
+
+function CashierTransactionStatePanel({ state }: { state: CashierTransactionState }) {
+  return (
+    <section
+      className={`central-pms-panel transaction-state ${state.completion === "TRANSACTION_COMPLETE" ? "confirmed" : state.completion === "TRANSACTION_REQUIRES_SUPPORT" ? "blocked" : ""}`}
+      aria-label="Cashier transaction state"
+      role={state.completion === "TRANSACTION_REQUIRES_SUPPORT" ? "alert" : "status"}
+      data-testid="cashier-transaction-state"
+    >
+      <div className="central-pms-status-row">
+        <h3>Cashier transaction state</h3>
+        <strong>{state.headline}</strong>
+      </div>
+      <p>Completion uses durable local CASH_RECEIVED evidence plus authoritative Central PMS payment, fiscal, and receipt readback. Receipt preview or printing does not complete the transaction.</p>
+      <dl className="central-pms-details">
+        <PreviewMeta label="Cash custody" value={friendlyState(state.custody)} testId="cash-custody-state" />
+        <PreviewMeta label="Terminal-cash submission" value={friendlyState(state.terminalCashSubmission)} testId="terminal-cash-submission-state" />
+        <PreviewMeta label="Payment finality" value={friendlyState(state.paymentFinality)} testId="payment-finality-state" />
+        <PreviewMeta label="Fiscal issuance" value={friendlyState(state.fiscalIssuance)} testId="fiscal-issuance-state" />
+        <PreviewMeta label="Receipt presentation" value={friendlyState(state.receiptPresentation)} testId="receipt-presentation-state" />
+        <PreviewMeta label="Exit authorization" value={friendlyState(state.exitAuthorization)} testId="exit-authorization-state" />
+        <PreviewMeta label="Cashier completion" value={friendlyState(state.completion)} testId="cashier-completion-state" />
+        <PreviewMeta label="Terminal cash tender ID" value={state.terminalCashTenderId} />
+        <PreviewMeta label="Payment confirmation ID" value={state.paymentConfirmationId} />
+        <PreviewMeta label="Sales Invoice No." value={state.fiscalDocumentNumber} />
+        <PreviewMeta label="Latest update" value={state.latestUpdatedAt ? formatDateTime(state.latestUpdatedAt) : null} />
+        <PreviewMeta label="Support reference" value={state.supportReference} />
+      </dl>
+      {state.exitAuthorization === "EXIT_AUTHORIZATION_READBACK_CONTRACT_MISSING" && (
+        <p>ExitAuthorization readback is not evaluated in this desktop slice because no APT-usable Central PMS readback contract is present. No authorization is inferred locally.</p>
+      )}
+      {state.completion === "TRANSACTION_COMPLETE" && (
+        <p>The cashier may start a new transaction after local evidence is preserved. No gate action is created.</p>
+      )}
+    </section>
+  );
+}
+
 function CentralPmsCanonicalPaymentPanel({
   centralPmsStatus,
   onSubmitOrReadback,
@@ -980,8 +1268,9 @@ function CentralPmsCanonicalPaymentPanel({
   const confirmed = status === "Confirmed";
   const conflict = status === "Conflict";
   const rejected = status === "Rejected";
+  const readbackOnly = status === "ReadbackRequired";
   const retry =
-    status === "Pending" || status === "RetryPending" || status === "ReadbackRequired" || status === "Submitting" || !command;
+    status === "Pending" || status === "RetryPending" || status === "Submitting" || !command;
   const replay = command?.resultClassification === "IDEMPOTENT_REPLAY";
 
   return (
@@ -992,7 +1281,7 @@ function CentralPmsCanonicalPaymentPanel({
     >
       <div className="central-pms-status-row">
         <h3>Central PMS canonical payment</h3>
-        <strong>{confirmed ? "Canonical payment confirmed" : conflict ? "Conflict - support review required" : rejected ? "Rejected - reconciliation required" : retry ? "Canonical payment not yet confirmed" : command?.statusLabel}</strong>
+        <strong>{confirmed ? "Canonical payment confirmed" : conflict ? "Conflict - support review required" : rejected ? "Rejected - reconciliation required" : readbackOnly ? "Payment finality pending" : retry ? "Canonical payment not yet confirmed" : command?.statusLabel}</strong>
       </div>
 
       <p>Local cash custody: cash received locally.</p>
@@ -1037,14 +1326,14 @@ function CentralPmsCanonicalPaymentPanel({
       ) : (
         <>
           <p>Status: {command?.statusLabel ?? "Pending"}</p>
-          <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted command to submit or check Central PMS."}</p>
+          <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : readbackOnly ? "Use the accepted command to check payment finality. This does not resubmit the terminal-cash command." : "Use the persisted command to submit or check Central PMS."}</p>
         </>
       )}
 
       <p>Fiscal issuance not started. Exit authorization unavailable.</p>
       {!confirmed && !conflict && !rejected && (
         <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
-          Submit / Check Central PMS
+          {readbackOnly ? "Check Payment Status" : "Submit / Check Central PMS"}
         </button>
       )}
     </section>
@@ -1958,11 +2247,11 @@ function ReceiptPreviewFields({ fields }: { fields: ReceiptPreviewPaperField[] }
   );
 }
 
-function PreviewMeta({ label, value }: { label: string; value: string | null | undefined }) {
+function PreviewMeta({ label, value, testId }: { label: string; value: string | null | undefined; testId?: string }) {
   return (
     <div>
       <dt>{label}</dt>
-      <dd>{value || "Unavailable"}</dd>
+      <dd data-testid={testId}>{value || "Unavailable"}</dd>
     </div>
   );
 }
