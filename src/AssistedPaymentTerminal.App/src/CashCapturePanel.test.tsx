@@ -249,6 +249,36 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText("Fiscal issuance not started. Exit authorization unavailable.")).toBeInTheDocument();
   });
 
+  it("maps accepted command with pending payment readback to in-progress and check-only action", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("ReadbackRequired", {
+        statusLabel: "Payment finality pending",
+        resultClassification: "ACCEPTED",
+      }),
+    });
+    renderPanel({ config: centralEnabledConfig(), bridge });
+
+    await recordCashReceived();
+
+    const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
+    expect(await screen.findByText("Payment finality pending")).toBeInTheDocument();
+    expect(statePanel.getByTestId("cash-custody-state")).toHaveTextContent("Cash Received");
+    expect(statePanel.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Submission Accepted");
+    expect(statePanel.getByTestId("payment-finality-state")).toHaveTextContent("Payment Finality Pending");
+    expect(statePanel.getByTestId("fiscal-issuance-state")).toHaveTextContent("Fiscal Not Started");
+    expect(statePanel.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Not Requested");
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction In Progress");
+    expect(screen.queryByRole("button", { name: "Submit / Check Central PMS" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Check Payment Status" }));
+
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1);
+    expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
+    expect(bridge.startTender).toHaveBeenCalledTimes(1);
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
   it("displays canonical confirmation IDs after submission", async () => {
     renderPanel({
       config: centralEnabledConfig(),
@@ -260,7 +290,7 @@ describe("CashCapturePanel", () => {
 
     expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
     expect(screen.getByText("payment-attempt-001")).toBeInTheDocument();
-    expect(screen.getByText("payment-confirmation-001")).toBeInTheDocument();
+    expect(screen.getAllByText("payment-confirmation-001").length).toBeGreaterThan(0);
     expect(screen.getByText("Fiscal issuance not started. Exit authorization unavailable.")).toBeInTheDocument();
   });
 
@@ -305,6 +335,25 @@ describe("CashCapturePanel", () => {
     expect(document.body.textContent ?? "").not.toMatch(/Canonical payment confirmed/);
   });
 
+  it("maps explicit retryable payment readback to transaction retry without support failure", async () => {
+    renderPanel({
+      config: centralEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("RetryPending", {
+          statusLabel: "Retryable payment readback",
+          lastSafeErrorCode: "PAYMENT_READBACK_RETRYABLE",
+        }),
+      }),
+    });
+
+    await recordCashReceived();
+
+    const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
+    expect(statePanel.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Submission Retryable");
+    expect(statePanel.getByTestId("payment-finality-state")).toHaveTextContent("Payment Finality Retryable");
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Requires Retry");
+  });
+
   it("renders restart-loaded confirmed status without creating another command", async () => {
     const bridge = new FakeBridge({
       initialReadback: {
@@ -318,6 +367,29 @@ describe("CashCapturePanel", () => {
     expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
     expect(bridge.startTender).not.toHaveBeenCalled();
     expect(bridge.getCentralPmsCashSubmissionStatus).toHaveBeenCalled();
+  });
+
+  it("restores accepted pending payment readback as in-progress without duplicating custody or submission", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored-payment-pending" }),
+        events: [],
+      },
+      centralStatus: centralStatus("ReadbackRequired", {
+        statusLabel: "Payment finality pending",
+        resultClassification: "ACCEPTED",
+      }),
+    });
+    renderPanel({ config: centralEnabledConfig(), bridge });
+
+    const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
+    await waitFor(() => expect(statePanel.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Submission Accepted"));
+    expect(statePanel.getByTestId("payment-finality-state")).toHaveTextContent("Payment Finality Pending");
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction In Progress");
+    expect(screen.getByRole("button", { name: "Check Payment Status" })).toBeInTheDocument();
+    expect(bridge.startTender).not.toHaveBeenCalled();
+    expect(bridge.recordCashReceived).not.toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
   });
 
   it("hides fiscal action when fiscal issuance is disabled", async () => {
@@ -375,7 +447,7 @@ describe("CashCapturePanel", () => {
     expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
     expect(screen.getByText("fiscal-reference-001")).toBeInTheDocument();
     expect(screen.getByText("pos-fiscal-document-001")).toBeInTheDocument();
-    expect(screen.getByText("SI-000001")).toBeInTheDocument();
+    expect(screen.getAllByText("SI-000001").length).toBeGreaterThan(0);
   });
 
   it("shows fiscal replay without duplicate-document wording", async () => {
@@ -798,7 +870,7 @@ describe("CashCapturePanel", () => {
     expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
     expect(screen.queryByText("SALES INVOICE DETAILS")).not.toBeInTheDocument();
     expect(screen.getAllByText("SALES INVOICE").length).toBeGreaterThan(0);
-    expect(screen.getByText("Sales Invoice No.")).toBeInTheDocument();
+    expect(screen.getAllByText("Sales Invoice No.").length).toBeGreaterThan(0);
     expect(screen.queryByText("Fiscal Identity")).not.toBeInTheDocument();
     expect(screen.queryByText("Fiscal document no.")).not.toBeInTheDocument();
     expect(screen.getByText("PARKING DETAILS")).toBeInTheDocument();
@@ -1300,6 +1372,50 @@ describe("CashCapturePanel", () => {
     expect(bridge.getCentralPmsCashReceiptPreview).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Receipt preview")).not.toBeInTheDocument();
   });
+
+  it("auto-advances from CASH_RECEIVED through bounded payment fiscal and receipt readback without duplicating local custody", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Pending"),
+      submitStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Pending"),
+      fiscalSubmitStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("RetryPending"),
+      receiptRetrieveStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge, autoAdvanceAfterCashReceived: true });
+
+    await recordCashReceived();
+
+    await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(bridge.retrieveOrCheckCentralPmsCashReceipt).toHaveBeenCalledTimes(1));
+    expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
+    expect(await screen.findByLabelText("Cashier transaction state")).toBeInTheDocument();
+    expect(screen.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Submission Accepted");
+    expect(screen.getByTestId("payment-finality-state")).toHaveTextContent("Payment Final");
+    expect(screen.getByTestId("fiscal-issuance-state")).toHaveTextContent("Fiscal Document Recorded");
+    expect(screen.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available");
+  });
+
+  it("does not mark the transaction complete when ExitAuthorization readback is not available", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
+    await waitFor(() => expect(statePanel.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available"));
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Requires Support");
+    expect(statePanel.getByText("Exit Authorization Readback Contract Missing")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Transaction complete");
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
 });
 
 function renderPanel({
@@ -1307,11 +1423,13 @@ function renderPanel({
   tariffExpired = false,
   bridge,
   developmentFixtureLocalCashTenderId,
+  autoAdvanceAfterCashReceived = false,
 }: {
   config: AptConfig;
   tariffExpired?: boolean;
   bridge: LocalJournalBridge;
   developmentFixtureLocalCashTenderId?: string;
+  autoAdvanceAfterCashReceived?: boolean;
 }) {
   return render(
     <CashCapturePanel
@@ -1321,6 +1439,7 @@ function renderPanel({
       tariffExpired={tariffExpired}
       bridge={bridge}
       developmentFixtureLocalCashTenderId={developmentFixtureLocalCashTenderId}
+      autoAdvanceAfterCashReceived={autoAdvanceAfterCashReceived}
     />,
   );
 }
