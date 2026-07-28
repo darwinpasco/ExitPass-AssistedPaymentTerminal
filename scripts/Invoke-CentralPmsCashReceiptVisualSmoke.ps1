@@ -4,6 +4,7 @@ param(
   [string]$DatabasePath,
   [switch]$PayableBasisVisualSmoke,
   [switch]$TransactionCompletionVisualSmoke,
+  [switch]$StatutoryDiscountVisualSmoke,
   [switch]$CleanupDatabaseOnExit
 )
 
@@ -134,20 +135,43 @@ try {
   $env:APT_SITE_TIME_ZONE_ID = "Singapore Standard Time"
   $env:CENTRAL_PMS_BASE_URL = "http://127.0.0.1:$CentralPmsPort"
 
-  $visualSmokeUrl = if ($TransactionCompletionVisualSmoke) {
+  $visualSmokeUrl = if ($StatutoryDiscountVisualSmoke) {
+    "http://127.0.0.1:$WebUiPort/?statutoryDiscountVisualSmoke=1"
+  } elseif ($TransactionCompletionVisualSmoke) {
     "http://127.0.0.1:$WebUiPort/?transactionCompletionVisualSmoke=1"
   } elseif ($PayableBasisVisualSmoke) {
     "http://127.0.0.1:$WebUiPort/?payableBasisVisualSmoke=1"
   } else {
     "http://127.0.0.1:$WebUiPort/?receiptVisualSmoke=1"
   }
-  Write-Host $(if ($TransactionCompletionVisualSmoke) { "Development-only transaction-completion visual smoke launcher" } elseif ($PayableBasisVisualSmoke) { "Development-only payable-basis visual smoke launcher" } else { "Development-only receipt visual smoke launcher" })
+  Write-Host $(if ($StatutoryDiscountVisualSmoke) { "Development-only statutory-discount visual smoke launcher" } elseif ($TransactionCompletionVisualSmoke) { "Development-only transaction-completion visual smoke launcher" } elseif ($PayableBasisVisualSmoke) { "Development-only payable-basis visual smoke launcher" } else { "Development-only receipt visual smoke launcher" })
   Write-Host "WebView URL: $visualSmokeUrl"
   Write-Host "Desktop window: ExitPass Assisted Payment Terminal"
   Write-Host "Central PMS fixture: $env:CENTRAL_PMS_BASE_URL"
   Write-Host "SQLite journal: $databasePath"
   Write-Host ""
-  if ($TransactionCompletionVisualSmoke) {
+  if ($StatutoryDiscountVisualSmoke) {
+    Write-Host "Scenario buttons in the desktop window:"
+    Write-Host "- No statutory request"
+    Write-Host "- Draft statutory request"
+    Write-Host "- Awaiting review"
+    Write-Host "- Approved, application not requested"
+    Write-Host "- Application processing"
+    Write-Host "- Applied complete"
+    Write-Host "- Applied amount changed"
+    Write-Host "- Rejected"
+    Write-Host "- Retryable decision failure"
+    Write-Host "- Retryable application failure"
+    Write-Host "- Terminal failure"
+    Write-Host "- Required facts unavailable"
+    Write-Host "- Restart awaiting review"
+    Write-Host "- Restart after approval"
+    Write-Host "- Restart during application processing"
+    Write-Host "- Restart after applied amount change"
+    Write-Host ""
+    Write-Host "Every statutory scenario remains before CASH_RECEIVED; statutory cash acceptance is not enabled in this slice."
+    Write-Host ""
+  } elseif ($TransactionCompletionVisualSmoke) {
     Write-Host "Scenario buttons in the desktop window:"
     Write-Host "- CASH_RECEIVED awaiting submission"
     Write-Host "- Terminal-cash submission accepted"

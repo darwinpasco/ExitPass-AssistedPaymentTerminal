@@ -1,4 +1,4 @@
-﻿namespace AssistedPaymentTerminal.LocalOperations;
+namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed record CashCustodySessionSnapshot(
     Guid Id,
@@ -133,6 +133,7 @@ public sealed record PayableBasisStateSnapshot(
     bool CashierAcknowledgementRequired,
     bool AmountChanged,
     long? PriorDisplayedAmountMinorUnits,
+    string? StatutoryDiscountStateJson,
     DateTimeOffset ResolvedAt,
     DateTimeOffset? LastRevalidatedAt,
     DateTimeOffset UpdatedAt)
@@ -172,6 +173,7 @@ public sealed record PayableBasisStateSnapshot(
             state.CashierAcknowledgementRequired,
             state.AmountChanged,
             state.PriorDisplayedAmountMinorUnits,
+            state.StatutoryDiscountStateJson,
             state.ResolvedAt,
             state.LastRevalidatedAt,
             state.UpdatedAt);

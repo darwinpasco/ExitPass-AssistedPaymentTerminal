@@ -205,7 +205,8 @@ public sealed class LocalJournalBridgeHandlerTests
                 revalidationOutcome = (string?)null,
                 cashierAcknowledgementRequired = false,
                 amountChanged = false,
-                priorDisplayedAmountMinorUnits = (long?)null
+                priorDisplayedAmountMinorUnits = (long?)null,
+                statutoryDiscountStateJson = "{\"status\":\"awaiting_review\",\"statutoryDiscountDecisionCommandId\":\"77777777-7777-4777-8777-777777770777\"}"
             });
 
         Assert.True(saved.RootElement.GetProperty("ok").GetBoolean());
@@ -221,6 +222,7 @@ public sealed class LocalJournalBridgeHandlerTests
         Assert.Equal("APT-ACTIVE-1001", payload.GetProperty("lookupReferenceValue").GetString());
         Assert.True(payload.GetProperty("readyForCashAcceptance").GetBoolean());
         Assert.Equal("central-corr-payable", payload.GetProperty("centralPmsCorrelationId").GetString());
+        Assert.Contains("awaiting_review", payload.GetProperty("statutoryDiscountStateJson").GetString(), StringComparison.Ordinal);
     }
     private static async Task<Guid> CreateSessionAsync(LocalJournalBridgeHandler handler)
     {

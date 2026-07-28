@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace AssistedPaymentTerminal.LocalOperations;
@@ -281,6 +281,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(state => state.SafeUserFacingClassification).HasMaxLength(128).IsRequired();
             entity.Property(state => state.CentralPmsCorrelationId).HasMaxLength(128).IsRequired();
             entity.Property(state => state.RevalidationOutcome).HasMaxLength(128);
+            entity.Property(state => state.StatutoryDiscountStateJson);
             entity.Property(state => state.TariffCalculatedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(state => state.TariffValidUntil).HasConversion(dateTimeOffsetConverter);
             entity.Property(state => state.FeeValidUntil).HasConversion(dateTimeOffsetConverter);

@@ -34,7 +34,7 @@ async function runActiveAndExpiredWorkflow() {
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
 
-  await expect(page.getByText("Authoritative payable basis")).toBeVisible();
+  await expect(page.getByTestId("payable-basis-summary")).toContainText("Authoritative payable basis");
   await expect(page.getByText("APT-ACTIVE-1001")).toBeVisible();
   await expectActivePayableBasisReady(page);
   await expect(page.getByTestId("local-cash-prerequisites-notice")).toContainText("Local cash prerequisites unavailable");

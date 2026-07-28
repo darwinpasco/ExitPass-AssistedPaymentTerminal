@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace AssistedPaymentTerminal.LocalOperations;
@@ -465,6 +465,7 @@ public sealed class CashJournalService
         state.CashierAcknowledgementRequired = request.CashierAcknowledgementRequired;
         state.AmountChanged = request.AmountChanged;
         state.PriorDisplayedAmountMinorUnits = request.PriorDisplayedAmountMinorUnits;
+        state.StatutoryDiscountStateJson = request.StatutoryDiscountStateJson;
         state.LastRevalidatedAt = string.IsNullOrWhiteSpace(request.RevalidationOutcome) ? state.LastRevalidatedAt : now;
         state.UpdatedAt = now;
 
@@ -532,11 +533,14 @@ public sealed class CashJournalService
                 CashierAcknowledgementRequired INTEGER NOT NULL,
                 AmountChanged INTEGER NOT NULL,
                 PriorDisplayedAmountMinorUnits INTEGER NULL,
+                StatutoryDiscountStateJson TEXT NULL,
                 ResolvedAt INTEGER NOT NULL,
                 LastRevalidatedAt INTEGER NULL,
                 UpdatedAt INTEGER NOT NULL
             );",
             cancellationToken).ConfigureAwait(false);
+
+        await AddColumnIfMissingAsync(dbContext, "terminal_cash_payable_basis_states", "StatutoryDiscountStateJson", "TEXT NULL", cancellationToken).ConfigureAwait(false);
 
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_terminal_cash_payable_basis_states_LocalWorkflowId ON terminal_cash_payable_basis_states (LocalWorkflowId);",
@@ -547,6 +551,41 @@ public sealed class CashJournalService
             cancellationToken).ConfigureAwait(false);
     }
 
+
+    private static async Task AddColumnIfMissingAsync(
+        CashJournalDbContext dbContext,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+        var exists = false;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+
+        if (!exists)
+        {
+            command.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
     public CashJournalDbContext CreateDbContext()
     {
         var connectionString = new SqliteConnectionStringBuilder

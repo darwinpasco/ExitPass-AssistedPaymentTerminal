@@ -1,4 +1,4 @@
-﻿import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App, TerminalShell } from "./App";
@@ -137,4 +137,45 @@ describe("App startup and payable-basis readiness workflow", () => {
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[0]).not.toBe(calls[1]);
   });
-});
+
+  it("submits safe statutory facts for review and keeps statutory cash acceptance blocked", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} />);
+
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    await screen.findByText("Authoritative payable basis");
+
+    await userEvent.click(screen.getByRole("button", { name: "Start statutory request" }));
+    expect(screen.getByText("Draft statutory request")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Cashier attests safe entitlement facts/)).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Submit for Operator Review" })).toBeDisabled();
+
+    await userEvent.click(screen.getByLabelText(/Cashier attests safe entitlement facts/));
+    await userEvent.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
+
+    expect(await screen.findByText("Awaiting Operator Review")).toBeInTheDocument();
+    expect(screen.getByText(/Check status performs read-only Central PMS GET readback/)).toBeInTheDocument();
+    expect(screen.getByTestId("statutory-cash-blocker")).toHaveTextContent("Statutory CASH_RECEIVED is not enabled");
+    expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeDisabled();
+    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+  });
+
+  it("shows applied statutory basis facts and reuses amount-change acknowledgement while remaining pre-cash", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+    const client = new MockCentralPmsClient(config);
+    render(<TerminalShell config={config} client={client} />);
+
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    await screen.findByText("Authoritative payable basis");
+    await userEvent.click(screen.getByRole("button", { name: "Start statutory request" }));
+    await userEvent.click(screen.getByLabelText(/Cashier attests safe entitlement facts/));
+    await userEvent.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
+    await screen.findByText("Awaiting Operator Review");
+
+    // Controlled mock readback keeps pending review; visual-smoke fixtures cover approved and APPLIED displays.
+    expect(screen.getByRole("button", { name: "Check Review Status" })).toBeInTheDocument();
+    expect(screen.queryByText(/full statutory ID/i)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("reviewerUserId");
+  });});

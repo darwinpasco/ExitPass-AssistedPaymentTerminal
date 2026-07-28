@@ -1,4 +1,4 @@
-﻿using System.Net.Http;
+using System.Net.Http;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -332,7 +332,8 @@ public sealed class LocalJournalBridgeHandler
             payload.RevalidationOutcome,
             payload.CashierAcknowledgementRequired,
             payload.AmountChanged,
-            payload.PriorDisplayedAmountMinorUnits), cancellationToken).ConfigureAwait(false);
+            payload.PriorDisplayedAmountMinorUnits,
+            payload.StatutoryDiscountStateJson), cancellationToken).ConfigureAwait(false);
 
         return SerializeSuccess(request.Command, request.CorrelationId, result);
     }
@@ -1694,7 +1695,8 @@ public sealed record SavePayableBasisStatePayload(
     string? RevalidationOutcome,
     bool CashierAcknowledgementRequired,
     bool AmountChanged,
-    long? PriorDisplayedAmountMinorUnits);
+    long? PriorDisplayedAmountMinorUnits,
+    string? StatutoryDiscountStateJson);
 
 public sealed record GetLatestPayableBasisStatePayload(
     string TerminalId,
