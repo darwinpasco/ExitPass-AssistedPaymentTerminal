@@ -31,9 +31,9 @@ try {
     exit 1
   }
 
-  $cashBlocker = Select-String -Path "src\AssistedPaymentTerminal.App\src\App.tsx","src\AssistedPaymentTerminal.App\src\StatutoryDiscountPanel.tsx" -Pattern "statutoryWorkflowActive|Statutory CASH_RECEIVED is not enabled" -AllMatches
+  $cashBlocker = Select-String -Path "src\AssistedPaymentTerminal.App\src\App.tsx","src\AssistedPaymentTerminal.App\src\StatutoryDiscountPanel.tsx" -Pattern "statutoryWorkflowActive|statutoryCashGateStatus|Statutory payable basis ready for Continue to Cash" -AllMatches
   if ($cashBlocker.Count -lt 2) {
-    Write-Error "Statutory CASH_RECEIVED blocker was not found in the App and statutory panel."
+    Write-Error "Statutory workflow gating was not found in the App and statutory panel."
     exit 1
   }
 
@@ -61,7 +61,8 @@ try {
   Write-Host "APT statutory-discount orchestration UI proof completed successfully."
   Write-Host "Pending review, approval, application processing, APPLIED, rejected, retryable, terminal, and restart scenarios are covered by focused tests."
   Write-Host "The desktop uses shared statutory decision routes and the statutory-aware APT payable-basis facade."
-  Write-Host "Statutory CASH_RECEIVED remains disabled; no terminal-cash submission, fiscal, receipt, ExitAuthorization, HikCentral, or gate behavior was introduced."
+  Write-Host "Statutory cash entry remains gated by canonical statutory state, amount acknowledgement, local prerequisites, and immediate revalidation."
+  Write-Host "No premature terminal-cash submission, fiscal, receipt, ExitAuthorization, HikCentral, or gate behavior was introduced."
 }
 finally {
   Pop-Location

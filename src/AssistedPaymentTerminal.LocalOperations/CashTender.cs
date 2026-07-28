@@ -26,6 +26,36 @@ public sealed class CashTender
 
     public CashTenderState CurrentLocalState { get; set; }
 
+    public string? StatutoryDiscountDecisionCommandId { get; set; }
+
+    public string? StatutoryDiscountPayableBasisApplicationCommandId { get; set; }
+
+    public string? StatutoryDiscountValidationId { get; set; }
+
+    public string? StatutoryOriginalTariffSnapshotId { get; set; }
+
+    public string? StatutoryAppliedTariffSnapshotId { get; set; }
+
+    public long? StatutoryOriginalAmountMinorUnits { get; set; }
+
+    public long? StatutoryFinalAmountMinorUnits { get; set; }
+
+    public string? StatutoryCurrency { get; set; }
+
+    public bool? StatutoryAmountAcknowledged { get; set; }
+
+    public DateTimeOffset? StatutoryAmountAcknowledgedAt { get; set; }
+
+    public string? StatutoryImmediateRevalidationOutcome { get; set; }
+
+    public DateTimeOffset? StatutoryImmediateRevalidatedAt { get; set; }
+
+    public string? StatutoryCorrelationId { get; set; }
+
+    public string? StatutoryReadinessStatus { get; set; }
+
+    public string? StatutoryReadinessAction { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }

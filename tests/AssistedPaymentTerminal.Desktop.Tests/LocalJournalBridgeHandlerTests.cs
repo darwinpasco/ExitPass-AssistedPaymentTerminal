@@ -101,6 +101,24 @@ public sealed class LocalJournalBridgeHandlerTests
             {
                 localCashTenderId = tenderId,
                 cashierAttested = true,
+                statutoryTenderEvidence = new
+                {
+                    statutoryDiscountDecisionCommandId = "77777777-7777-4777-8777-777777770777",
+                    statutoryDiscountPayableBasisApplicationCommandId = "88888888-8888-4888-8888-888888880001",
+                    statutoryDiscountValidationId = "66666666-6666-4666-8666-666666660001",
+                    originalTariffSnapshotId = "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+                    appliedTariffSnapshotId = TariffSnapshotId,
+                    originalAmountMinorUnits = 12500,
+                    finalAmountMinorUnits = 10000,
+                    currency = "PHP",
+                    amountAcknowledged = true,
+                    amountAcknowledgedAt = DateTimeOffset.Parse("2026-07-15T00:01:30Z"),
+                    immediateRevalidationOutcome = "PASSED_UNCHANGED",
+                    immediateRevalidatedAt = DateTimeOffset.Parse("2026-07-15T00:01:45Z"),
+                    centralPmsCorrelationId = "central-statutory-corr",
+                    readinessStatus = "APPLIED",
+                    readinessAction = (string?)null
+                },
                 denominations = new[]
                 {
                     new { denominationCode = "PHP-100", denominationValue = 100m, quantity = 2 }
@@ -108,7 +126,11 @@ public sealed class LocalJournalBridgeHandlerTests
             });
 
         Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
-        Assert.Equal(nameof(CashTenderState.CashReceived), response.RootElement.GetProperty("payload").GetProperty("currentLocalState").GetString());
+        var payload = response.RootElement.GetProperty("payload");
+        Assert.Equal(nameof(CashTenderState.CashReceived), payload.GetProperty("currentLocalState").GetString());
+        Assert.Equal("77777777-7777-4777-8777-777777770777", payload.GetProperty("statutoryDiscountDecisionCommandId").GetString());
+        Assert.Equal(TariffSnapshotId, payload.GetProperty("statutoryAppliedTariffSnapshotId").GetString());
+        Assert.Equal(10000, payload.GetProperty("statutoryFinalAmountMinorUnits").GetInt64());
     }
 
     [Fact]

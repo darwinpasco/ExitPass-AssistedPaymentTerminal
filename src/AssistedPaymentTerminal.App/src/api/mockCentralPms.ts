@@ -143,6 +143,34 @@ export class MockCentralPmsClient implements CentralPmsClient {
       };
     }
 
+    if (reference.includes("STATUTORY-BLOCKED")) {
+      return {
+        ok: true,
+        response: {
+          ...displayedBasis,
+          operation: "revalidate",
+          revalidationOutcome: "STATUTORY_DISCOUNT_BLOCKED",
+          readyForCashAcceptance: false,
+          blockingReasonCodes: ["STATUTORY_DISCOUNT_APPLICATION_PROCESSING"],
+          retryable: true,
+          safeUserFacingClassification: "STATUTORY_DISCOUNT_BLOCKED",
+          safeMessage: "Statutory request is no longer ready for cash acceptance.",
+          correlationId,
+          statutoryDiscountReadiness: displayedBasis.statutoryDiscountReadiness
+            ? {
+                ...displayedBasis.statutoryDiscountReadiness,
+                ready: false,
+                payableBasisReady: false,
+                payableBasisReadinessStatus: "APPLICATION_PROCESSING",
+                payableBasisReadinessAction: "POLL_READBACK",
+                blockingReasonCode: "STATUTORY_DISCOUNT_APPLICATION_PROCESSING",
+                message: "Statutory payable basis is being applied.",
+              }
+            : displayedBasis.statutoryDiscountReadiness,
+        },
+      };
+    }
+
     if (reference.includes("REVAL-FAIL")) {
       return failure("service_unavailable", "VENDOR_PMS_UNAVAILABLE", "Central PMS could not revalidate the payable basis. Try again before accepting cash.", correlationId, true);
     }

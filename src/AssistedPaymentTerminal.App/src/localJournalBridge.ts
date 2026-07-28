@@ -48,6 +48,21 @@ export type CashTenderSnapshot = {
   correlationId: string;
   localIdempotencyIdentity: string;
   currentLocalState: string;
+  statutoryDiscountDecisionCommandId?: string | null;
+  statutoryDiscountPayableBasisApplicationCommandId?: string | null;
+  statutoryDiscountValidationId?: string | null;
+  statutoryOriginalTariffSnapshotId?: string | null;
+  statutoryAppliedTariffSnapshotId?: string | null;
+  statutoryOriginalAmountMinorUnits?: number | null;
+  statutoryFinalAmountMinorUnits?: number | null;
+  statutoryCurrency?: string | null;
+  statutoryAmountAcknowledged?: boolean | null;
+  statutoryAmountAcknowledgedAt?: string | null;
+  statutoryImmediateRevalidationOutcome?: string | null;
+  statutoryImmediateRevalidatedAt?: string | null;
+  statutoryCorrelationId?: string | null;
+  statutoryReadinessStatus?: string | null;
+  statutoryReadinessAction?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -425,11 +440,30 @@ export type StartTenderPayload = {
 export type RecordCashReceivedPayload = {
   localCashTenderId: string;
   cashierAttested: boolean;
+  statutoryTenderEvidence?: StatutoryTenderEvidencePayload | null;
   denominations: Array<{
     denominationCode: string;
     denominationValue: number;
     quantity: number;
   }>;
+};
+
+export type StatutoryTenderEvidencePayload = {
+  statutoryDiscountDecisionCommandId?: string | null;
+  statutoryDiscountPayableBasisApplicationCommandId?: string | null;
+  statutoryDiscountValidationId?: string | null;
+  originalTariffSnapshotId?: string | null;
+  appliedTariffSnapshotId?: string | null;
+  originalAmountMinorUnits?: number | null;
+  finalAmountMinorUnits?: number | null;
+  currency?: string | null;
+  amountAcknowledged?: boolean | null;
+  amountAcknowledgedAt?: string | null;
+  immediateRevalidationOutcome?: string | null;
+  immediateRevalidatedAt?: string | null;
+  centralPmsCorrelationId?: string | null;
+  readinessStatus?: string | null;
+  readinessAction?: string | null;
 };
 
 export interface LocalJournalBridge {

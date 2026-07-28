@@ -5,6 +5,7 @@ import type { CentralPmsClient, PayableBasisReferenceType } from "./api/centralP
 import type {
   BridgeResult,
   CashCustodySessionSnapshot,
+  CentralPmsCashSubmissionStatus,
   CashTenderSnapshot,
   CreateDevelopmentSessionPayload,
   LocalJournalBridge,
@@ -217,6 +218,8 @@ export function PayableBasisVisualSmokeShell({
 
 export type PayableBasisVisualSmokeBridge = LocalJournalBridge & {
   reset(): void;
+  seedTender(snapshot: CashTenderSnapshot | null): void;
+  seedCentralPmsCashSubmissionStatus(status: CentralPmsCashSubmissionStatus | null): void;
 };
 
 export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-payable-basis-visual-smoke"): PayableBasisVisualSmokeBridge {
@@ -224,6 +227,7 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
   let payableBasis = readPayableBasisState(storageKey);
   let custodySession: CashCustodySessionSnapshot | null = null;
   let tender: CashTenderSnapshot | null = null;
+  let centralPmsCashSubmissionStatus: CentralPmsCashSubmissionStatus | null = null;
 
   function persist(snapshot: PayableBasisStateSnapshot | null) {
     payableBasis = snapshot;
@@ -244,7 +248,14 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
     reset() {
       custodySession = null;
       tender = null;
+      centralPmsCashSubmissionStatus = null;
       persist(null);
+    },
+    seedTender(snapshot) {
+      tender = snapshot;
+    },
+    seedCentralPmsCashSubmissionStatus(status) {
+      centralPmsCashSubmissionStatus = status;
     },
     async health(correlationId): Promise<BridgeResult<LocalJournalHealth>> {
       return {
@@ -311,11 +322,31 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
       };
       return { ok: true, command: "localJournal.startTender", correlationId, payload: tender };
     },
-    async recordCashReceived(correlationId, _payload: RecordCashReceivedPayload): Promise<BridgeResult<CashTenderSnapshot>> {
+    async recordCashReceived(correlationId, payload: RecordCashReceivedPayload): Promise<BridgeResult<CashTenderSnapshot>> {
       if (!tender) {
         return unavailable("localJournal.recordCashReceived", correlationId);
       }
-      tender = { ...tender, currentLocalState: "CashReceived", updatedAt: nowIso() };
+      const evidence = payload.statutoryTenderEvidence;
+      tender = {
+        ...tender,
+        currentLocalState: "CashReceived",
+        statutoryDiscountDecisionCommandId: evidence?.statutoryDiscountDecisionCommandId ?? null,
+        statutoryDiscountPayableBasisApplicationCommandId: evidence?.statutoryDiscountPayableBasisApplicationCommandId ?? null,
+        statutoryDiscountValidationId: evidence?.statutoryDiscountValidationId ?? null,
+        statutoryOriginalTariffSnapshotId: evidence?.originalTariffSnapshotId ?? null,
+        statutoryAppliedTariffSnapshotId: evidence?.appliedTariffSnapshotId ?? null,
+        statutoryOriginalAmountMinorUnits: evidence?.originalAmountMinorUnits ?? null,
+        statutoryFinalAmountMinorUnits: evidence?.finalAmountMinorUnits ?? null,
+        statutoryCurrency: evidence?.currency ?? null,
+        statutoryAmountAcknowledged: evidence?.amountAcknowledged ?? null,
+        statutoryAmountAcknowledgedAt: evidence?.amountAcknowledgedAt ?? null,
+        statutoryImmediateRevalidationOutcome: evidence?.immediateRevalidationOutcome ?? null,
+        statutoryImmediateRevalidatedAt: evidence?.immediateRevalidatedAt ?? null,
+        statutoryCorrelationId: evidence?.centralPmsCorrelationId ?? null,
+        statutoryReadinessStatus: evidence?.readinessStatus ?? null,
+        statutoryReadinessAction: evidence?.readinessAction ?? null,
+        updatedAt: nowIso(),
+      };
       return { ok: true, command: "localJournal.recordCashReceived", correlationId, payload: tender };
     },
     async readTenderByParkingSession(correlationId, parkingSessionId): Promise<BridgeResult<LocalTenderReadback>> {
@@ -326,8 +357,12 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
         payload: { tender: tender?.parkingSessionId === parkingSessionId ? tender : null, events: [] },
       };
     },
-    getCentralPmsCashSubmissionStatus: (correlationId) => unavailable("centralPmsCashSubmission.getStatus", correlationId),
-    submitOrReadbackCentralPmsCashSubmission: (correlationId) => unavailable("centralPmsCashSubmission.submitOrReadback", correlationId),
+    getCentralPmsCashSubmissionStatus: (correlationId) => centralPmsCashSubmissionStatus
+      ? Promise.resolve({ ok: true, command: "centralPmsCashSubmission.getStatus", correlationId, payload: centralPmsCashSubmissionStatus })
+      : unavailable("centralPmsCashSubmission.getStatus", correlationId),
+    submitOrReadbackCentralPmsCashSubmission: (correlationId) => centralPmsCashSubmissionStatus
+      ? Promise.resolve({ ok: true, command: "centralPmsCashSubmission.submitOrReadback", correlationId, payload: centralPmsCashSubmissionStatus })
+      : unavailable("centralPmsCashSubmission.submitOrReadback", correlationId),
     getCentralPmsCashFiscalStatus: (correlationId) => unavailable("centralPmsCashFiscal.getStatus", correlationId),
     submitOrReadbackCentralPmsCashFiscal: (correlationId) => unavailable("centralPmsCashFiscal.submitOrReadback", correlationId),
     getCentralPmsCashReceiptStatus: (correlationId) => unavailable("centralPmsCashReceipt.getStatus", correlationId),
