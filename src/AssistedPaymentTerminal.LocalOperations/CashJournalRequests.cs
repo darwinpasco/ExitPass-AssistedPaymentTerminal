@@ -1,4 +1,4 @@
-﻿namespace AssistedPaymentTerminal.LocalOperations;
+namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed record CreateCashCustodySessionRequest(
     string CashierId,
@@ -70,4 +70,5 @@ public sealed record SavePayableBasisStateRequest(
     bool CashierAcknowledgementRequired,
     bool AmountChanged,
     long? PriorDisplayedAmountMinorUnits,
+    string? StatutoryDiscountStateJson = null,
     DateTimeOffset? RecordedAt = null);

@@ -1,4 +1,4 @@
-﻿export type BridgeResult<T> =
+export type BridgeResult<T> =
   | { ok: true; command: string; correlationId: string; payload: T }
   | { ok: false; command: string; correlationId: string; error: BridgeError };
 
@@ -391,6 +391,7 @@ export type PayableBasisStatePayload = {
   cashierAcknowledgementRequired: boolean;
   amountChanged: boolean;
   priorDisplayedAmountMinorUnits?: number | null;
+  statutoryDiscountStateJson?: string | null;
 };
 
 export type PayableBasisStateSnapshot = PayableBasisStatePayload & {

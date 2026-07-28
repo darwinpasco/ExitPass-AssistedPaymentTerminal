@@ -68,6 +68,8 @@ public sealed class TerminalCashPayableBasisState
 
     public long? PriorDisplayedAmountMinorUnits { get; set; }
 
+    public string? StatutoryDiscountStateJson { get; set; }
+
     public DateTimeOffset ResolvedAt { get; set; }
 
     public DateTimeOffset? LastRevalidatedAt { get; set; }

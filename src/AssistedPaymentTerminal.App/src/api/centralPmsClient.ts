@@ -8,6 +8,9 @@ import type {
   PayableBasisResponse,
   RevalidatePayableBasisRequest,
   ResolvePayableBasisRequest,
+  StatutoryDiscountDecisionResponse,
+  StatutoryDiscountDecisionResult,
+  StatutoryDiscountDecisionSubmitRequest,
 } from "./centralPmsTypes";
 
 export class LiveCentralPmsClient implements CentralPmsClient {
@@ -17,6 +20,7 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     referenceType: PayableBasisReferenceType,
     referenceValue: string,
     correlationId: string,
+    statutoryDiscountDecisionCommandId?: string | null,
   ): Promise<CentralPmsResult> {
     const trimmed = referenceValue.trim();
     const request: ResolvePayableBasisRequest = {
@@ -27,10 +31,11 @@ export class LiveCentralPmsClient implements CentralPmsClient {
       vendorSystemId: this.config.vendorSystemId,
       referenceType,
       ...(referenceType === "ticket" ? { ticketReference: trimmed } : { plateNumber: trimmed }),
+      statutoryDiscountDecisionCommandId: statutoryDiscountDecisionCommandId ?? undefined,
       correlationId,
     };
 
-    return this.post("/v1/terminal-cash-payments/payable-basis/resolve", request, correlationId);
+    return this.postPayableBasis("/v1/terminal-cash-payments/payable-basis/resolve", request, correlationId);
   }
 
   async resolveTicket(ticketReference: string, correlationId: string): Promise<CentralPmsResult> {
@@ -54,25 +59,92 @@ export class LiveCentralPmsClient implements CentralPmsClient {
       plateNumber: displayedBasis.plateNumber,
       expectedAmountMinorUnits: displayedBasis.authoritativeAmountMinorUnits,
       expectedCurrency: displayedBasis.currency,
+      statutoryDiscountDecisionCommandId: displayedBasis.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId ?? undefined,
       correlationId,
     };
 
-    return this.post("/v1/terminal-cash-payments/payable-basis/revalidate", request, correlationId);
+    return this.postPayableBasis("/v1/terminal-cash-payments/payable-basis/revalidate", request, correlationId);
   }
 
-  private async post(path: string, request: unknown, correlationId: string): Promise<CentralPmsResult> {
+  async submitStatutoryDiscountDecision(
+    request: StatutoryDiscountDecisionSubmitRequest,
+    correlationId: string,
+    idempotencyKey: string,
+  ): Promise<StatutoryDiscountDecisionResult> {
+    return this.requestStatutoryDiscountDecision("POST", "/v1/statutory-discounts/decisions", correlationId, idempotencyKey, request);
+  }
+
+  async getStatutoryDiscountDecision(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult> {
+    return this.requestStatutoryDiscountDecision("GET", `/v1/statutory-discounts/decisions/${encodeURIComponent(decisionCommandId)}`, correlationId);
+  }
+
+  private async postPayableBasis(path: string, request: unknown, correlationId: string): Promise<CentralPmsResult> {
+    const result = await this.send(path, "POST", correlationId, undefined, request);
+    if (!result.ok) {
+      return result;
+    }
+
+    if (!isPayableBasisResponse(result.payload)) {
+      return malformed(correlationId);
+    }
+
+    return { ok: true, response: normalizePayableBasisResponse(result.payload) };
+  }
+
+  private async requestStatutoryDiscountDecision(
+    method: "GET" | "POST",
+    path: string,
+    correlationId: string,
+    idempotencyKey?: string,
+    request?: unknown,
+  ): Promise<StatutoryDiscountDecisionResult> {
+    const result = await this.send(path, method, correlationId, idempotencyKey, request);
+    if (!result.ok) {
+      return result;
+    }
+
+    if (!isStatutoryDiscountDecisionResponse(result.payload)) {
+      return {
+        ok: false,
+        kind: "malformed_response",
+        error: {
+          errorCode: "MALFORMED_STATUTORY_DISCOUNT_RESPONSE",
+          message: "Central PMS statutory-discount response did not match the APT contract.",
+          correlationId,
+          retryable: false,
+        },
+      };
+    }
+
+    return { ok: true, response: normalizeStatutoryDiscountDecisionResponse(result.payload) };
+  }
+
+  private async send(
+    path: string,
+    method: "GET" | "POST",
+    correlationId: string,
+    idempotencyKey?: string,
+    request?: unknown,
+  ): Promise<{ ok: true; payload: Record<string, unknown> } | Exclude<CentralPmsResult, { ok: true }>> {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 10000);
 
     try {
+      const headers: Record<string, string> = {
+        "X-Correlation-Id": correlationId,
+        "X-Site-Id": this.config.siteId,
+      };
+      if (method === "POST") {
+        headers["Content-Type"] = "application/json";
+      }
+      if (idempotencyKey) {
+        headers["Idempotency-Key"] = idempotencyKey;
+      }
+
       const response = await this.fetchImpl(`${this.config.centralPmsBaseUrl.replace(/\/$/, "")}${path}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Correlation-Id": correlationId,
-          "X-Site-Id": this.config.siteId,
-        },
-        body: JSON.stringify(request),
+        method,
+        headers,
+        body: method === "POST" ? JSON.stringify(request) : undefined,
         signal: controller.signal,
       });
 
@@ -81,11 +153,7 @@ export class LiveCentralPmsClient implements CentralPmsClient {
         return { ok: false, kind: mapFailureKind(response.status, typeof payload?.errorCode === "string" ? payload.errorCode : undefined), error: normalizeError(payload, correlationId) };
       }
 
-      if (!isPayableBasisResponse(payload)) {
-        return malformed(correlationId);
-      }
-
-      return { ok: true, response: normalizePayableBasisResponse(payload) };
+      return { ok: true, payload: payload ?? {} };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return failure("timeout", "CENTRAL_PMS_TIMEOUT", "Central PMS did not respond before the terminal timeout.", correlationId, true);
@@ -136,6 +204,51 @@ export function normalizePayableBasisResponse(payload: PayableBasisResponse): Pa
     safeUserFacingClassification: payload.safeUserFacingClassification || "UNKNOWN",
     retryable: Boolean(payload.retryable),
     readyForCashAcceptance: Boolean(payload.readyForCashAcceptance),
+    statutoryDiscountReadiness: payload.statutoryDiscountReadiness
+      ? {
+          ...payload.statutoryDiscountReadiness,
+          applicable: Boolean(payload.statutoryDiscountReadiness.applicable),
+          ready: Boolean(payload.statutoryDiscountReadiness.ready),
+          payableBasisReady: Boolean(payload.statutoryDiscountReadiness.payableBasisReady),
+          retryable: Boolean(payload.statutoryDiscountReadiness.retryable),
+        }
+      : null,
+  };
+}
+
+export function isStatutoryDiscountDecisionResponse(payload: unknown): payload is StatutoryDiscountDecisionResponse {
+  const candidate = payload as Partial<StatutoryDiscountDecisionResponse> | null;
+  return Boolean(
+    candidate &&
+      typeof candidate.statutoryDiscountDecisionCommandId === "string" &&
+      typeof candidate.requestReference === "string" &&
+      typeof candidate.parkingSessionId === "string" &&
+      typeof candidate.sourceChannel === "string" &&
+      typeof candidate.entitlementType === "string" &&
+      typeof candidate.decisionStatus === "string" &&
+      typeof candidate.commandStatus === "string" &&
+      typeof candidate.clientResultStatus === "string" &&
+      typeof candidate.resultClassification === "string" &&
+      typeof candidate.retryable === "boolean" &&
+      typeof candidate.recoveryClassification === "string" &&
+      typeof candidate.decisionCommandStatus === "string" &&
+      typeof candidate.applicationCommandStatus === "string" &&
+      typeof candidate.applicationResultClassification === "string" &&
+      typeof candidate.payableBasisReady === "boolean" &&
+      typeof candidate.payableBasisReadinessStatus === "string" &&
+      typeof candidate.correlationId === "string",
+  );
+}
+
+export function normalizeStatutoryDiscountDecisionResponse(payload: StatutoryDiscountDecisionResponse): StatutoryDiscountDecisionResponse {
+  return {
+    ...payload,
+    retryable: Boolean(payload.retryable),
+    decisionRetryable: Boolean(payload.decisionRetryable),
+    applicationRetryable: Boolean(payload.applicationRetryable),
+    applicationRequested: Boolean(payload.applicationRequested),
+    oneShotComplete: Boolean(payload.oneShotComplete),
+    payableBasisReady: Boolean(payload.payableBasisReady),
   };
 }
 
@@ -149,6 +262,7 @@ export function mapFailureKind(status: number, errorCode?: string): CentralPmsFa
   if (errorCode === "CASH_PAYMENT_RAIL_NOT_CONFIGURED") return "cash_unavailable";
   if (errorCode === "SITE_POS_SERVER_NOT_CONFIGURED" || errorCode === "SALES_INVOICE_CONFIGURATION_NOT_READY" || errorCode === "FISCAL_PATH_UNAVAILABLE") return "fiscal_unavailable";
   if (errorCode === "AMOUNT_CHANGED" || errorCode === "PAYABLE_BASIS_MISMATCH") return "amount_changed";
+  if (errorCode?.startsWith("STATUTORY_DISCOUNT_")) return "statutory_blocked";
   if (status === 409) return "inactive";
   if (status === 502 || errorCode === "MALFORMED_VENDOR_RESPONSE") return "malformed_response";
   if (status === 503 || errorCode === "VENDOR_PMS_UNAVAILABLE") return "service_unavailable";
@@ -182,7 +296,7 @@ function failure(
   message: string,
   correlationId: string,
   retryable: boolean,
-): CentralPmsResult {
+): Exclude<CentralPmsResult, { ok: true }> {
   return {
     ok: false,
     kind,

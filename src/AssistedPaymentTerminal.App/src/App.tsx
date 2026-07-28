@@ -3,8 +3,9 @@ import type { AptConfig, ConfigLoadResult } from "./config";
 import { loadAptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import { createCentralPmsClient } from "./api/clientFactory";
-import type { CentralPmsClient, CentralPmsResult, PayableBasisReferenceType, PayableBasisResponse } from "./api/centralPmsTypes";
+import type { CentralPmsClient, CentralPmsResult, PayableBasisReferenceType, PayableBasisResponse, StatutoryDiscountDecisionResponse, StatutoryDiscountWorkflowState } from "./api/centralPmsTypes";
 import { CashCapturePanel } from "./CashCapturePanel";
+import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import {
   PayableBasisVisualSmokeShell,
@@ -14,6 +15,7 @@ import {
   TransactionCompletionVisualSmokeShell,
   shouldUseTransactionCompletionVisualSmoke,
 } from "./TransactionCompletionVisualSmoke";
+import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type PayableBasisStateSnapshot } from "./localJournalBridge";
 
@@ -29,6 +31,7 @@ type PreCashResult =
   | { ok: false; message: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
+const noStatutoryWorkflow: StatutoryDiscountWorkflowState = { status: "none" };
 
 export function App() {
   const [configResult, setConfigResult] = useState<ConfigLoadResult | null>(null);
@@ -48,6 +51,26 @@ export function App() {
 
   if (!configResult.ok) {
     return <StartupRefusal result={configResult} />;
+  }
+
+  if (shouldUseStatutoryDiscountVisualSmoke(window.location.search)) {
+    return (
+      <StatutoryDiscountVisualSmokeShell
+        config={configResult.config}
+        renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, renderKey }) => (
+          <TerminalShell
+            key={renderKey}
+            config={config}
+            client={client}
+            initialReferenceType="ticket"
+            initialReferenceValue="APT-ACTIVE-1001"
+            initialResolvedBasis={initialResolvedBasis}
+            initialStatutoryState={initialStatutoryState}
+            restorePayableBasisOnMount={false}
+          />
+        )}
+      />
+    );
   }
 
   if (shouldUsePayableBasisVisualSmoke(window.location.search)) {
@@ -87,6 +110,8 @@ export function TerminalShell({
   initialReferenceType = "ticket",
   initialReferenceValue = "",
   restorePayableBasisOnMount = true,
+  initialResolvedBasis,
+  initialStatutoryState = noStatutoryWorkflow,
 }: {
   config: AptConfig;
   client: CentralPmsClient;
@@ -94,11 +119,14 @@ export function TerminalShell({
   initialReferenceType?: PayableBasisReferenceType;
   initialReferenceValue?: string;
   restorePayableBasisOnMount?: boolean;
+  initialResolvedBasis?: PayableBasisResponse;
+  initialStatutoryState?: StatutoryDiscountWorkflowState;
 }) {
   const context = useMemo(() => buildTerminalContext(config), [config]);
   const [referenceType, setReferenceType] = useState<PayableBasisReferenceType>(initialReferenceType);
   const [referenceValue, setReferenceValue] = useState(initialReferenceValue);
-  const [lookupState, setLookupState] = useState<LookupState>({ status: "idle" });
+  const [lookupState, setLookupState] = useState<LookupState>(() => initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
+  const [statutoryWorkflowState, setStatutoryWorkflowState] = useState<StatutoryDiscountWorkflowState>(initialStatutoryState);
   const [localPrerequisiteMessage, setLocalPrerequisiteMessage] = useState<string | null>(null);
   const [cashEntryRequested, setCashEntryRequested] = useState(false);
   const [preCashStatus, setPreCashStatus] = useState<"idle" | "revalidating" | "passed" | "blocked">("idle");
@@ -108,11 +136,12 @@ export function TerminalShell({
     latestRequestId.current += 1;
     setReferenceType(initialReferenceType);
     setReferenceValue(initialReferenceValue);
-    setLookupState({ status: "idle" });
+    setLookupState(initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
+    setStatutoryWorkflowState(initialStatutoryState);
     setLocalPrerequisiteMessage(null);
     setCashEntryRequested(false);
     setPreCashStatus("idle");
-  }, [initialReferenceType, initialReferenceValue]);
+  }, [initialReferenceType, initialReferenceValue, initialResolvedBasis, initialStatutoryState]);
 
   useEffect(() => {
     if (!restorePayableBasisOnMount) {
@@ -132,7 +161,10 @@ export function TerminalShell({
       setReferenceValue(result.payload.lookupReferenceValue);
       setCashEntryRequested(false);
       setPreCashStatus("idle");
-      setLookupState({ status: "resolved", basis: basisFromState(result.payload), source: "restored" });
+      const restoredStatutoryState = parseStatutoryState(result.payload.statutoryDiscountStateJson, true);
+      const restoredBasis = basisFromState(result.payload);
+      setStatutoryWorkflowState(restoredStatutoryState);
+      setLookupState(initialLookupState(restoredBasis, restoredStatutoryState, "restored"));
     }
 
     void restore();
@@ -142,7 +174,9 @@ export function TerminalShell({
   }, [context.siteId, context.terminalId, localJournalBridge, restorePayableBasisOnMount]);
   const displayedBasis = lookupState.status === "resolved" ? lookupState.basis : lookupState.status === "amount_changed" && lookupState.acknowledged ? lookupState.current : undefined;
   const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
+  const statutoryWorkflowActive = statutoryWorkflowState.status !== "none";
   const centralReady = Boolean(displayedBasis?.readyForCashAcceptance) && !tariffExpired && lookupState.status !== "amount_changed";
+  const cashBoundaryReady = centralReady && !statutoryWorkflowActive;
 
   async function resolveReference() {
     const trimmed = referenceValue.trim();
@@ -168,6 +202,7 @@ export function TerminalShell({
     latestRequestId.current = requestId;
     setCashEntryRequested(false);
     setPreCashStatus("idle");
+    setStatutoryWorkflowState(noStatutoryWorkflow);
     setLookupState({ status: "loading", correlationId, requestId, referenceType, referenceValue: trimmed });
 
     const result = await client.resolvePayableBasis(referenceType, trimmed, correlationId);
@@ -176,7 +211,7 @@ export function TerminalShell({
     }
 
     if (result.ok) {
-      await persistPayableBasis(result.response, referenceType, trimmed, false, false, null);
+      await persistPayableBasis(result.response, referenceType, trimmed, false, false, null, noStatutoryWorkflow);
       setCashEntryRequested(false);
       setPreCashStatus("idle");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
@@ -242,15 +277,44 @@ export function TerminalShell({
 
   async function acknowledgeAmountChange() {
     if (lookupState.status !== "amount_changed") return;
+    const acknowledgedStatutoryState = statutoryWorkflowState.status === "none"
+      ? statutoryWorkflowState
+      : { ...statutoryWorkflowState, amountAcknowledged: true, updatedAt: new Date().toISOString() };
     await persistPayableBasis(
       lookupState.current,
       lookupState.current.ticketReference ? "ticket" : "plate",
       lookupState.current.ticketReference ?? lookupState.current.plateNumber ?? referenceValue,
       true,
-      true,
+      false,
       lookupState.previous.authoritativeAmountMinorUnits,
+      acknowledgedStatutoryState,
     );
+    setStatutoryWorkflowState(acknowledgedStatutoryState);
     setReferenceValue(lookupState.current.ticketReference ?? lookupState.current.plateNumber ?? referenceValue);
+
+    if (lookupState.current.statutoryDiscountReadiness?.applicable) {
+      const correlationId = createCorrelationId();
+      const result = await client.revalidatePayableBasis(lookupState.current, correlationId);
+      if (!result.ok) {
+        setLookupState({ status: "failed", result });
+        return;
+      }
+
+      await persistPayableBasis(
+        result.response,
+        result.response.ticketReference ? "ticket" : "plate",
+        result.response.ticketReference ?? result.response.plateNumber ?? referenceValue,
+        true,
+        false,
+        lookupState.previous.authoritativeAmountMinorUnits,
+        acknowledgedStatutoryState,
+      );
+      setCashEntryRequested(false);
+      setPreCashStatus("blocked");
+      setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
+      return;
+    }
+
     setLookupState({ status: "resolved", basis: lookupState.current, source: "fresh" });
   }
 
@@ -261,6 +325,7 @@ export function TerminalShell({
     amountChanged: boolean,
     cashierAcknowledgementRequired: boolean,
     priorAmountMinorUnits: number | null,
+    statutoryState: StatutoryDiscountWorkflowState = statutoryWorkflowState,
   ) {
     await localJournalBridge.savePayableBasisState?.(createCorrelationId(), {
       localWorkflowId: `${basis.siteId}:${basis.terminalId ?? context.terminalId}:${basis.parkingSessionId}`,
@@ -295,11 +360,12 @@ export function TerminalShell({
       cashierAcknowledgementRequired,
       amountChanged,
       priorDisplayedAmountMinorUnits: priorAmountMinorUnits,
+      statutoryDiscountStateJson: serializeStatutoryState(statutoryState),
     });
   }
 
   async function handleContinueToCash(currentBasis: PayableBasisResponse) {
-    if (!centralReady || !localPrerequisitesReady) {
+    if (!cashBoundaryReady || !localPrerequisitesReady) {
       setPreCashStatus("blocked");
       return;
     }
@@ -319,9 +385,46 @@ export function TerminalShell({
     latestRequestId.current += 1;
     setReferenceType(nextType);
     setReferenceValue("");
+    setStatutoryWorkflowState(noStatutoryWorkflow);
     setLookupState({ status: "idle" });
   }
 
+
+  async function handleStatutoryStateChange(next: StatutoryDiscountWorkflowState) {
+    setStatutoryWorkflowState(next);
+    if (displayedBasis) {
+      await persistPayableBasis(
+        displayedBasis,
+        displayedBasis.ticketReference ? "ticket" : "plate",
+        displayedBasis.ticketReference ?? displayedBasis.plateNumber ?? referenceValue,
+        lookupState.status === "amount_changed",
+        lookupState.status === "amount_changed" && !lookupState.acknowledged,
+        lookupState.status === "amount_changed" ? lookupState.previous.authoritativeAmountMinorUnits : null,
+        next,
+      );
+    }
+  }
+
+  async function handleAppliedStatutoryBasis(decisionCommandId: string, _response: StatutoryDiscountDecisionResponse, nextState: StatutoryDiscountWorkflowState) {
+    if (!displayedBasis) return;
+    const correlationId = createCorrelationId();
+    const referenceTypeForBasis: PayableBasisReferenceType = displayedBasis.ticketReference ? "ticket" : "plate";
+    const referenceValueForBasis = displayedBasis.ticketReference ?? displayedBasis.plateNumber ?? referenceValue;
+    const result = await client.resolvePayableBasis(referenceTypeForBasis, referenceValueForBasis, correlationId, decisionCommandId);
+    if (!result.ok) {
+      setLookupState({ status: "failed", result });
+      return;
+    }
+
+    const changed = result.response.authoritativeAmountMinorUnits !== displayedBasis.authoritativeAmountMinorUnits || result.response.tariffSnapshotId !== displayedBasis.tariffSnapshotId;
+    await persistPayableBasis(result.response, referenceTypeForBasis, referenceValueForBasis, changed, changed, displayedBasis.authoritativeAmountMinorUnits, nextState);
+    setStatutoryWorkflowState(nextState);
+    setCashEntryRequested(false);
+    setPreCashStatus("blocked");
+    setLookupState(changed
+      ? { status: "amount_changed", previous: displayedBasis, current: result.response, correlationId, acknowledged: false }
+      : { status: "resolved", basis: result.response, source: "fresh" });
+  }
   const localPrerequisitesReady = config.nonLiveCashCaptureEnabled;
 
   return (
@@ -392,8 +495,16 @@ export function TerminalShell({
             <>
               <div className="resolved-workflow">
                 <div className="session-column">
-                  <SessionSummary basis={displayedBasis} restored={lookupState.status === "resolved" && lookupState.source === "restored"} />
-                  <ReadinessPanel basis={displayedBasis} tariffExpired={tariffExpired} />
+                  <SessionSummary basis={displayedBasis} restored={lookupState.status === "resolved" && lookupState.source === "restored"} statutoryWorkflowActive={statutoryWorkflowActive} />
+                  <ReadinessPanel basis={displayedBasis} tariffExpired={tariffExpired} statutoryWorkflowActive={statutoryWorkflowActive} />
+                  <StatutoryDiscountPanel
+                    basis={displayedBasis}
+                    client={client}
+                    context={context}
+                    state={statutoryWorkflowState}
+                    onStateChange={(next) => void handleStatutoryStateChange(next)}
+                    onAppliedBasisReady={handleAppliedStatutoryBasis}
+                  />
                   {!localPrerequisitesReady && (
                     <StatusNotice tone="danger" title="Local cash prerequisites unavailable" dataTestId="local-cash-prerequisites-notice">
                       Local cash capture is disabled in this terminal profile. Local prerequisites can only restrict Central PMS readiness.
@@ -404,7 +515,7 @@ export function TerminalShell({
                 <div className="cash-column">
                   <PreCashBoundaryPanel
                     basis={displayedBasis}
-                    centralReady={centralReady}
+                    centralReady={cashBoundaryReady}
                     localPrerequisitesReady={localPrerequisitesReady}
                     status={preCashStatus}
                     onContinue={() => void handleContinueToCash(displayedBasis)}
@@ -415,7 +526,7 @@ export function TerminalShell({
                       context={context}
                       session={displayedBasis}
                       tariffExpired={!centralReady}
-                      cashAcceptanceReady={centralReady && localPrerequisitesReady}
+                      cashAcceptanceReady={cashBoundaryReady && localPrerequisitesReady}
                       cashAcceptanceBlockedMessage={blockerMessage(displayedBasis)}
                       onBeforeCashReceived={preCashRevalidate}
                       onLocalPrerequisiteFailure={setLocalPrerequisiteMessage}
@@ -532,7 +643,7 @@ function OperationalContextPanel({ context }: { context: TerminalContext }) {
   );
 }
 
-function SessionSummary({ basis, restored }: { basis: PayableBasisResponse; restored: boolean }) {
+function SessionSummary({ basis, restored, statutoryWorkflowActive }: { basis: PayableBasisResponse; restored: boolean; statutoryWorkflowActive: boolean }) {
   const amount = formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency);
   const primaryRows = [
     [basis.ticketReference ? "Ticket reference" : "Plate number", basis.ticketReference ?? basis.plateNumber ?? "Unavailable"],
@@ -559,7 +670,9 @@ function SessionSummary({ basis, restored }: { basis: PayableBasisResponse; rest
           <p className="eyebrow">Authoritative payable basis</p>
           <strong data-testid="payable-basis-amount">{amount}</strong>
         </div>
-        <span className={basis.readyForCashAcceptance ? "status-badge success" : "status-badge"}>{restored ? "Previously resolved" : basis.readyForCashAcceptance ? "Ready" : "Blocked"}</span>
+        <span className={basis.readyForCashAcceptance && !statutoryWorkflowActive ? "status-badge success" : "status-badge"}>
+          {restored ? "Previously resolved" : statutoryWorkflowActive && basis.readyForCashAcceptance ? "Statutory cash disabled" : basis.readyForCashAcceptance ? "Ready" : "Blocked"}
+        </span>
       </div>
       <dl className="summary-primary">{primaryRows.map(([label, value]) => <div key={label} className="summary-row"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       <details className="session-details">
@@ -570,8 +683,10 @@ function SessionSummary({ basis, restored }: { basis: PayableBasisResponse; rest
   );
 }
 
-function ReadinessPanel({ basis, tariffExpired }: { basis: PayableBasisResponse; tariffExpired: boolean }) {
+function ReadinessPanel({ basis, tariffExpired, statutoryWorkflowActive }: { basis: PayableBasisResponse; tariffExpired: boolean; statutoryWorkflowActive: boolean }) {
   const ready = basis.readyForCashAcceptance && !tariffExpired;
+  const cashierReady = ready && !statutoryWorkflowActive;
+  const title = cashierReady ? "Ready for cash acceptance" : statutoryWorkflowActive && ready ? "Central PMS payable basis ready" : "Cash acceptance blocked";
   const dimensions = [
     { label: "Session", value: basis.sessionReadiness ?? basis.parkingStatus, testId: "session-readiness-value" },
     { label: "Tariff", value: tariffExpired ? "EXPIRED" : basis.tariffReadiness ?? "UNKNOWN", testId: "tariff-readiness-value" },
@@ -582,11 +697,25 @@ function ReadinessPanel({ basis, tariffExpired }: { basis: PayableBasisResponse;
   ];
 
   return (
-    <StatusNotice tone={ready ? "success" : basis.retryable ? "info" : "danger"} title={ready ? "Ready for cash acceptance" : "Cash acceptance blocked"} dataTestId="cash-readiness-status">
-      <p>{ready ? "Central PMS confirmed all pre-cash readiness checks. Revalidation will still run immediately before CASH_RECEIVED." : blockerMessage(basis)}</p>
+    <StatusNotice tone={cashierReady ? "success" : statutoryWorkflowActive && ready ? "info" : basis.retryable ? "info" : "danger"} title={title} dataTestId="cash-readiness-status">
+      <p>{cashierReady
+        ? "Central PMS confirmed all pre-cash readiness checks. Revalidation will still run immediately before CASH_RECEIVED."
+        : statutoryWorkflowActive && ready
+          ? "Central PMS confirms the statutory payable basis is ready. Statutory cash acceptance is not enabled in this slice."
+          : blockerMessage(basis)}</p>
       <dl className="central-pms-details">
         {dimensions.map((dimension) => <div key={dimension.label}><dt>{dimension.label}</dt><dd data-testid={dimension.testId}>{friendlyCode(dimension.value)}</dd></div>)}
       </dl>
+      {basis.statutoryDiscountReadiness?.applicable && (
+        <details open>
+          <summary>Statutory readiness</summary>
+          <dl className="central-pms-details">
+            <div><dt>Status</dt><dd data-testid="statutory-readiness-value">{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessStatus)}</dd></div>
+            <div><dt>Action</dt><dd>{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessAction)}</dd></div>
+            <div><dt>Decision</dt><dd>{basis.statutoryDiscountReadiness.statutoryDiscountDecisionCommandId ?? "Unavailable"}</dd></div>
+          </dl>
+        </details>
+      )}
       {basis.blockingReasonCodes.length > 0 && (
         <details>
           <summary>Support details</summary>
@@ -600,13 +729,17 @@ function ReadinessPanel({ basis, tariffExpired }: { basis: PayableBasisResponse;
 }
 
 function AmountChangedNotice({ previous, current, onAcknowledge }: { previous: PayableBasisResponse; current: PayableBasisResponse; onAcknowledge: () => void }) {
+  const statutoryApplied = current.statutoryDiscountReadiness?.applicable === true;
+  const originalSnapshot = current.statutoryDiscountReadiness?.originalTariffSnapshotId ?? previous.tariffSnapshotId;
+  const appliedSnapshot = current.statutoryDiscountReadiness?.appliedTariffSnapshotId ?? current.appliedTariffSnapshotId ?? current.tariffSnapshotId;
   return (
     <StatusNotice tone="danger" title="Parking fee changed before cash acceptance">
       <p>Review the new authoritative payable basis before accepting cash. CASH_RECEIVED remains blocked until acknowledgement and a later unchanged revalidation.</p>
       <dl className="central-pms-details">
         <div><dt>Previous amount</dt><dd>{formatCurrency(previous.authoritativeAmountMinorUnits, previous.currency)}</dd></div>
-        <div><dt>New amount</dt><dd>{formatCurrency(current.authoritativeAmountMinorUnits, current.currency)}</dd></div>
-        <div><dt>New tariff snapshot</dt><dd>{current.tariffSnapshotId}</dd></div>
+        <div><dt>{statutoryApplied ? "Authoritative applied amount" : "New amount"}</dt><dd>{formatCurrency(current.authoritativeAmountMinorUnits, current.currency)}</dd></div>
+        <div><dt>Original tariff snapshot</dt><dd>{originalSnapshot}</dd></div>
+        <div><dt>Applied tariff snapshot</dt><dd>{appliedSnapshot}</dd></div>
         <div><dt>Recalculated at</dt><dd>{formatDate(current.tariffCalculatedAt)}</dd></div>
         <div><dt>Support reference</dt><dd>{current.correlationId}</dd></div>
       </dl>
@@ -671,7 +804,71 @@ function StatusNotice({
   return <section className={`status-notice ${tone}`} role={tone === "danger" ? "alert" : "status"} data-testid={dataTestId}><h3>{title}</h3><div>{children}</div></section>;
 }
 
+function parseStatutoryState(raw?: string | null, restoredAfterRestart = false): StatutoryDiscountWorkflowState {
+  if (!raw) return noStatutoryWorkflow;
+  try {
+    const parsed = JSON.parse(raw) as StatutoryDiscountWorkflowState;
+    return parsed?.status ? { ...parsed, restoredAfterRestart } : noStatutoryWorkflow;
+  } catch {
+    return { status: "required_facts_unavailable", safeErrorCode: "LOCAL_STATUTORY_STATE_MALFORMED", restoredAfterRestart };
+  }
+}
+
+function serializeStatutoryState(state: StatutoryDiscountWorkflowState): string | null {
+  return state.status === "none" ? null : JSON.stringify(state);
+}
+
+function initialLookupState(
+  basis: PayableBasisResponse | undefined,
+  statutoryState: StatutoryDiscountWorkflowState,
+  source: "fresh" | "restored",
+): LookupState {
+  if (!basis) return { status: "idle" };
+  if (requiresStatutoryAmountAcknowledgement(basis, statutoryState)) {
+    return {
+      status: "amount_changed",
+      previous: previousStatutoryBasis(basis, statutoryState),
+      current: basis,
+      correlationId: basis.correlationId,
+      acknowledged: false,
+    };
+  }
+
+  return { status: "resolved", basis, source };
+}
+
+function requiresStatutoryAmountAcknowledgement(basis: PayableBasisResponse, statutoryState: StatutoryDiscountWorkflowState): boolean {
+  if (statutoryState.status !== "applied" || statutoryState.amountAcknowledged) return false;
+  const originalAmount = statutoryState.originalAmountMinorUnits ?? basis.statutoryDiscountReadiness?.originalAmountMinorUnits;
+  const finalAmount = statutoryState.finalPayableAmountMinorUnits ?? basis.statutoryDiscountReadiness?.finalPayableAmountMinorUnits ?? basis.authoritativeAmountMinorUnits;
+  const originalSnapshot = statutoryState.originalTariffSnapshotId ?? basis.statutoryDiscountReadiness?.originalTariffSnapshotId;
+  const appliedSnapshot = statutoryState.appliedTariffSnapshotId ?? basis.statutoryDiscountReadiness?.appliedTariffSnapshotId ?? basis.tariffSnapshotId;
+
+  return (originalAmount != null && finalAmount != null && originalAmount !== finalAmount)
+    || (Boolean(originalSnapshot) && Boolean(appliedSnapshot) && originalSnapshot !== appliedSnapshot);
+}
+
+function previousStatutoryBasis(current: PayableBasisResponse, statutoryState: StatutoryDiscountWorkflowState): PayableBasisResponse {
+  const originalAmount = statutoryState.originalAmountMinorUnits ?? current.statutoryDiscountReadiness?.originalAmountMinorUnits ?? current.authoritativeAmountMinorUnits;
+  const originalSnapshot = statutoryState.originalTariffSnapshotId ?? current.statutoryDiscountReadiness?.originalTariffSnapshotId ?? current.originalTariffSnapshotId ?? current.tariffSnapshotId;
+  return {
+    ...current,
+    tariffSnapshotId: originalSnapshot,
+    authoritativeAmountMinorUnits: originalAmount,
+    netPayableMinorUnits: originalAmount,
+    statutoryDiscountApplied: false,
+    statutoryDiscountReadiness: null,
+    appliedTariffSnapshotId: null,
+    effectiveTariffSnapshotId: originalSnapshot,
+    readyForCashAcceptance: false,
+    cashAcceptanceReadiness: "BLOCKED",
+    safeUserFacingClassification: "STATUTORY_AMOUNT_ACKNOWLEDGEMENT_REQUIRED",
+    blockingReasonCodes: ["AMOUNT_CHANGED"],
+  };
+}
+
 function basisFromState(state: PayableBasisStateSnapshot): PayableBasisResponse {
+  const statutoryReadiness = parseStatutoryReadiness(state.statutoryDiscountStateJson);
   return {
     operation: "resolve",
     revalidationOutcome: state.revalidationOutcome,
@@ -703,6 +900,11 @@ function basisFromState(state: PayableBasisStateSnapshot): PayableBasisResponse 
     retryable: state.retryable,
     safeUserFacingClassification: state.safeUserFacingClassification,
     correlationId: state.centralPmsCorrelationId,
+    statutoryDiscountApplied: statutoryReadiness?.ready ?? false,
+    statutoryDiscountReadiness: statutoryReadiness,
+    originalTariffSnapshotId: statutoryReadiness?.originalTariffSnapshotId ?? null,
+    effectiveTariffSnapshotId: statutoryReadiness?.appliedTariffSnapshotId ?? state.tariffSnapshotId,
+    appliedTariffSnapshotId: statutoryReadiness?.appliedTariffSnapshotId ?? null,
   };
 }
 
@@ -721,6 +923,13 @@ function blockerMessage(basis: PayableBasisResponse): string {
     FISCAL_PATH_UNAVAILABLE: "Fiscal service is unavailable.",
     AMOUNT_CHANGED: "Parking fee changed before cash acceptance.",
     VENDOR_PMS_UNAVAILABLE: "Central PMS or Vendor PMS is temporarily unavailable.",
+    STATUTORY_DISCOUNT_AWAITING_REVIEW: "Statutory request is awaiting Operator Console review.",
+    STATUTORY_DISCOUNT_APPLICATION_NOT_REQUESTED: "Statutory request was approved. Statutory payable-basis application has not been requested. Action: Submit Application Intent.",
+    STATUTORY_DISCOUNT_APPLICATION_PROCESSING: "Statutory payable basis is being applied. Action: Poll Readback or Check Application Status.",
+    STATUTORY_DISCOUNT_DECISION_REJECTED: "Statutory request was rejected.",
+    STATUTORY_DISCOUNT_RETRYABLE_FAILURE: "Statutory workflow has a retryable Central PMS failure.",
+    STATUTORY_DISCOUNT_TERMINAL_FAILURE: "Statutory workflow requires support.",
+    STATUTORY_DISCOUNT_REQUIRED_FACTS_UNAVAILABLE: "Required statutory payable-basis facts are unavailable.",
   };
   return messages[first] ?? basis.safeMessage ?? friendlyCode(first);
 }
@@ -744,4 +953,39 @@ function maskPlate(plate?: string | null): string {
 function formatDate(value?: string | null): string {
   if (!value) return "Unavailable";
   return new Intl.DateTimeFormat("en-PH", { dateStyle: "medium", timeStyle: "medium" }).format(new Date(value));
+}
+
+function parseStatutoryReadiness(raw?: string | null) {
+  const state = parseStatutoryState(raw);
+  if (state.status === "none") return null;
+  return {
+    applicable: true,
+    ready: state.status === "applied" && Boolean(state.payableBasisReady),
+    statutoryDiscountDecisionCommandId: state.statutoryDiscountDecisionCommandId ?? null,
+    statutoryDiscountPayableBasisApplicationCommandId: state.statutoryDiscountPayableBasisApplicationCommandId ?? null,
+    entitlementType: state.entitlementType ?? null,
+    decisionStatus: state.decisionStatus ?? null,
+    decisionResultStatus: state.decisionResultStatus ?? null,
+    decisionCommandStatus: state.decisionStatus ?? null,
+    applicationCommandStatus: state.applicationCommandStatus ?? null,
+    applicationResultClassification: state.applicationResultClassification ?? null,
+    payableBasisReady: Boolean(state.payableBasisReady),
+    payableBasisReadinessStatus: state.payableBasisReadinessStatus ?? "NOT_READY",
+    payableBasisReadinessAction: state.payableBasisReadinessAction ?? null,
+    originalTariffSnapshotId: state.originalTariffSnapshotId ?? null,
+    appliedTariffSnapshotId: state.appliedTariffSnapshotId ?? null,
+    originalAmountMinorUnits: state.originalAmountMinorUnits ?? null,
+    vatExclusiveBasisAmountMinorUnits: state.vatExclusiveBasisAmountMinorUnits ?? null,
+    vatAmountMinorUnits: state.vatAmountMinorUnits ?? null,
+    vatTreatment: state.vatTreatment ?? null,
+    statutoryDiscountAmountMinorUnits: state.statutoryDiscountAmountMinorUnits ?? null,
+    finalPayableAmountMinorUnits: state.finalPayableAmountMinorUnits ?? null,
+    currency: state.currency ?? null,
+    retryable: Boolean(state.retryable),
+    recoveryClassification: state.recoveryClassification ?? null,
+    recoveryAction: state.recoveryAction ?? null,
+    safeErrorCode: state.safeErrorCode ?? null,
+    blockingReasonCode: state.safeErrorCode ?? "STATUTORY_DISCOUNT_AWAITING_REVIEW",
+    message: state.payableBasisReadinessStatus ?? state.status,
+  };
 }

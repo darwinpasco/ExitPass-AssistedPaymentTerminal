@@ -235,7 +235,8 @@ public sealed class CashJournalServiceTests
     {
         using var database = TestDatabase.Create();
         var service = database.CreateService();
-        await service.SavePayableBasisStateAsync(PayableBasisRequest("plate", "PLATE-READY-1002", ready: false));
+        const string statutoryStateJson = "{\"status\":\"awaiting_review\",\"statutoryDiscountDecisionCommandId\":\"77777777-7777-4777-8777-777777770777\"}";
+        await service.SavePayableBasisStateAsync(PayableBasisRequest("plate", "PLATE-READY-1002", ready: false, statutoryStateJson));
 
         var restarted = database.CreateService();
         var latest = await restarted.GetLatestPayableBasisStateAsync("APT-DEV-001", "11111111-1111-4111-8111-111111111111");
@@ -245,10 +246,11 @@ public sealed class CashJournalServiceTests
         Assert.Equal("plate", latest!.LookupReferenceType);
         Assert.False(latest.ReadyForCashAcceptance);
         Assert.Contains("SALES_INVOICE_CONFIGURATION_NOT_READY", latest.BlockingReasonCodes);
+        Assert.Equal(statutoryStateJson, latest.StatutoryDiscountStateJson);
         Assert.Null(tender);
     }
 
-    private static SavePayableBasisStateRequest PayableBasisRequest(string referenceType, string referenceValue, bool ready) =>
+    private static SavePayableBasisStateRequest PayableBasisRequest(string referenceType, string referenceValue, bool ready, string? statutoryStateJson = null) =>
         new(
             LocalWorkflowId: $"11111111-1111-4111-8111-111111111111:APT-DEV-001:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
             LookupReferenceType: referenceType,
@@ -281,7 +283,8 @@ public sealed class CashJournalServiceTests
             RevalidationOutcome: null,
             CashierAcknowledgementRequired: false,
             AmountChanged: false,
-            PriorDisplayedAmountMinorUnits: null);
+            PriorDisplayedAmountMinorUnits: null,
+            StatutoryDiscountStateJson: statutoryStateJson);
     private static async Task<CashCustodySessionSnapshot> CreateSessionAsync(CashJournalService service)
     {
         var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
