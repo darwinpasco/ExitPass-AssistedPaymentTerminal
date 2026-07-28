@@ -74,11 +74,11 @@ foreach ($package in $licensePackages) {
 }
 
 $forbiddenPatterns = @(
-  "BEGIN PRIVATE KEY",
-  "Authorization:",
-  "Bearer ",
-  "ApiKey",
-  "Password="
+  ("BEGIN " + "PRIVATE KEY"),
+  ("Author" + "ization:"),
+  ("Bear" + "er "),
+  ("Api" + "Key"),
+  ("Pass" + "word=")
 )
 
 foreach ($pattern in $forbiddenPatterns) {
@@ -94,17 +94,19 @@ foreach ($pattern in $forbiddenPatterns) {
 
   $matches = Get-ChildItem -Path $scanRoots -Recurse -File |
     Where-Object { $_.FullName -notmatch "\\(bin|obj|dist|node_modules|TestResults)\\" } |
-    Where-Object { $_.FullName -ne $PSCommandPath } |
-    Select-String -Pattern $pattern -ErrorAction SilentlyContinue
+    Select-String -SimpleMatch -Pattern $pattern -ErrorAction SilentlyContinue
   if ($matches) {
     $firstMatch = $matches | Select-Object -First 1
-    throw "Forbidden secret-like pattern found in source: $pattern at $($firstMatch.Path):$($firstMatch.LineNumber)"
+    throw "Forbidden secret-like pattern found in source at $($firstMatch.Path):$($firstMatch.LineNumber)"
   }
 }
 
-$publishedMatches = Get-ChildItem -Path $publishRoot -Recurse -File |
-  Where-Object { $_.Length -lt 10MB } |
-  Select-String -Pattern "BEGIN PRIVATE KEY|Authorization:|Bearer |ApiKey|Password=" -ErrorAction SilentlyContinue
+$publishedFiles = Get-ChildItem -Path $publishRoot -Recurse -File |
+  Where-Object { $_.Length -lt 10MB }
+
+$publishedMatches = foreach ($pattern in $forbiddenPatterns) {
+  $publishedFiles | Select-String -SimpleMatch -Pattern $pattern -ErrorAction SilentlyContinue
+}
 
 if ($publishedMatches) {
   throw "Forbidden secret-like pattern found in published proof output."
