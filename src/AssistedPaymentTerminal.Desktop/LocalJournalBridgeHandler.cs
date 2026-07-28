@@ -282,6 +282,24 @@ public sealed class LocalJournalBridgeHandler
         var result = await _journal.CommitCashReceivedAsync(new CommitCashReceivedRequest(
             LocalCashTenderId: payload.LocalCashTenderId,
             CashierAttested: payload.CashierAttested,
+            StatutoryTenderEvidence: payload.StatutoryTenderEvidence is null
+                ? null
+                : new StatutoryTenderEvidence(
+                    payload.StatutoryTenderEvidence.StatutoryDiscountDecisionCommandId,
+                    payload.StatutoryTenderEvidence.StatutoryDiscountPayableBasisApplicationCommandId,
+                    payload.StatutoryTenderEvidence.StatutoryDiscountValidationId,
+                    payload.StatutoryTenderEvidence.OriginalTariffSnapshotId,
+                    payload.StatutoryTenderEvidence.AppliedTariffSnapshotId,
+                    payload.StatutoryTenderEvidence.OriginalAmountMinorUnits,
+                    payload.StatutoryTenderEvidence.FinalAmountMinorUnits,
+                    payload.StatutoryTenderEvidence.Currency,
+                    payload.StatutoryTenderEvidence.AmountAcknowledged,
+                    payload.StatutoryTenderEvidence.AmountAcknowledgedAt,
+                    payload.StatutoryTenderEvidence.ImmediateRevalidationOutcome,
+                    payload.StatutoryTenderEvidence.ImmediateRevalidatedAt,
+                    payload.StatutoryTenderEvidence.CentralPmsCorrelationId,
+                    payload.StatutoryTenderEvidence.ReadinessStatus,
+                    payload.StatutoryTenderEvidence.ReadinessAction),
             Denominations: payload.Denominations
                 .Where(denomination => denomination.Quantity > 0)
                 .Select(denomination => new CashDenominationLine(
@@ -1111,6 +1129,7 @@ public sealed record StartTenderPayload(
 public sealed record RecordCashReceivedPayload(
     Guid LocalCashTenderId,
     bool CashierAttested,
+    StatutoryTenderEvidencePayload? StatutoryTenderEvidence,
     IReadOnlyCollection<BridgeDenominationLine> Denominations);
 
 public sealed record BridgeDenominationLine(
@@ -1701,3 +1720,20 @@ public sealed record SavePayableBasisStatePayload(
 public sealed record GetLatestPayableBasisStatePayload(
     string TerminalId,
     string SiteId);
+
+public sealed record StatutoryTenderEvidencePayload(
+    string? StatutoryDiscountDecisionCommandId,
+    string? StatutoryDiscountPayableBasisApplicationCommandId,
+    string? StatutoryDiscountValidationId,
+    string? OriginalTariffSnapshotId,
+    string? AppliedTariffSnapshotId,
+    long? OriginalAmountMinorUnits,
+    long? FinalAmountMinorUnits,
+    string? Currency,
+    bool? AmountAcknowledged,
+    DateTimeOffset? AmountAcknowledgedAt,
+    string? ImmediateRevalidationOutcome,
+    DateTimeOffset? ImmediateRevalidatedAt,
+    string? CentralPmsCorrelationId,
+    string? ReadinessStatus,
+    string? ReadinessAction);

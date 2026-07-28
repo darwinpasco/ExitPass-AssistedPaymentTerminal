@@ -111,6 +111,45 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
   });
 
+  it("runs immediate revalidation before CASH_RECEIVED and persists statutory tender evidence", async () => {
+    const bridge = new FakeBridge();
+    const revalidate = vi.fn(async (basis: ResolveVendorParkingResponse) => ({ ok: true as const, basis: { ...basis, revalidationOutcome: "PASSED_UNCHANGED", correlationId: "corr-second-revalidation" } }));
+    renderPanel({ config: enabledConfig(), bridge, session: statutoryAppliedSession(), onBeforeCashReceived: revalidate });
+
+    await recordCashReceived();
+
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(bridge.startTender).toHaveBeenCalledTimes(1);
+    expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
+    const payload = bridge.recordCashReceived.mock.calls[0][1];
+    expect(payload.statutoryTenderEvidence).toMatchObject({
+      statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
+      statutoryDiscountPayableBasisApplicationCommandId: "88888888-8888-4888-8888-888888880001",
+      statutoryDiscountValidationId: "66666666-6666-4666-8666-666666660001",
+      appliedTariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+      finalAmountMinorUnits: 10000,
+      currency: "PHP",
+      immediateRevalidationOutcome: "PASSED_UNCHANGED",
+      centralPmsCorrelationId: "corr-second-revalidation",
+      readinessStatus: "APPLIED",
+    });
+    expect(await screen.findByTestId("statutory-tender-evidence")).toHaveTextContent("99999999-9999-4999-8999-999999990001");
+  });
+
+  it("blocks CASH_RECEIVED when immediate statutory revalidation changes the amount", async () => {
+    const bridge = new FakeBridge();
+    const revalidate = vi.fn(async () => ({ ok: false as const, message: "The parking fee changed before cash acceptance." }));
+    renderPanel({ config: enabledConfig(), bridge, session: statutoryAppliedSession(), onBeforeCashReceived: revalidate });
+
+    await recordCashReceived();
+
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(bridge.startTender).not.toHaveBeenCalled();
+    expect(bridge.recordCashReceived).not.toHaveBeenCalled();
+    expect(await screen.findByText("The parking fee changed before cash acceptance.")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Cash received locally");
+  });
+
   it("renders all supported Philippine denomination inputs in descending order", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
     await screen.findByText("Local cash custody capture");
@@ -1422,12 +1461,16 @@ function renderPanel({
   config,
   tariffExpired = false,
   bridge,
+  session = activeSession(),
+  onBeforeCashReceived,
   developmentFixtureLocalCashTenderId,
   autoAdvanceAfterCashReceived = false,
 }: {
   config: AptConfig;
   tariffExpired?: boolean;
   bridge: LocalJournalBridge;
+  session?: ResolveVendorParkingResponse;
+  onBeforeCashReceived?: (session: ResolveVendorParkingResponse) => Promise<{ ok: true; basis: ResolveVendorParkingResponse } | { ok: false; message: string }>;
   developmentFixtureLocalCashTenderId?: string;
   autoAdvanceAfterCashReceived?: boolean;
 }) {
@@ -1435,8 +1478,9 @@ function renderPanel({
     <CashCapturePanel
       config={config}
       context={buildTerminalContext(config)}
-      session={activeSession()}
+      session={session}
       tariffExpired={tariffExpired}
+      onBeforeCashReceived={onBeforeCashReceived}
       bridge={bridge}
       developmentFixtureLocalCashTenderId={developmentFixtureLocalCashTenderId}
       autoAdvanceAfterCashReceived={autoAdvanceAfterCashReceived}
@@ -1530,6 +1574,53 @@ function activeSession(): ResolveVendorParkingResponse {
   };
 }
 
+function statutoryAppliedSession(): ResolveVendorParkingResponse {
+  return {
+    ...activeSession(),
+    tariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+    authoritativeAmountMinorUnits: 10000,
+    netPayableMinorUnits: 10000,
+    statutoryDiscountApplied: true,
+    statutoryDiscountValidationId: "66666666-6666-4666-8666-666666660001",
+    statutoryDiscountApplicationId: "88888888-8888-4888-8888-888888880001",
+    originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+    effectiveTariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+    appliedTariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+    benefitType: "SENIOR_CITIZEN",
+    statutoryDiscountReadiness: {
+      applicable: true,
+      ready: true,
+      statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
+      statutoryDiscountValidationId: "66666666-6666-4666-8666-666666660001",
+      statutoryDiscountPayableBasisApplicationCommandId: "88888888-8888-4888-8888-888888880001",
+      entitlementType: "SENIOR_CITIZEN",
+      decisionStatus: "COMPLETED",
+      decisionResultStatus: "APPROVED",
+      decisionCommandStatus: "COMPLETED",
+      applicationCommandStatus: "APPLIED",
+      applicationResultClassification: "APPLIED",
+      payableBasisReady: true,
+      payableBasisReadinessStatus: "APPLIED",
+      payableBasisReadinessAction: null,
+      originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+      appliedTariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+      originalAmountMinorUnits: 12500,
+      vatExclusiveBasisAmountMinorUnits: 8929,
+      vatAmountMinorUnits: 1071,
+      vatTreatment: "VAT_EXEMPT_WITH_DISCOUNT",
+      statutoryDiscountAmountMinorUnits: 2500,
+      finalPayableAmountMinorUnits: 10000,
+      currency: "PHP",
+      retryable: false,
+      recoveryClassification: "NONE",
+      recoveryAction: null,
+      safeErrorCode: null,
+      blockingReasonCode: null,
+      message: "Statutory payable basis is applied.",
+    },
+  };
+}
+
 class FakeBridge implements LocalJournalBridge {
   private readonly duplicateOnStart: boolean;
   private readonly centralStatus: CentralPmsCashSubmissionStatus;
@@ -1605,12 +1696,31 @@ class FakeBridge implements LocalJournalBridge {
 
   public recordCashReceived = vi.fn(async (
     correlationId: string,
-    _payload: RecordCashReceivedPayload,
+    payload: RecordCashReceivedPayload,
   ): Promise<BridgeResult<CashTenderSnapshot>> => ({
     ok: true,
     command: "localJournal.recordCashReceived",
     correlationId,
-    payload: tender({ id: "tender-001", state: "CashReceived", correlationId }),
+    payload: tender({
+      id: "tender-001",
+      state: "CashReceived",
+      correlationId,
+      statutoryDiscountDecisionCommandId: payload.statutoryTenderEvidence?.statutoryDiscountDecisionCommandId ?? null,
+      statutoryDiscountPayableBasisApplicationCommandId: payload.statutoryTenderEvidence?.statutoryDiscountPayableBasisApplicationCommandId ?? null,
+      statutoryDiscountValidationId: payload.statutoryTenderEvidence?.statutoryDiscountValidationId ?? null,
+      statutoryOriginalTariffSnapshotId: payload.statutoryTenderEvidence?.originalTariffSnapshotId ?? null,
+      statutoryAppliedTariffSnapshotId: payload.statutoryTenderEvidence?.appliedTariffSnapshotId ?? null,
+      statutoryOriginalAmountMinorUnits: payload.statutoryTenderEvidence?.originalAmountMinorUnits ?? null,
+      statutoryFinalAmountMinorUnits: payload.statutoryTenderEvidence?.finalAmountMinorUnits ?? null,
+      statutoryCurrency: payload.statutoryTenderEvidence?.currency ?? null,
+      statutoryAmountAcknowledged: payload.statutoryTenderEvidence?.amountAcknowledged ?? null,
+      statutoryAmountAcknowledgedAt: payload.statutoryTenderEvidence?.amountAcknowledgedAt ?? null,
+      statutoryImmediateRevalidationOutcome: payload.statutoryTenderEvidence?.immediateRevalidationOutcome ?? null,
+      statutoryImmediateRevalidatedAt: payload.statutoryTenderEvidence?.immediateRevalidatedAt ?? null,
+      statutoryCorrelationId: payload.statutoryTenderEvidence?.centralPmsCorrelationId ?? null,
+      statutoryReadinessStatus: payload.statutoryTenderEvidence?.readinessStatus ?? null,
+      statutoryReadinessAction: payload.statutoryTenderEvidence?.readinessAction ?? null,
+    }),
   }));
 
   public readTenderByParkingSession = vi.fn(async (correlationId: string): Promise<BridgeResult<LocalTenderReadback>> => ({
@@ -1773,7 +1883,22 @@ function tender({
   currency = "PHP",
   amountDue = 125,
   amountTendered = 150,
-}: Partial<StartTenderPayload> & { id: string; state: string; correlationId: string }): CashTenderSnapshot {
+  statutoryDiscountDecisionCommandId,
+  statutoryDiscountPayableBasisApplicationCommandId,
+  statutoryDiscountValidationId,
+  statutoryOriginalTariffSnapshotId,
+  statutoryAppliedTariffSnapshotId,
+  statutoryOriginalAmountMinorUnits,
+  statutoryFinalAmountMinorUnits,
+  statutoryCurrency,
+  statutoryAmountAcknowledged,
+  statutoryAmountAcknowledgedAt,
+  statutoryImmediateRevalidationOutcome,
+  statutoryImmediateRevalidatedAt,
+  statutoryCorrelationId,
+  statutoryReadinessStatus,
+  statutoryReadinessAction,
+}: Partial<StartTenderPayload> & Partial<CashTenderSnapshot> & { id: string; state: string; correlationId: string }): CashTenderSnapshot {
   return {
     id,
     cashCustodySessionId,
@@ -1786,6 +1911,21 @@ function tender({
     correlationId,
     localIdempotencyIdentity: "idem-ui",
     currentLocalState: state,
+    statutoryDiscountDecisionCommandId,
+    statutoryDiscountPayableBasisApplicationCommandId,
+    statutoryDiscountValidationId,
+    statutoryOriginalTariffSnapshotId,
+    statutoryAppliedTariffSnapshotId,
+    statutoryOriginalAmountMinorUnits,
+    statutoryFinalAmountMinorUnits,
+    statutoryCurrency,
+    statutoryAmountAcknowledged,
+    statutoryAmountAcknowledgedAt,
+    statutoryImmediateRevalidationOutcome,
+    statutoryImmediateRevalidatedAt,
+    statutoryCorrelationId,
+    statutoryReadinessStatus,
+    statutoryReadinessAction,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

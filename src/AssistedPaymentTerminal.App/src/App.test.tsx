@@ -138,7 +138,7 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(calls[0]).not.toBe(calls[1]);
   });
 
-  it("submits safe statutory facts for review and keeps statutory cash acceptance blocked", async () => {
+  it("submits safe statutory facts for review and keeps pending-review statutory cash blocked", async () => {
     const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
     render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} />);
 
@@ -156,7 +156,7 @@ describe("App startup and payable-basis readiness workflow", () => {
 
     expect(await screen.findByText("Awaiting Operator Review")).toBeInTheDocument();
     expect(screen.getByText(/Check status performs read-only Central PMS GET readback/)).toBeInTheDocument();
-    expect(screen.getByTestId("statutory-cash-blocker")).toHaveTextContent("Statutory CASH_RECEIVED is not enabled");
+    expect(screen.getByTestId("statutory-cash-blocker")).toHaveTextContent("Statutory cash remains blocked until approval");
     expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeDisabled();
     expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
   });

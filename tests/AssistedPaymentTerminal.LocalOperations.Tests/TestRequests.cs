@@ -19,13 +19,14 @@ internal static class TestRequests
     public static StartCashTenderRequest StartTender(
         Guid cashCustodySessionId,
         string parkingSessionId = "33333333-3333-4333-8333-333333333333",
+        string tariffSnapshotId = "44444444-4444-4444-8444-444444444444",
         string localIdempotencyIdentity = "idem-001",
         decimal amountDue = 100m,
         decimal amountTendered = 100m) =>
         new(
             CashCustodySessionId: cashCustodySessionId,
             ParkingSessionId: parkingSessionId,
-            TariffSnapshotId: "44444444-4444-4444-8444-444444444444",
+            TariffSnapshotId: tariffSnapshotId,
             Currency: "PHP",
             AmountDue: amountDue,
             AmountTendered: amountTendered,
@@ -36,10 +37,12 @@ internal static class TestRequests
     public static CommitCashReceivedRequest CommitCashReceived(
         Guid localCashTenderId,
         bool cashierAttested = true,
-        IReadOnlyCollection<CashDenominationLine>? denominations = null) =>
+        IReadOnlyCollection<CashDenominationLine>? denominations = null,
+        StatutoryTenderEvidence? statutoryTenderEvidence = null) =>
         new(
             LocalCashTenderId: localCashTenderId,
             CashierAttested: cashierAttested,
             Denominations: denominations ?? [],
+            StatutoryTenderEvidence: statutoryTenderEvidence,
             ReceivedAt: DateTimeOffset.Parse("2026-07-15T00:02:00Z"));
 }

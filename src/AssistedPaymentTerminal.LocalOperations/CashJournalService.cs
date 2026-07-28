@@ -47,6 +47,7 @@ public sealed class CashJournalService
 
         await using var dbContext = CreateDbContext();
         await dbContext.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureCashTenderStatutoryEvidenceSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CashJournalResult<CashCustodySessionSnapshot>> CreateCashCustodySessionAsync(
@@ -232,6 +233,7 @@ public sealed class CashJournalService
         }
 
         var now = request.ReceivedAt ?? DateTimeOffset.UtcNow;
+        ApplyStatutoryTenderEvidence(tender, request.StatutoryTenderEvidence, now);
         tender.ChangeDue = tender.AmountTendered - tender.AmountDue;
         tender.CurrentLocalState = CashTenderState.CashReceived;
         tender.UpdatedAt = now;
@@ -549,6 +551,54 @@ public sealed class CashJournalService
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE INDEX IF NOT EXISTS IX_terminal_cash_payable_basis_states_TerminalId_SiteId_UpdatedAt ON terminal_cash_payable_basis_states (TerminalId, SiteId, UpdatedAt);",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureCashTenderStatutoryEvidenceSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryDiscountDecisionCommandId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryDiscountPayableBasisApplicationCommandId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryDiscountValidationId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryOriginalTariffSnapshotId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryAppliedTariffSnapshotId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryOriginalAmountMinorUnits", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryFinalAmountMinorUnits", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryCurrency", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryAmountAcknowledged", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryAmountAcknowledgedAt", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryImmediateRevalidationOutcome", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryImmediateRevalidatedAt", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryCorrelationId", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryReadinessStatus", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryReadinessAction", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ApplyStatutoryTenderEvidence(
+        CashTender tender,
+        StatutoryTenderEvidence? evidence,
+        DateTimeOffset recordedAt)
+    {
+        if (evidence is null)
+        {
+            return;
+        }
+
+        tender.StatutoryDiscountDecisionCommandId = evidence.StatutoryDiscountDecisionCommandId;
+        tender.StatutoryDiscountPayableBasisApplicationCommandId = evidence.StatutoryDiscountPayableBasisApplicationCommandId;
+        tender.StatutoryDiscountValidationId = evidence.StatutoryDiscountValidationId;
+        tender.StatutoryOriginalTariffSnapshotId = evidence.OriginalTariffSnapshotId;
+        tender.StatutoryAppliedTariffSnapshotId = evidence.AppliedTariffSnapshotId;
+        tender.StatutoryOriginalAmountMinorUnits = evidence.OriginalAmountMinorUnits;
+        tender.StatutoryFinalAmountMinorUnits = evidence.FinalAmountMinorUnits;
+        tender.StatutoryCurrency = evidence.Currency;
+        tender.StatutoryAmountAcknowledged = evidence.AmountAcknowledged;
+        tender.StatutoryAmountAcknowledgedAt = evidence.AmountAcknowledgedAt ?? recordedAt;
+        tender.StatutoryImmediateRevalidationOutcome = evidence.ImmediateRevalidationOutcome;
+        tender.StatutoryImmediateRevalidatedAt = evidence.ImmediateRevalidatedAt ?? recordedAt;
+        tender.StatutoryCorrelationId = evidence.CentralPmsCorrelationId;
+        tender.StatutoryReadinessStatus = evidence.ReadinessStatus;
+        tender.StatutoryReadinessAction = evidence.ReadinessAction;
     }
 
 

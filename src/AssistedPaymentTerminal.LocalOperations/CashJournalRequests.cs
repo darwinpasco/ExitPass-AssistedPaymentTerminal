@@ -28,9 +28,27 @@ public sealed record CommitCashReceivedRequest(
     Guid LocalCashTenderId,
     bool CashierAttested,
     IReadOnlyCollection<CashDenominationLine> Denominations,
+    StatutoryTenderEvidence? StatutoryTenderEvidence = null,
     DateTimeOffset? ReceivedAt = null,
     string CentralPmsTarget = "UNCONFIGURED_CENTRAL_PMS",
     bool SimulateOutboxCreationFailure = false);
+
+public sealed record StatutoryTenderEvidence(
+    string? StatutoryDiscountDecisionCommandId,
+    string? StatutoryDiscountPayableBasisApplicationCommandId,
+    string? StatutoryDiscountValidationId,
+    string? OriginalTariffSnapshotId,
+    string? AppliedTariffSnapshotId,
+    long? OriginalAmountMinorUnits,
+    long? FinalAmountMinorUnits,
+    string? Currency,
+    bool? AmountAcknowledged,
+    DateTimeOffset? AmountAcknowledgedAt,
+    string? ImmediateRevalidationOutcome,
+    DateTimeOffset? ImmediateRevalidatedAt,
+    string? CentralPmsCorrelationId,
+    string? ReadinessStatus,
+    string? ReadinessAction);
 
 public sealed record CashDenominationLine(
     string DenominationCode,

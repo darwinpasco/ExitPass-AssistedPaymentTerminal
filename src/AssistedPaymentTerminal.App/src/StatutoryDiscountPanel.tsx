@@ -51,6 +51,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, onStateC
   const canCheckReview = Boolean(decisionId) && ["awaiting_review", "retryable_failure"].includes(status);
   const canSubmitApplication = status === "approved_application_not_requested" && Boolean(decisionId);
   const appliedComplete = status === "applied" && Boolean(state.appliedTariffSnapshotId) && state.finalPayableAmountMinorUnits != null && Boolean(state.currency);
+  const statutoryCashReady = appliedComplete && state.amountAcknowledged === true;
 
   const facts = useMemo(() => ([
     ["Decision command", decisionId ?? "Not recorded"],
@@ -155,7 +156,11 @@ export function StatutoryDiscountPanel({ basis, client, context, state, onStateC
   return (
     <section className="status-notice info statutory-discount-panel" aria-label="Statutory discount workflow" data-testid="statutory-discount-panel">
       <h3>Statutory discount</h3>
-      <p data-testid="statutory-cash-blocker">Statutory CASH_RECEIVED is not enabled in this slice. Continue to Cash remains disabled for active statutory workflows.</p>
+      <p data-testid="statutory-cash-blocker">
+        {statutoryCashReady
+          ? "Statutory payable basis is ready for Continue to Cash after immediate Central PMS revalidation."
+          : "Statutory cash remains blocked until approval, APPLIED payable basis, amount acknowledgement, Central PMS readiness, local prerequisites, and immediate revalidation all pass."}
+      </p>
       {!active && (
         <div className="statutory-draft-actions">
           <p>No statutory request is active for this payable basis.</p>
@@ -374,7 +379,7 @@ function descriptionForStatus(status: StatutoryDiscountWorkflowState["status"], 
     approved_application_not_requested: "Statutory request was approved. Statutory payable-basis application has not been requested. Action: Submit Application Intent.",
     application_submitting: "Submitting application intent with applyPayableBasis=true. The desktop does not send calculated statutory values.",
     application_processing: "Statutory payable basis is being applied. Action: Poll Readback or Check Application Status.",
-    applied: "Central PMS returned the applied tariff snapshot and final statutory amount. Statutory cash acceptance is still not enabled in this slice.",
+    applied: "Central PMS returned the applied tariff snapshot and final statutory amount. Continue to Cash is available only after acknowledgement, statutory-aware readiness, local prerequisites, and immediate revalidation pass.",
     rejected: "Operator Console rejected the statutory request. Application intent is unavailable.",
     retryable_failure: "A retryable statutory failure was reported. Reuse the original idempotency key according to Central PMS recovery guidance.",
     terminal_failure: "A terminal statutory failure requires support. Blind retry is disabled.",

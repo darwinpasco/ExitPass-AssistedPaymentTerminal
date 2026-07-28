@@ -116,6 +116,79 @@ public sealed class CashJournalServiceTests
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task PersistsStatutoryTenderEvidenceAtCashReceivedBoundary()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(
+            service,
+            session.Id,
+            parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+            tariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+            amountDue: 100m,
+            amountTendered: 100m);
+
+        var evidence = StatutoryEvidence();
+        var committed = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(
+            tender.Id,
+            statutoryTenderEvidence: evidence));
+
+        Assert.True(committed.IsSuccess);
+        Assert.Equal("77777777-7777-4777-8777-777777770777", committed.Value!.StatutoryDiscountDecisionCommandId);
+        Assert.Equal("88888888-8888-4888-8888-888888880001", committed.Value.StatutoryDiscountPayableBasisApplicationCommandId);
+        Assert.Equal("66666666-6666-4666-8666-666666660001", committed.Value.StatutoryDiscountValidationId);
+        Assert.Equal("99999999-9999-4999-8999-999999990001", committed.Value.StatutoryAppliedTariffSnapshotId);
+        Assert.Equal(10000, committed.Value.StatutoryFinalAmountMinorUnits);
+        Assert.Equal("PHP", committed.Value.StatutoryCurrency);
+        Assert.True(committed.Value.StatutoryAmountAcknowledged);
+        Assert.Equal("PASSED_UNCHANGED", committed.Value.StatutoryImmediateRevalidationOutcome);
+
+        var reopened = database.CreateService();
+        var readback = await reopened.GetCashTenderAsync(tender.Id);
+
+        Assert.NotNull(readback);
+        Assert.Equal(committed.Value.StatutoryDiscountDecisionCommandId, readback!.StatutoryDiscountDecisionCommandId);
+        Assert.Equal(committed.Value.StatutoryAppliedTariffSnapshotId, readback.StatutoryAppliedTariffSnapshotId);
+        Assert.Equal(committed.Value.StatutoryFinalAmountMinorUnits, readback.StatutoryFinalAmountMinorUnits);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task TerminalCashPayloadUsesAppliedSnapshotAndFinalStatutoryAmountWithoutPublicContractChange()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(
+            service,
+            session.Id,
+            parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+            tariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+            amountDue: 100m,
+            amountTendered: 100m);
+
+        var committed = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(
+            tender.Id,
+            statutoryTenderEvidence: StatutoryEvidence()));
+        Assert.True(committed.IsSuccess);
+
+        var command = await service.GetTerminalCashPaymentOutboxCommandByTenderAsync(tender.Id);
+        Assert.NotNull(command);
+        var payload = System.Text.Json.JsonSerializer.Deserialize<TerminalCashPaymentRequest>(
+            command!.RequestPayloadJson,
+            TerminalCashPaymentPayloadFactory.JsonOptions);
+
+        Assert.NotNull(payload);
+        Assert.Equal(Guid.Parse("99999999-9999-4999-8999-999999990001"), payload!.TariffSnapshotId);
+        Assert.Equal(10000, payload.AmountDueMinorUnits);
+        Assert.Equal(10000, payload.AmountTenderedMinorUnits);
+        Assert.DoesNotContain("statutoryDiscountAmount", command.RequestPayloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("vatAmount", command.RequestPayloadJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task PreservesAppendOnlyEventHistory()
     {
         using var database = TestDatabase.Create();
@@ -285,6 +358,25 @@ public sealed class CashJournalServiceTests
             AmountChanged: false,
             PriorDisplayedAmountMinorUnits: null,
             StatutoryDiscountStateJson: statutoryStateJson);
+
+    private static StatutoryTenderEvidence StatutoryEvidence() =>
+        new(
+            StatutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
+            StatutoryDiscountPayableBasisApplicationCommandId: "88888888-8888-4888-8888-888888880001",
+            StatutoryDiscountValidationId: "66666666-6666-4666-8666-666666660001",
+            OriginalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+            AppliedTariffSnapshotId: "99999999-9999-4999-8999-999999990001",
+            OriginalAmountMinorUnits: 12500,
+            FinalAmountMinorUnits: 10000,
+            Currency: "PHP",
+            AmountAcknowledged: true,
+            AmountAcknowledgedAt: DateTimeOffset.Parse("2026-07-15T00:01:30Z"),
+            ImmediateRevalidationOutcome: "PASSED_UNCHANGED",
+            ImmediateRevalidatedAt: DateTimeOffset.Parse("2026-07-15T00:01:45Z"),
+            CentralPmsCorrelationId: "central-statutory-corr",
+            ReadinessStatus: "APPLIED",
+            ReadinessAction: null);
+
     private static async Task<CashCustodySessionSnapshot> CreateSessionAsync(CashJournalService service)
     {
         var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
@@ -297,12 +389,14 @@ public sealed class CashJournalServiceTests
         CashJournalService service,
         Guid cashCustodySessionId,
         string parkingSessionId = "33333333-3333-4333-8333-333333333333",
+        string tariffSnapshotId = "44444444-4444-4444-8444-444444444444",
         decimal amountDue = 100m,
         decimal amountTendered = 100m)
     {
         var result = await service.StartCashTenderAsync(TestRequests.StartTender(
             cashCustodySessionId,
             parkingSessionId: parkingSessionId,
+            tariffSnapshotId: tariffSnapshotId,
             amountDue: amountDue,
             amountTendered: amountTendered));
 

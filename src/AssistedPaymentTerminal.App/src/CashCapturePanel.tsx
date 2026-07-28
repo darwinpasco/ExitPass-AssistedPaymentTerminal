@@ -141,7 +141,7 @@ export function CashCapturePanel({
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
-    if (!config.nonLiveCashCaptureEnabled || tariffExpired || !cashAcceptanceReady) {
+    if (!config.nonLiveCashCaptureEnabled || tariffExpired) {
       return;
     }
 
@@ -551,6 +551,7 @@ export function CashCapturePanel({
     const received = await bridge.recordCashReceived(correlationId, {
       localCashTenderId: started.payload.id,
       cashierAttested,
+      statutoryTenderEvidence: buildStatutoryTenderEvidence(authoritativeBasis),
       denominations: denominationPayload,
     });
 
@@ -838,6 +839,15 @@ export function CashCapturePanel({
           <p>Local tender ID: {existingTender.id}</p>
           <p>Local state: {existingTender.currentLocalState}</p>
           <p>Correlation ID: {existingTender.correlationId}</p>
+          {existingTender.statutoryDiscountDecisionCommandId && (
+            <dl className="central-pms-details" data-testid="statutory-tender-evidence">
+              <div><dt>Statutory decision</dt><dd>{existingTender.statutoryDiscountDecisionCommandId}</dd></div>
+              <div><dt>Statutory application</dt><dd>{existingTender.statutoryDiscountPayableBasisApplicationCommandId ?? "Unavailable"}</dd></div>
+              <div><dt>Applied tariff snapshot</dt><dd>{existingTender.statutoryAppliedTariffSnapshotId ?? existingTender.tariffSnapshotId}</dd></div>
+              <div><dt>Final statutory amount</dt><dd>{formatMoney(existingTender.statutoryFinalAmountMinorUnits, existingTender.statutoryCurrency ?? existingTender.currency)}</dd></div>
+              <div><dt>Revalidated at</dt><dd>{existingTender.statutoryImmediateRevalidatedAt ? formatDateTime(existingTender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
+            </dl>
+          )}
           <button className="secondary-action" type="button" onClick={attemptDuplicateTender}>
             Attempt duplicate cash tender
           </button>
@@ -909,6 +919,15 @@ export function CashCapturePanel({
           <p>Local tender ID: {status.tender.id}</p>
           <p>Local state: {status.tender.currentLocalState}</p>
           <p>Correlation ID: {status.correlationId}</p>
+          {status.tender.statutoryDiscountDecisionCommandId && (
+            <dl className="central-pms-details" data-testid="statutory-tender-evidence">
+              <div><dt>Statutory decision</dt><dd>{status.tender.statutoryDiscountDecisionCommandId}</dd></div>
+              <div><dt>Statutory application</dt><dd>{status.tender.statutoryDiscountPayableBasisApplicationCommandId ?? "Unavailable"}</dd></div>
+              <div><dt>Applied tariff snapshot</dt><dd>{status.tender.statutoryAppliedTariffSnapshotId ?? status.tender.tariffSnapshotId}</dd></div>
+              <div><dt>Final statutory amount</dt><dd>{formatMoney(status.tender.statutoryFinalAmountMinorUnits, status.tender.statutoryCurrency ?? status.tender.currency)}</dd></div>
+              <div><dt>Revalidated at</dt><dd>{status.tender.statutoryImmediateRevalidatedAt ? formatDateTime(status.tender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
+            </dl>
+          )}
           <p>Event history entries: {status.readback.events.length}</p>
         </div>
       )}
@@ -978,6 +997,39 @@ export function CashCapturePanel({
 
 function formatAmount(value: number): string {
   return value.toFixed(2);
+}
+
+function formatMoney(minorUnits?: number | null, currency = "PHP"): string {
+  if (minorUnits == null) {
+    return "Unavailable";
+  }
+
+  return new Intl.NumberFormat("en-PH", { style: "currency", currency }).format(minorUnits / 100);
+}
+
+function buildStatutoryTenderEvidence(session: PayableBasisResponse) {
+  const readiness = session.statutoryDiscountReadiness;
+  if (!readiness?.applicable) {
+    return null;
+  }
+
+  return {
+    statutoryDiscountDecisionCommandId: readiness.statutoryDiscountDecisionCommandId ?? null,
+    statutoryDiscountPayableBasisApplicationCommandId: readiness.statutoryDiscountPayableBasisApplicationCommandId ?? session.statutoryDiscountApplicationId ?? null,
+    statutoryDiscountValidationId: readiness.statutoryDiscountValidationId ?? session.statutoryDiscountValidationId ?? null,
+    originalTariffSnapshotId: readiness.originalTariffSnapshotId ?? session.originalTariffSnapshotId ?? null,
+    appliedTariffSnapshotId: readiness.appliedTariffSnapshotId ?? session.appliedTariffSnapshotId ?? session.tariffSnapshotId,
+    originalAmountMinorUnits: readiness.originalAmountMinorUnits ?? null,
+    finalAmountMinorUnits: readiness.finalPayableAmountMinorUnits ?? session.authoritativeAmountMinorUnits,
+    currency: readiness.currency ?? session.currency,
+    amountAcknowledged: true,
+    amountAcknowledgedAt: new Date().toISOString(),
+    immediateRevalidationOutcome: session.revalidationOutcome ?? null,
+    immediateRevalidatedAt: new Date().toISOString(),
+    centralPmsCorrelationId: session.correlationId,
+    readinessStatus: readiness.payableBasisReadinessStatus ?? null,
+    readinessAction: readiness.payableBasisReadinessAction ?? null,
+  };
 }
 
 function centralPmsSubmissionConfig(config: AptConfig): { valid: boolean; message: string } {
