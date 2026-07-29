@@ -302,6 +302,21 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public void RecoverableEnvelopeWithDirectoryDatabasePathFailsAsUnreadableDatabase()
+    {
+        var databasePath = Path.Combine(_directoryPath, $"directory-db-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(databasePath);
+        WriteEnvelope(databasePath, envelope => envelope);
+
+        var exception = Assert.Throws<LocalPersistenceUnavailableException>(() => CreateService(databasePath).CreateDbContext());
+
+        Assert.Equal(LocalPersistenceSafeStatus.EncryptedDatabaseUnreadable, exception.SafeStatus);
+        Assert.True(Directory.Exists(databasePath));
+        Assert.True(File.Exists(EnvelopePath(databasePath)));
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task DpapiUnprotectFailureFailsClosed()
     {
         var databasePath = DatabasePath();
