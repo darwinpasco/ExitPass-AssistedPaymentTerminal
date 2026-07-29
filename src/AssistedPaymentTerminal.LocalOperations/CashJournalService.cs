@@ -13,6 +13,7 @@ public sealed class CashJournalService
 
     private readonly LocalOperationsDatabaseOptions _options;
     private readonly LocalOperationsDatabaseConfigurationException? _configurationError;
+    private readonly LocalDatabaseEncryptionManager? _encryptionManager;
 
     public CashJournalService(LocalOperationsDatabaseOptions? options = null)
     {
@@ -32,6 +33,13 @@ public sealed class CashJournalService
             _configurationError = new LocalOperationsDatabaseConfigurationException(
                 "APT_LOCAL_DB_PATH is not a valid local database path.");
         }
+
+        if (_configurationError is null)
+        {
+            _encryptionManager = new LocalDatabaseEncryptionManager(
+                DatabasePath,
+                _options.DatabaseKeyProtector);
+        }
     }
 
     public string DatabasePath { get; }
@@ -47,7 +55,143 @@ public sealed class CashJournalService
 
         await using var dbContext = CreateDbContext();
         await dbContext.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureCashierShiftSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureCashTenderStatutoryEvidenceSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+    }
+
+    public LocalPersistenceReadiness GetLocalPersistenceReadiness()
+    {
+        if (_configurationError is not null)
+        {
+            return new LocalPersistenceReadiness(
+                EncryptionConfigured: true,
+                DpapiScope: LocalDatabaseKeyEnvelope.CurrentUserScope,
+                KeyEnvelopeExists: false,
+                KeyAvailable: false,
+                DatabaseExists: false,
+                DatabaseEncrypted: false,
+                LegacyPlaintextDetected: false,
+                MigrationRequired: false,
+                IntegrityValidated: false,
+                SchemaReady: false,
+                PersistenceReady: false,
+                RecoveryAllowed: false,
+                CashOperationsAllowed: false,
+                SafeStatus: LocalPersistenceSafeStatus.ConfigurationInvalid,
+                SafeAction: "The configured local operational database path is invalid.",
+                DatabasePath: DatabasePath,
+                KeyEnvelopePath: string.Empty);
+        }
+
+        return EncryptionManager.GetReadiness();
+    }
+
+    public async Task<CashJournalResult<CashierShiftSnapshot>> OpenCashierShiftAsync(
+        OpenCashierShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var existing = await dbContext.CashierShifts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(shift => shift.Id == request.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (existing is not null)
+        {
+            return existing.Status == CashierShiftStatus.Open
+                ? CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(existing))
+                : CashJournalResult<CashierShiftSnapshot>.Failure(new CashJournalError(
+                    CashJournalErrorCode.InvalidStateTransition,
+                    $"Cashier shift '{request.CashierShiftId}' is already closed."));
+        }
+
+        var shift = new CashierShift
+        {
+            Id = request.CashierShiftId,
+            CashierId = request.CashierId,
+            AuthenticatedCashierSessionReference = request.AuthenticatedCashierSessionReference,
+            TerminalId = request.TerminalId,
+            SiteId = request.SiteId,
+            SiteGroupId = request.SiteGroupId,
+            PosServerId = request.PosServerId,
+            OpenedAt = request.OpenedAt ?? DateTimeOffset.UtcNow,
+            Status = CashierShiftStatus.Open
+        };
+
+        dbContext.CashierShifts.Add(shift);
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
+    }
+
+    public async Task<CashJournalResult<CashierShiftSnapshot>> CloseCashierShiftAsync(
+        CloseCashierShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        var shift = await dbContext.CashierShifts
+            .SingleOrDefaultAsync(value => value.Id == request.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (shift is null)
+        {
+            return CashJournalResult<CashierShiftSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.NotFound,
+                $"Cashier shift '{request.CashierShiftId}' was not found."));
+        }
+
+        if (shift.Status == CashierShiftStatus.Closed)
+        {
+            return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
+        }
+
+        shift.Status = CashierShiftStatus.Closed;
+        shift.ClosedAt = request.ClosedAt ?? DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
+    }
+
+    public async Task<LocalOperationalStateSnapshot> GetLocalOperationalStateAsync(
+        LocalOperationalStateRequest? request = null,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+
+        var shiftQuery = ApplyShiftScope(dbContext.CashierShifts.AsNoTracking(), request)
+            .Where(shift => shift.Status == CashierShiftStatus.Open);
+        var activeShiftIds = await shiftQuery
+            .Select(shift => shift.Id)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var sessionQuery = ApplyCustodyScope(dbContext.CashCustodySessions.AsNoTracking(), request)
+            .Where(session => session.Status == CashCustodySessionStatus.Open && activeShiftIds.Contains(session.CashierShiftId));
+
+        var activeShiftCount = activeShiftIds.Length;
+        var activeCustodyCount = await sessionQuery.CountAsync(cancellationToken).ConfigureAwait(false);
+        var activeShift = await shiftQuery
+            .OrderBy(shift => shift.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var activeSession = await sessionQuery
+            .OrderBy(session => session.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return new LocalOperationalStateSnapshot(
+            activeShiftCount,
+            activeCustodyCount,
+            activeShift is null ? null : CashierShiftSnapshot.FromEntity(activeShift),
+            activeSession is null ? null : CashCustodySessionSnapshot.FromEntity(activeSession));
     }
 
     public async Task<CashJournalResult<CashCustodySessionSnapshot>> CreateCashCustodySessionAsync(
@@ -574,6 +718,40 @@ public sealed class CashJournalService
         await AddColumnIfMissingAsync(dbContext, "cash_tenders", "StatutoryReadinessAction", "TEXT NULL", cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task EnsureCashierShiftSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS cashier_shifts (
+                Id TEXT NOT NULL CONSTRAINT PK_cashier_shifts PRIMARY KEY,
+                CashierId TEXT NOT NULL,
+                AuthenticatedCashierSessionReference TEXT NOT NULL,
+                TerminalId TEXT NOT NULL,
+                SiteId TEXT NOT NULL,
+                SiteGroupId TEXT NOT NULL,
+                PosServerId TEXT NOT NULL,
+                OpenedAt INTEGER NOT NULL,
+                ClosedAt INTEGER NULL,
+                Status TEXT NOT NULL
+            );
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        command.CommandText = """
+            CREATE INDEX IF NOT EXISTS IX_cashier_shifts_TerminalId_CashierId_Status
+            ON cashier_shifts (TerminalId, CashierId, Status);
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static void ApplyStatutoryTenderEvidence(
         CashTender tender,
         StatutoryTenderEvidence? evidence,
@@ -638,18 +816,18 @@ public sealed class CashJournalService
     }
     public CashJournalDbContext CreateDbContext()
     {
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = DatabasePath,
-            Pooling = false
-        }.ToString();
+        var connection = EncryptionManager.OpenEncryptedConnection();
 
         var options = new DbContextOptionsBuilder<CashJournalDbContext>()
-            .UseSqlite(connectionString)
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options;
 
         return new CashJournalDbContext(options);
     }
+
+    private LocalDatabaseEncryptionManager EncryptionManager =>
+        _encryptionManager ?? throw new LocalOperationsDatabaseConfigurationException(
+            "APT_LOCAL_DB_PATH is not a valid local database path.");
 
     private static async Task<CashTender?> FindUnresolvedTenderAsync(
         CashJournalDbContext dbContext,
@@ -671,4 +849,88 @@ public sealed class CashJournalService
             $"Parking session '{tender.ParkingSessionId}' already has unresolved local cash tender '{tender.Id}'.",
             tender.Id,
             tender.CurrentLocalState);
+
+    private static IQueryable<CashierShift> ApplyShiftScope(
+        IQueryable<CashierShift> query,
+        LocalOperationalStateRequest? request)
+    {
+        if (request is null)
+        {
+            return query;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CashierId))
+        {
+            query = query.Where(shift => shift.CashierId == request.CashierId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CashierShiftId))
+        {
+            query = query.Where(shift => shift.Id == request.CashierShiftId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.TerminalId))
+        {
+            query = query.Where(shift => shift.TerminalId == request.TerminalId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SiteId))
+        {
+            query = query.Where(shift => shift.SiteId == request.SiteId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SiteGroupId))
+        {
+            query = query.Where(shift => shift.SiteGroupId == request.SiteGroupId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PosServerId))
+        {
+            query = query.Where(shift => shift.PosServerId == request.PosServerId);
+        }
+
+        return query;
+    }
+
+    private static IQueryable<CashCustodySession> ApplyCustodyScope(
+        IQueryable<CashCustodySession> query,
+        LocalOperationalStateRequest? request)
+    {
+        if (request is null)
+        {
+            return query;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CashierId))
+        {
+            query = query.Where(session => session.CashierId == request.CashierId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CashierShiftId))
+        {
+            query = query.Where(session => session.CashierShiftId == request.CashierShiftId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.TerminalId))
+        {
+            query = query.Where(session => session.TerminalId == request.TerminalId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SiteId))
+        {
+            query = query.Where(session => session.SiteId == request.SiteId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SiteGroupId))
+        {
+            query = query.Where(session => session.SiteGroupId == request.SiteGroupId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PosServerId))
+        {
+            query = query.Where(session => session.PosServerId == request.PosServerId);
+        }
+
+        return query;
+    }
 }

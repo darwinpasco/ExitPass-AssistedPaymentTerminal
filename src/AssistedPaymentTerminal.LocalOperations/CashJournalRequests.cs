@@ -1,5 +1,27 @@
 namespace AssistedPaymentTerminal.LocalOperations;
 
+public sealed record OpenCashierShiftRequest(
+    string CashierShiftId,
+    string CashierId,
+    string AuthenticatedCashierSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    DateTimeOffset? OpenedAt = null);
+
+public sealed record CloseCashierShiftRequest(
+    string CashierShiftId,
+    DateTimeOffset? ClosedAt = null);
+
+public sealed record LocalOperationalStateRequest(
+    string? CashierId = null,
+    string? CashierShiftId = null,
+    string? TerminalId = null,
+    string? SiteId = null,
+    string? SiteGroupId = null,
+    string? PosServerId = null);
+
 public sealed record CreateCashCustodySessionRequest(
     string CashierId,
     string AuthenticatedCashierSessionReference,

@@ -20,6 +20,50 @@ export type LocalJournalHealth = {
   databasePath: string;
   cashDrawerEnabled: boolean;
   authorityWarning: string;
+  localPersistence?: LocalPersistenceReadiness;
+  operationalState?: LocalOperationalState;
+};
+
+export type LocalOperationalContext = {
+  cashierId?: string;
+  cashierShiftId?: string;
+  terminalId?: string;
+  siteId?: string;
+  siteGroupId?: string;
+  posServerId?: string;
+};
+
+export type LocalPersistenceReadiness = {
+  encryptionConfigured: boolean;
+  dpapiScope: string;
+  keyEnvelopeExists: boolean;
+  keyAvailable: boolean;
+  databaseExists: boolean;
+  databaseEncrypted: boolean;
+  legacyPlaintextDetected: boolean;
+  migrationRequired: boolean;
+  integrityValidated: boolean;
+  schemaReady: boolean;
+  persistenceReady: boolean;
+  recoveryAllowed: boolean;
+  cashOperationsAllowed: boolean;
+  safeStatus: string;
+  safeAction: string;
+  databasePath: string;
+  keyEnvelopePath: string;
+};
+
+export type CashierShiftSnapshot = {
+  id: string;
+  cashierId: string;
+  authenticatedCashierSessionReference: string;
+  terminalId: string;
+  siteId: string;
+  siteGroupId: string;
+  posServerId: string;
+  openedAt: string;
+  closedAt?: string | null;
+  status: string;
 };
 
 export type CashCustodySessionSnapshot = {
@@ -34,6 +78,13 @@ export type CashCustodySessionSnapshot = {
   openingCashAmount: number;
   openedAt: string;
   status: string;
+};
+
+export type LocalOperationalState = {
+  activeShiftRecordCount: number;
+  activeCashCustodySessionRecordCount: number;
+  activeShift?: CashierShiftSnapshot | null;
+  activeCashCustodySession?: CashCustodySessionSnapshot | null;
 };
 
 export type CashTenderSnapshot = {
@@ -467,7 +518,7 @@ export type StatutoryTenderEvidencePayload = {
 };
 
 export interface LocalJournalBridge {
-  health(correlationId: string): Promise<BridgeResult<LocalJournalHealth>>;
+  health(correlationId: string, context?: LocalOperationalContext): Promise<BridgeResult<LocalJournalHealth>>;
   savePayableBasisState?(correlationId: string, payload: PayableBasisStatePayload): Promise<BridgeResult<PayableBasisStateSnapshot>>;
   getLatestPayableBasisState?(correlationId: string, terminalId: string, siteId: string): Promise<BridgeResult<PayableBasisStateSnapshot | null>>;
   createOrGetDevelopmentSession(
@@ -545,7 +596,7 @@ declare global {
 
 export function createWebViewLocalJournalBridge(): LocalJournalBridge {
   return {
-    health: (correlationId) => send("localJournal.health", correlationId, {}),
+    health: (correlationId, context) => send("localJournal.health", correlationId, context ?? {}),
     savePayableBasisState: (correlationId, payload) => send("payableBasisState.save", correlationId, payload),
     getLatestPayableBasisState: (correlationId, terminalId, siteId) =>
       send("payableBasisState.getLatest", correlationId, { terminalId, siteId }),

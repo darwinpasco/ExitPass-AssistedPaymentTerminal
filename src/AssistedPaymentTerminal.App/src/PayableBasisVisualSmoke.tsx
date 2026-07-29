@@ -257,7 +257,33 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
     seedCentralPmsCashSubmissionStatus(status) {
       centralPmsCashSubmissionStatus = status;
     },
-    async health(correlationId): Promise<BridgeResult<LocalJournalHealth>> {
+    async health(correlationId, context): Promise<BridgeResult<LocalJournalHealth>> {
+      const timestamp = nowIso();
+      const activeShift = {
+        id: context?.cashierShiftId ?? "SHIFT-DEV-20260714-A",
+        cashierId: context?.cashierId ?? "CASHIER-DEV-001",
+        authenticatedCashierSessionReference: `dev-auth:${context?.cashierId ?? "CASHIER-DEV-001"}:${context?.cashierShiftId ?? "SHIFT-DEV-20260714-A"}`,
+        terminalId: context?.terminalId ?? "APT-DEV-001",
+        siteId: context?.siteId ?? "11111111-1111-1111-1111-111111111111",
+        siteGroupId: context?.siteGroupId ?? "22222222-2222-2222-2222-222222222222",
+        posServerId: context?.posServerId ?? "POS-DEV-001",
+        openedAt: timestamp,
+        closedAt: null,
+        status: "Open",
+      };
+      custodySession ??= {
+        id: "payable-basis-visual-smoke-custody-session",
+        cashierId: activeShift.cashierId,
+        authenticatedCashierSessionReference: activeShift.authenticatedCashierSessionReference,
+        cashierShiftId: activeShift.id,
+        terminalId: activeShift.terminalId,
+        siteId: activeShift.siteId,
+        siteGroupId: activeShift.siteGroupId,
+        posServerId: activeShift.posServerId,
+        openingCashAmount: 0,
+        openedAt: timestamp,
+        status: "Open",
+      };
       return {
         ok: true,
         command: "localJournal.health",
@@ -268,6 +294,31 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
           databasePath: "controlled-payable-basis-visual-smoke.db",
           cashDrawerEnabled: false,
           authorityWarning: "Development-only payable-basis visual smoke fixture. No live Central PMS, printer, HikCentral, payment, fiscal, receipt, gate, or cash-drawer command is executed.",
+          localPersistence: {
+            encryptionConfigured: true,
+            dpapiScope: "CurrentUser",
+            keyEnvelopeExists: true,
+            keyAvailable: true,
+            databaseExists: true,
+            databaseEncrypted: true,
+            legacyPlaintextDetected: false,
+            migrationRequired: false,
+            integrityValidated: true,
+            schemaReady: true,
+            persistenceReady: true,
+            recoveryAllowed: true,
+            cashOperationsAllowed: true,
+            safeStatus: "Ready",
+            safeAction: "Controlled visual-smoke persistence is ready.",
+            databasePath: "controlled-payable-basis-visual-smoke.db",
+            keyEnvelopePath: "controlled-payable-basis-visual-smoke.key",
+          },
+          operationalState: {
+            activeShiftRecordCount: 1,
+            activeCashCustodySessionRecordCount: 1,
+            activeShift,
+            activeCashCustodySession: custodySession,
+          },
         },
       };
     },

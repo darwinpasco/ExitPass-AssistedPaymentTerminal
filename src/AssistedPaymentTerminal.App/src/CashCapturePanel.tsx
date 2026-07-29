@@ -150,7 +150,14 @@ export function CashCapturePanel({
     setStatus({ kind: "checking", message: "Checking local journal readiness..." });
 
     async function prepare() {
-      const health = await bridge.health(correlationId);
+      const health = await bridge.health(correlationId, {
+        cashierId: context.cashierId,
+        cashierShiftId: context.shiftId,
+        terminalId: context.terminalId,
+        siteId: context.siteId,
+        siteGroupId: context.siteGroupId,
+        posServerId: context.posServerId,
+      });
       if (cancelled) return;
 
       if (!health.ok || !health.payload.enabled || !health.payload.healthy) {

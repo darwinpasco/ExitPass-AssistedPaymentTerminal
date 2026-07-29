@@ -268,7 +268,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
             using var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-unavailable-db", new { });
 
             Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
-            Assert.Equal("LOCAL_DATABASE_UNAVAILABLE", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal("KeyEnvelopeWrongIdentity", response.RootElement.GetProperty("error").GetProperty("code").GetString());
             Assert.DoesNotContain(directoryPath, response.RootElement.GetRawText(), StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("stack", response.RootElement.GetRawText(), StringComparison.OrdinalIgnoreCase);
         }
