@@ -2,6 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { activeCustodyId, activeShiftId, installLocalJournalBridgeFixture } from "./local-journal-fixture.mjs";
 
 const root = path.resolve(process.cwd(), "src/AssistedPaymentTerminal.App/dist");
 const port = 4173;
@@ -12,24 +13,29 @@ const browser = await chromium.launch();
 
 try {
   await runActiveAndExpiredWorkflow();
+  await runNoActiveShiftWorkflow();
   await runUnsupportedProfileRefusal();
   await runServiceUnavailableFailure();
-  console.log("Playwright E2E passed: 3 scenarios");
+  console.log("Playwright E2E passed: 4 scenarios");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
 }
 
 async function runActiveAndExpiredWorkflow() {
-  const page = await newPage();
+  const page = await newPage({ activeShift: true, activeCustody: true });
   await page.goto(baseUrl);
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
   await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
-  await expect(page.getByText("OPEN", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
   await expect(page.getByText("Configured: POS-DEV-001")).toBeVisible();
+  await page.getByText("Terminal details").click();
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText(activeShiftId);
+  await expect(page.getByTestId("active-custody-id")).toHaveText(activeCustodyId);
+  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
@@ -51,6 +57,26 @@ async function runActiveAndExpiredWorkflow() {
   await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
   await expect(page.getByText("Parking fee has expired and must be resolved again.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Collect payment" })).toBeDisabled();
+  await page.close();
+}
+
+async function runNoActiveShiftWorkflow() {
+  const page = await newPage({ activeShift: false, activeCustody: false });
+  await page.goto(baseUrl);
+
+  await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
+  await expect(page.getByTestId("operational-shift-summary")).toHaveText("No active shift");
+  await page.getByText("Terminal details").click();
+  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText("None");
+  await expect(page.getByTestId("active-custody-id")).toHaveText("None");
+
+  await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
+  await page.getByRole("button", { name: "Resolve" }).click();
+
+  await expectActivePayableBasisReady(page);
+  await expect(page.getByTestId("local-cash-prerequisites-value")).toHaveText("Blocked");
+  await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
   await page.close();
 }
 
@@ -89,9 +115,13 @@ async function runServiceUnavailableFailure() {
   await page.close();
 }
 
-async function newPage() {
+async function newPage(options = {}) {
   const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
   page.setDefaultTimeout(10000);
+  await installLocalJournalBridgeFixture(page, {
+    includeShift: options.activeShift,
+    includeCustody: options.activeCustody,
+  });
   return page;
 }
 

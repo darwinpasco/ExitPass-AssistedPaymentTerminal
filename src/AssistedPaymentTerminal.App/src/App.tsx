@@ -730,36 +730,36 @@ function OperationalContextPanel({ context, health }: { context: TerminalContext
       ? "CLOSED"
       : "No active shift";
   const summaryRows = [
-    ["Site", context.siteName],
-    ["Cashier", context.cashierDisplayName],
-    ["Shift", recoveredShiftStatus],
-    ["Terminal", context.terminalDisplayName],
-    ["POS readiness", `Configured: ${context.posServerId}`],
+    ["Site", context.siteName, "operational-site-summary"],
+    ["Cashier", context.cashierDisplayName, "operational-cashier-summary"],
+    ["Shift", recoveredShiftStatus, "operational-shift-summary"],
+    ["Terminal", context.terminalDisplayName, "operational-terminal-summary"],
+    ["POS readiness", `Configured: ${context.posServerId}`, "operational-pos-readiness-summary"],
   ];
 
   const detailRows = [
-    ["Terminal ID", context.terminalId],
-    ["Site ID", context.siteId],
-    ["Site-group ID", context.siteGroupId],
-    ["POS Server ID", context.posServerId],
-    ["Cashier ID", context.cashierId],
-    ["Configured shift ID", context.shiftId],
-    ["Configured shift posture", context.shiftStatus],
-    ["Recovered shift ID", activeShift?.id ?? "None"],
-    ["Cash custody session", activeCustody?.id ?? "None"],
-    ["Central PMS", context.centralPmsConnectionMode],
+    ["Terminal ID", context.terminalId, "configured-terminal-id"],
+    ["Site ID", context.siteId, "configured-site-id"],
+    ["Site-group ID", context.siteGroupId, "configured-site-group-id"],
+    ["POS Server ID", context.posServerId, "configured-pos-server-id"],
+    ["Cashier ID", context.cashierId, "configured-cashier-id"],
+    ["Configured shift ID", context.shiftId, "configured-shift-id"],
+    ["Configured shift posture", context.shiftStatus, "configured-shift-posture"],
+    ["Recovered shift ID", activeShift?.id ?? "None", "recovered-shift-id"],
+    ["Cash custody session", activeCustody?.id ?? "None", "active-custody-id"],
+    ["Central PMS", context.centralPmsConnectionMode, "configured-central-pms-mode"],
   ];
 
   return (
     <aside className="context-panel compact" aria-label="Operational context">
       <div className="context-summary-grid">
-        {summaryRows.map(([label, value]) => (
-          <div key={label} className="context-chip"><span>{label}</span><strong>{value}</strong></div>
+        {summaryRows.map(([label, value, testId]) => (
+          <div key={label} className="context-chip"><span>{label}</span><strong data-testid={testId}>{value}</strong></div>
         ))}
       </div>
       <details className="terminal-details">
         <summary>Terminal details</summary>
-        <dl>{detailRows.map(([label, value]) => <div key={label} className="context-row"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        <dl>{detailRows.map(([label, value, testId]) => <div key={label} className="context-row"><dt>{label}</dt><dd data-testid={testId}>{value}</dd></div>)}</dl>
       </details>
     </aside>
   );
