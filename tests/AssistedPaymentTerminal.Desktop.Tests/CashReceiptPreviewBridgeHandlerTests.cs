@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AssistedPaymentTerminal.Desktop;
 using AssistedPaymentTerminal.LocalOperations;
@@ -263,12 +264,13 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
 
         try
         {
-            var handler = CreateHandlerForDatabasePath(directoryPath);
+            WriteValidEnvelopeForDatabasePath(directoryPath);
+            var handler = CreateHandlerForDatabasePath(directoryPath, new DeterministicLocalDatabaseKeyProtector());
 
             using var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-unavailable-db", new { });
 
             Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
-            Assert.Equal("LOCAL_DATABASE_UNAVAILABLE", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal("EncryptedDatabaseUnreadable", response.RootElement.GetProperty("error").GetProperty("code").GetString());
             Assert.DoesNotContain(directoryPath, response.RootElement.GetRawText(), StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("stack", response.RootElement.GetRawText(), StringComparison.OrdinalIgnoreCase);
         }
@@ -413,14 +415,17 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
     private static Task<JsonDocument> SendPreviewAsync(LocalJournalBridgeHandler handler, Guid terminalCashTenderId, string correlationId) =>
         SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashReceiptGetPreview, correlationId, new { localCashTenderId = terminalCashTenderId });
 
-    private static LocalJournalBridgeHandler CreateHandlerForDatabasePath(string databasePath)
+    private static LocalJournalBridgeHandler CreateHandlerForDatabasePath(
+        string databasePath,
+        ILocalDatabaseKeyProtector? databaseKeyProtector = null)
     {
         var options = new LocalOperationsDatabaseOptions(
             databasePath,
             CentralPmsBaseUrl: "http://127.0.0.1:9",
             EnableCentralPmsCashSubmission: true,
             EnableCentralPmsFiscalIssuance: true,
-            EnableCentralPmsReceiptRetrieval: true);
+            EnableCentralPmsReceiptRetrieval: true,
+            DatabaseKeyProtector: databaseKeyProtector);
 
         return new LocalJournalBridgeHandler(
             new CashJournalService(options),
@@ -434,6 +439,23 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
             submissionService: new TerminalCashPaymentSubmissionService(new ScriptedCentralPmsClient(), options),
             fiscalService: new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), options),
             receiptService: new TerminalCashReceiptRetrievalService(new ScriptedCentralPmsReceiptClient(), options));
+    }
+
+    private static void WriteValidEnvelopeForDatabasePath(string databasePath)
+    {
+        var manager = new LocalDatabaseEncryptionManager(databasePath, new DeterministicLocalDatabaseKeyProtector());
+        var key = LocalDatabaseKeyGenerator.Generate();
+        var protectedKey = new DeterministicLocalDatabaseKeyProtector().Protect(key, LocalDatabaseKeyEnvelope.EntropyBytes);
+        try
+        {
+            var envelope = LocalDatabaseKeyEnvelope.Create(manager.DatabaseIdentity, protectedKey, DateTimeOffset.UtcNow);
+            File.WriteAllText(manager.EnvelopePath, envelope.ToJson(), Encoding.UTF8);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(protectedKey);
+        }
     }
 
     private static async Task<JsonDocument> SendAsync(LocalJournalBridgeHandler handler, string command, string correlationId, object payload)
@@ -451,5 +473,25 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         var response = await handler.HandleWebMessageAsync(request);
         Assert.NotNull(response);
         return JsonDocument.Parse(response!);
+    }
+}
+
+internal sealed class DeterministicLocalDatabaseKeyProtector : ILocalDatabaseKeyProtector
+{
+    public string Scope => LocalDatabaseKeyEnvelope.CurrentUserScope;
+
+    public byte[] Protect(byte[] plaintextKey, byte[] entropy) => Transform(plaintextKey, entropy);
+
+    public byte[] Unprotect(byte[] protectedKey, byte[] entropy) => Transform(protectedKey, entropy);
+
+    private static byte[] Transform(byte[] source, byte[] entropy)
+    {
+        var result = new byte[source.Length];
+        for (var index = 0; index < source.Length; index++)
+        {
+            result[index] = (byte)(source[index] ^ entropy[index % entropy.Length] ^ 0x5A);
+        }
+
+        return result;
     }
 }

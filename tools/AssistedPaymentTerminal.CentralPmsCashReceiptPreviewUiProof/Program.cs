@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 
 var proofOptions = PreviewProofArguments.Parse(args);
 var databasePath = proofOptions.DatabasePath
-    ?? Path.Combine(Path.GetTempPath(), $"exitpass-apt-receipt-preview-proof-{Guid.NewGuid():N}.db");
+    ?? Path.Combine(Path.GetTempPath(), $"exitpass-apt-receipt-preview-proof-{Guid.NewGuid():N}", LocalOperationsDatabasePath.DefaultDatabaseFileName);
 var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 var fullDatabasePath = Path.GetFullPath(databasePath);
 if (fullDatabasePath.StartsWith(repositoryRoot, StringComparison.OrdinalIgnoreCase))
@@ -37,6 +37,7 @@ if (proofOptions.Interactive)
     Console.WriteLine("Test-Path \"$env:APT_LOCAL_DB_PATH\"");
     Console.WriteLine("Cleanup command for after manual testing:");
     Console.WriteLine($"Remove-Item \"{fullDatabasePath}*\" -Force -ErrorAction SilentlyContinue");
+    Console.WriteLine($"Remove-Item \"{KeyEnvelopePath(fullDatabasePath)}\" -Force -ErrorAction SilentlyContinue");
     Console.WriteLine("No local host is required. The preview uses the persisted authoritative snapshot only.");
     return;
 }
@@ -50,6 +51,7 @@ finally
     DeleteIfExists(fullDatabasePath);
     DeleteIfExists($"{fullDatabasePath}-wal");
     DeleteIfExists($"{fullDatabasePath}-shm");
+    DeleteIfExists(KeyEnvelopePath(fullDatabasePath));
 }
 
 static async Task RunAutomatedProofAsync(string databasePath)
@@ -314,6 +316,9 @@ static void DeleteIfExists(string path)
         File.Delete(path);
     }
 }
+
+static string KeyEnvelopePath(string databasePath) =>
+    Path.Combine(Path.GetDirectoryName(databasePath)!, LocalDatabaseKeyEnvelope.EnvelopeFileName);
 
 static void Require(bool condition, string message)
 {

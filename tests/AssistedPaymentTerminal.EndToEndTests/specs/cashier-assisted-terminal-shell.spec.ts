@@ -1,14 +1,20 @@
 import { expect, test } from "@playwright/test";
+import { activeCustodyId, activeShiftId, installLocalJournalBridgeFixture } from "../local-journal-fixture.mjs";
 
 test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tickets", async ({ page }) => {
+  await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
   await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
-  await expect(page.getByText("OPEN", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
   await expect(page.getByText("Configured: POS-DEV-001")).toBeVisible();
+  await page.getByText("Terminal details").click();
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText(activeShiftId);
+  await expect(page.getByTestId("active-custody-id")).toHaveText(activeCustodyId);
+  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
@@ -32,6 +38,24 @@ test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tic
   await expect(page.getByRole("button", { name: "Collect payment" })).toBeDisabled();
 });
 
+test("configured shift posture does not create recovered operational state", async ({ page }) => {
+  await installLocalJournalBridgeFixture(page, { includeShift: false, includeCustody: false });
+  await page.goto("/");
+
+  await expect(page.getByTestId("operational-shift-summary")).toHaveText("No active shift");
+  await page.getByText("Terminal details").click();
+  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText("None");
+  await expect(page.getByTestId("active-custody-id")).toHaveText("None");
+
+  await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
+  await page.getByRole("button", { name: "Resolve" }).click();
+
+  await expectActivePayableBasisReady(page);
+  await expect(page.getByTestId("local-cash-prerequisites-value")).toHaveText("Blocked");
+  await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
+});
+
 async function expectActivePayableBasisReady(page) {
   await expect(page.getByTestId("payable-basis-summary")).toContainText("Authoritative payable basis");
   await expect(page.getByTestId("payable-basis-amount")).toHaveText("₱125.00");
@@ -46,6 +70,7 @@ async function expectActivePayableBasisReady(page) {
 }
 
 test("unsupported profile refuses startup", async ({ page }) => {
+  await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
   await page.goto("/?aptProfile=CONTINUITY_TERMINAL");
 
   await expect(page.getByText("Unsupported terminal profile")).toBeVisible();
@@ -53,6 +78,7 @@ test("unsupported profile refuses startup", async ({ page }) => {
 });
 
 test("service unavailable scenario shows support reference", async ({ page }) => {
+  await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
   await page.goto("/");
 
   await page.getByLabel("Ticket reference").fill("APT-UNAVAILABLE-503");

@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
+using AssistedPaymentTerminal.LocalOperations;
 using Microsoft.Web.WebView2.Core;
 
 namespace AssistedPaymentTerminal.Desktop;
@@ -10,6 +12,7 @@ public partial class MainWindow : Window
 {
     private readonly WebViewSource _source;
     private readonly StartupOptions _options;
+    private readonly CashJournalService _journal;
     private readonly LocalJournalBridgeHandler _localJournalBridge;
     private bool _eventsRegistered;
 
@@ -17,13 +20,9 @@ public partial class MainWindow : Window
     {
         _source = source;
         _options = options;
-        var localOptions = new AssistedPaymentTerminal.LocalOperations.LocalOperationsDatabaseOptions(
-            options.LocalDatabasePath,
-            CentralPmsBaseUrl: options.CentralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
-            EnableCentralPmsCashSubmission: options.EnableCentralPmsCashSubmission,
-            EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance,
-            EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
-        var journal = new AssistedPaymentTerminal.LocalOperations.CashJournalService(localOptions);
+        var localOptions = CreateLocalOperationsOptions(options);
+        _journal = new CashJournalService(localOptions);
+        var journal = _journal;
         IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
         {
             "controlled" => new ControlledReceiptPrinter(),
@@ -39,14 +38,14 @@ public partial class MainWindow : Window
             options.EnableReceiptPreview,
             options.ReceiptPaperWidthMm,
             options.CentralPmsBaseUrl,
-            new AssistedPaymentTerminal.LocalOperations.TerminalCashPaymentSubmissionService(
-                new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashPaymentClient(new HttpClient()),
+            new TerminalCashPaymentSubmissionService(
+                new CentralPmsTerminalCashPaymentClient(new HttpClient()),
                 localOptions),
-            new AssistedPaymentTerminal.LocalOperations.TerminalCashFiscalSubmissionService(
-                new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashFiscalClient(new HttpClient()),
+            new TerminalCashFiscalSubmissionService(
+                new CentralPmsTerminalCashFiscalClient(new HttpClient()),
                 localOptions),
-            new AssistedPaymentTerminal.LocalOperations.TerminalCashReceiptRetrievalService(
-                new AssistedPaymentTerminal.LocalOperations.CentralPmsTerminalCashReceiptClient(new HttpClient()),
+            new TerminalCashReceiptRetrievalService(
+                new CentralPmsTerminalCashReceiptClient(new HttpClient()),
                 localOptions),
             receiptPrintingEnabled: options.EnableReceiptPrinting,
             receiptPrinterName: options.ReceiptPrinterName,
@@ -54,6 +53,17 @@ public partial class MainWindow : Window
             siteTimeZoneId: options.SiteTimeZoneId);
         InitializeComponent();
         Loaded += OnLoaded;
+    }
+
+    public static LocalOperationsDatabaseOptions CreateLocalOperationsOptions(StartupOptions options)
+    {
+        var effectiveDatabasePath = LocalOperationsDatabasePath.Resolve(options.LocalDatabasePath);
+        return new LocalOperationsDatabaseOptions(
+            effectiveDatabasePath,
+            CentralPmsBaseUrl: options.CentralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
+            EnableCentralPmsCashSubmission: options.EnableCentralPmsCashSubmission,
+            EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance,
+            EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -78,9 +88,36 @@ public partial class MainWindow : Window
                 _source.NavigationUri,
                 _source.SafeDisplayLocation);
 
+            ShowLoading(
+                "Starting encrypted local storage",
+                "Opening local encrypted persistence before the cashier terminal is enabled...",
+                $"Database: {_journal.DatabasePath}");
+
+            var persistence = await LocalPersistenceStartupInitializer.InitializeAsync(_journal).ConfigureAwait(true);
+            Trace.TraceInformation(
+                "Local encrypted persistence ready. database={0} envelope={1} status={2} cashOperationsAllowed={3}",
+                persistence.DatabasePath,
+                persistence.KeyEnvelopePath,
+                persistence.SafeStatus,
+                persistence.CashOperationsAllowed);
+
             await TerminalWebView.EnsureCoreWebView2Async();
             await ConfigureWebViewAsync();
             TerminalWebView.CoreWebView2.Navigate(_source.NavigationUri.ToString());
+        }
+        catch (LocalPersistenceStartupException exception)
+        {
+            Trace.TraceError(
+                "Local encrypted persistence startup failed. reference={0} database={1} status={2} action={3}",
+                errorReference,
+                exception.Readiness.DatabasePath,
+                exception.Readiness.SafeStatus,
+                exception.Readiness.SafeAction);
+
+            ShowError(
+                "Local encrypted storage unavailable",
+                "The cashier terminal cannot start operational workflows until local encrypted persistence is ready.",
+                $"Reference: {errorReference}\nDatabase: {exception.Readiness.DatabasePath}\nEnvelope: {exception.Readiness.KeyEnvelopePath}\nStatus: {exception.Readiness.SafeStatus}\nAction: {exception.Readiness.SafeAction}");
         }
         catch (Exception exception)
         {
@@ -187,6 +224,11 @@ public partial class MainWindow : Window
         core.WebMessageReceived += async (_, args) =>
         {
             var message = args.TryGetWebMessageAsString();
+            if (TryWriteManualProofDiagnostic(message))
+            {
+                return;
+            }
+
             var response = await _localJournalBridge.HandleWebMessageAsync(message);
 
             if (response is not null)
@@ -289,6 +331,96 @@ public partial class MainWindow : Window
             .Replace("\"", "\\\"", StringComparison.Ordinal)
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);
+
+    private bool TryWriteManualProofDiagnostic(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(_options.ManualProofDiagnosticPath) || string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            var root = document.RootElement;
+            if (!StringPropertyEquals(root, "source", "apt-manual-proof-diagnostic"))
+            {
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(_options.ManualProofDiagnosticPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var record = new
+            {
+                recordedAt = DateTimeOffset.UtcNow,
+                source = "apt-manual-proof-diagnostic",
+                eventName = GetString(root, "event"),
+                configuredCashierShiftId = GetString(root, "configuredCashierShiftId"),
+                shiftFilterSent = GetBoolean(root, "shiftFilterSent"),
+                bridgeRequestScope = new
+                {
+                    cashierId = GetNestedString(root, "bridgeRequestScope", "cashierId"),
+                    cashierShiftId = GetNestedString(root, "bridgeRequestScope", "cashierShiftId"),
+                    terminalId = GetNestedString(root, "bridgeRequestScope", "terminalId"),
+                    siteId = GetNestedString(root, "bridgeRequestScope", "siteId"),
+                    siteGroupId = GetNestedString(root, "bridgeRequestScope", "siteGroupId"),
+                    posServerId = GetNestedString(root, "bridgeRequestScope", "posServerId")
+                },
+                bridgeReturnedActiveShiftId = GetString(root, "bridgeReturnedActiveShiftId"),
+                bridgeReturnedActiveShiftStatus = GetString(root, "bridgeReturnedActiveShiftStatus"),
+                reactReceivedActiveShiftId = GetString(root, "reactReceivedActiveShiftId"),
+                reactReceivedActiveShiftStatus = GetString(root, "reactReceivedActiveShiftStatus"),
+                reactRenderedShiftLabel = GetString(root, "reactRenderedShiftLabel"),
+                activeCustodyId = GetString(root, "activeCustodyId"),
+                activeCustodyStatus = GetString(root, "activeCustodyStatus"),
+                cashBlockedWithoutCustody = GetBoolean(root, "cashBlockedWithoutCustody")
+            };
+
+            File.AppendAllText(
+                _options.ManualProofDiagnosticPath,
+                JsonSerializer.Serialize(record) + Environment.NewLine);
+            return true;
+        }
+        catch (JsonException exception)
+        {
+            Trace.TraceWarning("Manual proof diagnostic message was ignored because it was malformed. message={0}", exception.Message);
+            return true;
+        }
+        catch (IOException exception)
+        {
+            Trace.TraceWarning("Manual proof diagnostic could not be written. message={0}", exception.Message);
+            return true;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            Trace.TraceWarning("Manual proof diagnostic could not be written. message={0}", exception.Message);
+            return true;
+        }
+    }
+
+    private static bool StringPropertyEquals(JsonElement root, string propertyName, string expected) =>
+        root.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+        && string.Equals(property.GetString(), expected, StringComparison.Ordinal);
+
+    private static string? GetString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static bool? GetBoolean(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? property.GetBoolean()
+            : null;
+
+    private static string? GetNestedString(JsonElement root, string parentName, string propertyName) =>
+        root.TryGetProperty(parentName, out var parent) && parent.ValueKind == JsonValueKind.Object
+            ? GetString(parent, propertyName)
+            : null;
 
     private async Task<ReadinessMarkerResult> WaitForReadinessMarkerAsync(TimeSpan timeout)
     {

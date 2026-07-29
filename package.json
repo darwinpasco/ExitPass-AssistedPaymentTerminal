@@ -11,6 +11,7 @@
     "app:dev": "npm run dev --workspace src/AssistedPaymentTerminal.App",
     "app:typecheck": "npm run typecheck --workspace src/AssistedPaymentTerminal.App",
     "app:test": "npm run test --workspace src/AssistedPaymentTerminal.App",
+    "test": "npm run app:test",
     "app:build": "npm run build --workspace src/AssistedPaymentTerminal.App",
     "e2e": "npm run app:build && node tests/AssistedPaymentTerminal.EndToEndTests/run-e2e.mjs"
   }

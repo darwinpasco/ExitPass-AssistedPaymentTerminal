@@ -17,7 +17,7 @@ import {
 } from "./TransactionCompletionVisualSmoke";
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
-import { createWebViewLocalJournalBridge, type LocalJournalBridge, type PayableBasisStateSnapshot } from "./localJournalBridge";
+import { createWebViewLocalJournalBridge, type LocalJournalBridge, type LocalJournalHealth, type PayableBasisStateSnapshot } from "./localJournalBridge";
 
 type LookupState =
   | { status: "idle" }
@@ -134,6 +134,8 @@ export function TerminalShell({
   const [localPrerequisiteMessage, setLocalPrerequisiteMessage] = useState<string | null>(null);
   const [cashEntryRequested, setCashEntryRequested] = useState(initialCashEntryRequested);
   const [preCashStatus, setPreCashStatus] = useState<"idle" | "revalidating" | "passed" | "blocked">("idle");
+  const [localJournalHealth, setLocalJournalHealth] = useState<LocalJournalHealth | null>(null);
+  const [localJournalHealthMessage, setLocalJournalHealthMessage] = useState<string | null>(null);
   const latestRequestId = useRef(0);
 
   useEffect(() => {
@@ -176,6 +178,40 @@ export function TerminalShell({
       cancelled = true;
     };
   }, [context.siteId, context.terminalId, localJournalBridge, restorePayableBasisOnMount]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const correlationId = createCorrelationId();
+
+    async function loadLocalJournalHealth() {
+      const healthRequest = {
+        cashierId: context.cashierId,
+        terminalId: context.terminalId,
+        siteId: context.siteId,
+        siteGroupId: context.siteGroupId,
+        posServerId: context.posServerId,
+      };
+      const result = await localJournalBridge.health(correlationId, healthRequest);
+      if (cancelled) {
+        return;
+      }
+
+      if (result.ok) {
+        setLocalJournalHealth(result.payload);
+        postManualProofDiagnostic(context, healthRequest, result.payload);
+        setLocalJournalHealthMessage(null);
+        return;
+      }
+
+      setLocalJournalHealth(null);
+      setLocalJournalHealthMessage(result.error.message);
+    }
+
+    void loadLocalJournalHealth();
+    return () => {
+      cancelled = true;
+    };
+  }, [context.cashierId, context.posServerId, context.siteGroupId, context.siteId, context.terminalId, localJournalBridge]);
   const displayedBasis = lookupState.status === "resolved" ? lookupState.basis : lookupState.status === "amount_changed" && lookupState.acknowledged ? lookupState.current : undefined;
   const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
   const statutoryWorkflowActive = statutoryWorkflowState.status !== "none";
@@ -447,7 +483,20 @@ export function TerminalShell({
       ? { status: "amount_changed", previous: displayedBasis, current: result.response, correlationId, acknowledged: false }
       : { status: "resolved", basis: result.response, source: "fresh" });
   }
-  const localPrerequisitesReady = config.nonLiveCashCaptureEnabled;
+  const activeShift = localJournalHealth?.operationalState?.activeShift ?? null;
+  const activeCashCustodySession = localJournalHealth?.operationalState?.activeCashCustodySession ?? null;
+  const localPersistenceCashReady = localJournalHealth?.localPersistence?.cashOperationsAllowed === true;
+  const durableShiftActive = activeShift?.status === "Open";
+  const durableCashCustodyActive = activeCashCustodySession?.status === "Open";
+  const localPrerequisitesReady = config.nonLiveCashCaptureEnabled
+    && localPersistenceCashReady
+    && durableShiftActive
+    && durableCashCustodyActive;
+  const localPrerequisiteBlockers = localCashPrerequisiteBlockers(
+    config.nonLiveCashCaptureEnabled,
+    localJournalHealth,
+    localJournalHealthMessage,
+  );
 
   return (
     <main className="terminal-shell" data-testid="apt-terminal-shell" data-app-ready="true">
@@ -459,7 +508,7 @@ export function TerminalShell({
       </header>
 
       <section className="workflow-stack">
-        <OperationalContextPanel context={context} />
+      <OperationalContextPanel context={context} health={localJournalHealth} />
         <section className="lookup-panel" aria-labelledby="lookup-heading">
           <div className="section-heading">
             <p className="eyebrow">Session resolution</p>
@@ -529,9 +578,10 @@ export function TerminalShell({
                   />
                   {!localPrerequisitesReady && (
                     <StatusNotice tone="danger" title="Local cash prerequisites unavailable" dataTestId="local-cash-prerequisites-notice">
-                      Local cash capture is disabled in this terminal profile. Local prerequisites can only restrict Central PMS readiness.
+                      {localPrerequisiteBlockers[0] ?? "Local prerequisites can only restrict Central PMS readiness."}
                     </StatusNotice>
                   )}
+                  {localPrerequisiteBlockers.slice(1).map((blocker) => <p className="cash-error" key={blocker}>{blocker}</p>)}
                   {localPrerequisiteMessage && <p className="cash-error">{localPrerequisiteMessage}</p>}
                 </div>
                 <div className="cash-column">
@@ -631,38 +681,123 @@ function StartupRefusal({ result }: { result: ConfigLoadResult & { ok: false } }
   );
 }
 
-function OperationalContextPanel({ context }: { context: TerminalContext }) {
+function postManualProofDiagnostic(
+  context: TerminalContext,
+  healthRequest: {
+    cashierId: string;
+    terminalId: string;
+    siteId: string;
+    siteGroupId: string;
+    posServerId: string;
+  },
+  health: LocalJournalHealth,
+) {
+  const activeShift = health.operationalState?.activeShift ?? null;
+  const activeCustody = health.operationalState?.activeCashCustodySession ?? null;
+  const renderedShiftLabel = activeShift?.status === "Open"
+    ? "OPEN"
+    : activeShift?.status === "Closed"
+      ? "CLOSED"
+      : "No active shift";
+
+  try {
+    window.chrome?.webview?.postMessage(JSON.stringify({
+      source: "apt-manual-proof-diagnostic",
+      event: "localJournalHealthReceived",
+      configuredCashierShiftId: context.shiftId,
+      shiftFilterSent: false,
+      bridgeRequestScope: healthRequest,
+      bridgeReturnedActiveShiftId: activeShift?.id ?? null,
+      bridgeReturnedActiveShiftStatus: activeShift?.status ?? null,
+      reactReceivedActiveShiftId: activeShift?.id ?? null,
+      reactReceivedActiveShiftStatus: activeShift?.status ?? null,
+      reactRenderedShiftLabel: renderedShiftLabel,
+      activeCustodyId: activeCustody?.id ?? null,
+      activeCustodyStatus: activeCustody?.status ?? null,
+      cashBlockedWithoutCustody: activeShift?.status === "Open" && activeCustody?.status !== "Open",
+    }));
+  } catch {
+    // Manual proof diagnostics must never affect terminal rendering.
+  }
+}
+
+function OperationalContextPanel({ context, health }: { context: TerminalContext; health: LocalJournalHealth | null }) {
+  const activeShift = health?.operationalState?.activeShift ?? null;
+  const activeCustody = health?.operationalState?.activeCashCustodySession ?? null;
+  const recoveredShiftStatus = activeShift?.status === "Open"
+    ? "OPEN"
+    : activeShift?.status === "Closed"
+      ? "CLOSED"
+      : "No active shift";
   const summaryRows = [
-    ["Site", context.siteName],
-    ["Cashier", context.cashierDisplayName],
-    ["Shift", context.shiftStatus],
-    ["Terminal", context.terminalDisplayName],
-    ["POS readiness", `Configured: ${context.posServerId}`],
+    ["Site", context.siteName, "operational-site-summary"],
+    ["Cashier", context.cashierDisplayName, "operational-cashier-summary"],
+    ["Shift", recoveredShiftStatus, "operational-shift-summary"],
+    ["Terminal", context.terminalDisplayName, "operational-terminal-summary"],
+    ["POS readiness", `Configured: ${context.posServerId}`, "operational-pos-readiness-summary"],
   ];
 
   const detailRows = [
-    ["Terminal ID", context.terminalId],
-    ["Site ID", context.siteId],
-    ["Site-group ID", context.siteGroupId],
-    ["POS Server ID", context.posServerId],
-    ["Cashier ID", context.cashierId],
-    ["Shift ID", context.shiftId],
-    ["Central PMS", context.centralPmsConnectionMode],
+    ["Terminal ID", context.terminalId, "configured-terminal-id"],
+    ["Site ID", context.siteId, "configured-site-id"],
+    ["Site-group ID", context.siteGroupId, "configured-site-group-id"],
+    ["POS Server ID", context.posServerId, "configured-pos-server-id"],
+    ["Cashier ID", context.cashierId, "configured-cashier-id"],
+    ["Configured shift ID", context.shiftId, "configured-shift-id"],
+    ["Configured shift posture", context.shiftStatus, "configured-shift-posture"],
+    ["Recovered shift ID", activeShift?.id ?? "None", "recovered-shift-id"],
+    ["Cash custody session", activeCustody?.id ?? "None", "active-custody-id"],
+    ["Central PMS", context.centralPmsConnectionMode, "configured-central-pms-mode"],
   ];
 
   return (
     <aside className="context-panel compact" aria-label="Operational context">
       <div className="context-summary-grid">
-        {summaryRows.map(([label, value]) => (
-          <div key={label} className="context-chip"><span>{label}</span><strong>{value}</strong></div>
+        {summaryRows.map(([label, value, testId]) => (
+          <div key={label} className="context-chip"><span>{label}</span><strong data-testid={testId}>{value}</strong></div>
         ))}
       </div>
       <details className="terminal-details">
         <summary>Terminal details</summary>
-        <dl>{detailRows.map(([label, value]) => <div key={label} className="context-row"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        <dl>{detailRows.map(([label, value, testId]) => <div key={label} className="context-row"><dt>{label}</dt><dd data-testid={testId}>{value}</dd></div>)}</dl>
       </details>
     </aside>
   );
+}
+
+function localCashPrerequisiteBlockers(
+  nonLiveCashCaptureEnabled: boolean,
+  health: LocalJournalHealth | null,
+  healthMessage: string | null,
+): string[] {
+  const blockers: string[] = [];
+  if (!nonLiveCashCaptureEnabled) {
+    blockers.push("Local cash capture is disabled in this terminal profile.");
+  }
+
+  if (healthMessage) {
+    blockers.push(`Local operational state could not be read: ${healthMessage}`);
+    return blockers;
+  }
+
+  if (!health) {
+    blockers.push("Local operational state is still being checked.");
+    return blockers;
+  }
+
+  if (health.localPersistence?.cashOperationsAllowed !== true) {
+    blockers.push(health.localPersistence?.safeAction ?? "Encrypted local persistence is not ready for cash operations.");
+  }
+
+  if (health.operationalState?.activeShiftRecordCount !== 1 || health.operationalState.activeShift?.status !== "Open") {
+    blockers.push("No active cashier shift is recorded in local recovery state.");
+  }
+
+  if (health.operationalState?.activeCashCustodySessionRecordCount !== 1 || health.operationalState.activeCashCustodySession?.status !== "Open") {
+    blockers.push("No active cash-custody session is recorded in local recovery state.");
+  }
+
+  return blockers;
 }
 
 function SessionSummary({ basis, restored, statutoryWorkflowActive, statutoryCashReady }: { basis: PayableBasisResponse; restored: boolean; statutoryWorkflowActive: boolean; statutoryCashReady: boolean }) {

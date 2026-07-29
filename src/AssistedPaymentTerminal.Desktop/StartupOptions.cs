@@ -18,7 +18,8 @@ public sealed record StartupOptions(
     string? ReceiptPrinterName = null,
     string? ReceiptPrinterMode = null,
     string? SiteTimeZoneId = null,
-    string? CentralPmsBaseUrl = null)
+    string? CentralPmsBaseUrl = null,
+    string? ManualProofDiagnosticPath = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
     {
@@ -39,6 +40,7 @@ public sealed record StartupOptions(
         var receiptPrinterMode = Environment.GetEnvironmentVariable("APT_RECEIPT_PRINTER_MODE");
         var siteTimeZoneId = Environment.GetEnvironmentVariable("APT_SITE_TIME_ZONE_ID");
         var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
+        var manualProofDiagnosticPath = Environment.GetEnvironmentVariable("APT_MANUAL_PROOF_DIAGNOSTIC_PATH");
 
         foreach (var arg in args)
         {
@@ -111,6 +113,10 @@ public sealed record StartupOptions(
             {
                 centralPmsBaseUrl = arg["--central-pms-base-url=".Length..];
             }
+            else if (arg.StartsWith("--manual-proof-diagnostic-path=", StringComparison.OrdinalIgnoreCase))
+            {
+                manualProofDiagnosticPath = arg["--manual-proof-diagnostic-path=".Length..];
+            }
         }
 
         return new StartupOptions(
@@ -131,7 +137,8 @@ public sealed record StartupOptions(
             string.IsNullOrWhiteSpace(receiptPrinterName) ? null : receiptPrinterName,
             string.IsNullOrWhiteSpace(receiptPrinterMode) ? null : receiptPrinterMode,
             string.IsNullOrWhiteSpace(siteTimeZoneId) ? null : siteTimeZoneId,
-            string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl);
+            string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl,
+            string.IsNullOrWhiteSpace(manualProofDiagnosticPath) ? null : manualProofDiagnosticPath);
     }
 
     private static bool IsTrue(string? value) =>

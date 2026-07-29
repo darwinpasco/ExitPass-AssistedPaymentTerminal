@@ -7,4 +7,5 @@ public sealed record LocalOperationsDatabaseOptions(
     bool EnableCentralPmsCashSubmission = false,
     bool EnableCentralPmsFiscalIssuance = false,
     bool EnableCentralPmsReceiptRetrieval = false,
-    int CentralPmsTimeoutSeconds = 10);
+    int CentralPmsTimeoutSeconds = 10,
+    ILocalDatabaseKeyProtector? DatabaseKeyProtector = null);

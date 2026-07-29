@@ -215,6 +215,14 @@ public sealed class LocalJournalBridgeHandler
                 "LOCAL_DATABASE_CONFIGURATION_INVALID",
                 "The configured local operational database path is invalid. Local cash actions are unavailable until the configuration is corrected.");
         }
+        catch (LocalPersistenceUnavailableException exception)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                exception.SafeStatus.ToString(),
+                exception.SafeAction);
+        }
         catch (Exception exception) when (IsLocalDatabaseUnavailable(exception))
         {
             return SerializeFailure(
@@ -227,10 +235,22 @@ public sealed class LocalJournalBridgeHandler
 
     private async Task<string> HealthAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
     {
-        if (_enabled)
-        {
-            await _journal.InitializeAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var payload = request.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? new LocalJournalHealthPayload(null, null, null, null, null, null)
+            : ReadPayload<LocalJournalHealthPayload>(request);
+        var readiness = _journal.GetLocalPersistenceReadiness();
+        var operationalState = new LocalOperationalStateSnapshot(0, 0, null, null);
+        await _journal.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        readiness = _journal.GetLocalPersistenceReadiness();
+        operationalState = await _journal.GetLocalOperationalStateAsync(
+            new LocalOperationalStateRequest(
+                payload.CashierId,
+                null,
+                payload.TerminalId,
+                payload.SiteId,
+                payload.SiteGroupId,
+                payload.PosServerId),
+            cancellationToken).ConfigureAwait(false);
 
         return SerializeSuccess(
             request.Command,
@@ -240,7 +260,9 @@ public sealed class LocalJournalBridgeHandler
                 Enabled: _enabled,
                 DatabasePath: _journal.DatabasePath,
                 CashDrawerEnabled: false,
-                AuthorityWarning: "Local CASH_RECEIVED is terminal-local custody evidence only. Canonical payment and fiscal issuance are not performed."));
+                AuthorityWarning: "Local CASH_RECEIVED is terminal-local custody evidence only. Canonical payment and fiscal issuance are not performed.",
+                LocalPersistence: readiness,
+                OperationalState: operationalState));
     }
 
     private async Task<string> CreateOrGetDevelopmentSessionAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
@@ -994,7 +1016,8 @@ public sealed class LocalJournalBridgeHandler
             if (current is SqliteException
                 or IOException
                 or UnauthorizedAccessException
-                or DbUpdateException)
+                or DbUpdateException
+                or LocalPersistenceUnavailableException)
             {
                 return true;
             }
@@ -1104,7 +1127,17 @@ public sealed record LocalJournalHealthResponse(
     bool Enabled,
     string DatabasePath,
     bool CashDrawerEnabled,
-    string AuthorityWarning);
+    string AuthorityWarning,
+    LocalPersistenceReadiness LocalPersistence,
+    LocalOperationalStateSnapshot OperationalState);
+
+public sealed record LocalJournalHealthPayload(
+    string? CashierId,
+    string? CashierShiftId,
+    string? TerminalId,
+    string? SiteId,
+    string? SiteGroupId,
+    string? PosServerId);
 
 public sealed record CreateDevelopmentSessionPayload(
     string CashierId,

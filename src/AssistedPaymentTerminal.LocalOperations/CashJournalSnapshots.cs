@@ -1,5 +1,37 @@
 namespace AssistedPaymentTerminal.LocalOperations;
 
+public sealed record CashierShiftSnapshot(
+    string Id,
+    string CashierId,
+    string AuthenticatedCashierSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    DateTimeOffset OpenedAt,
+    DateTimeOffset? ClosedAt,
+    CashierShiftStatus Status)
+{
+    public static CashierShiftSnapshot FromEntity(CashierShift shift) =>
+        new(
+            shift.Id,
+            shift.CashierId,
+            shift.AuthenticatedCashierSessionReference,
+            shift.TerminalId,
+            shift.SiteId,
+            shift.SiteGroupId,
+            shift.PosServerId,
+            shift.OpenedAt,
+            shift.ClosedAt,
+            shift.Status);
+}
+
+public sealed record LocalOperationalStateSnapshot(
+    int ActiveShiftRecordCount,
+    int ActiveCashCustodySessionRecordCount,
+    CashierShiftSnapshot? ActiveShift,
+    CashCustodySessionSnapshot? ActiveCashCustodySession);
+
 public sealed record CashCustodySessionSnapshot(
     Guid Id,
     string CashierId,

@@ -5,6 +5,8 @@ namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> options) : DbContext(options)
 {
+    public DbSet<CashierShift> CashierShifts => Set<CashierShift>();
+
     public DbSet<CashCustodySession> CashCustodySessions => Set<CashCustodySession>();
 
     public DbSet<CashTender> CashTenders => Set<CashTender>();
@@ -34,6 +36,27 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
         var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
             value => value.UtcDateTime.Ticks,
             value => new DateTimeOffset(new DateTime(value, DateTimeKind.Utc)));
+
+        var nullableDateTimeOffsetConverter = new ValueConverter<DateTimeOffset?, long?>(
+            value => value.HasValue ? value.Value.UtcDateTime.Ticks : null,
+            value => value.HasValue ? new DateTimeOffset(new DateTime(value.Value, DateTimeKind.Utc)) : null);
+
+        modelBuilder.Entity<CashierShift>(entity =>
+        {
+            entity.ToTable("cashier_shifts");
+            entity.HasKey(shift => shift.Id);
+            entity.Property(shift => shift.Id).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.CashierId).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.AuthenticatedCashierSessionReference).HasMaxLength(256).IsRequired();
+            entity.Property(shift => shift.TerminalId).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.SiteId).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.SiteGroupId).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.PosServerId).HasMaxLength(128).IsRequired();
+            entity.Property(shift => shift.OpenedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(shift => shift.ClosedAt).HasConversion(nullableDateTimeOffsetConverter);
+            entity.Property(shift => shift.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.HasIndex(shift => new { shift.TerminalId, shift.CashierId, shift.Status });
+        });
 
         modelBuilder.Entity<CashCustodySession>(entity =>
         {

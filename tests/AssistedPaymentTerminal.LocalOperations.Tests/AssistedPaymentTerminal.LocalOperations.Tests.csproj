@@ -3,6 +3,10 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

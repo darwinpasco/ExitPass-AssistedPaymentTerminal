@@ -247,11 +247,14 @@ public sealed class CashReceiptPreviewProofHarnessTests
     }
 
     private static string TempDatabasePath() =>
-        Path.Combine(Path.GetTempPath(), $"exitpass-apt-receipt-preview-harness-test-{Guid.NewGuid():N}.db");
+        Path.Combine(
+            Path.GetTempPath(),
+            $"exitpass-apt-receipt-preview-harness-test-{Guid.NewGuid():N}",
+            LocalOperationsDatabasePath.DefaultDatabaseFileName);
 
     private static void DeleteDatabaseFiles(string databasePath)
     {
-        foreach (var path in new[] { databasePath, $"{databasePath}-wal", $"{databasePath}-shm" })
+        foreach (var path in new[] { databasePath, $"{databasePath}-wal", $"{databasePath}-shm", KeyEnvelopePath(databasePath) })
         {
             if (File.Exists(path))
             {
@@ -259,6 +262,9 @@ public sealed class CashReceiptPreviewProofHarnessTests
             }
         }
     }
+
+    private static string KeyEnvelopePath(string databasePath) =>
+        Path.Combine(Path.GetDirectoryName(databasePath)!, LocalDatabaseKeyEnvelope.EnvelopeFileName);
 
     private sealed record ProofProcessResult(int ExitCode, string Output);
 

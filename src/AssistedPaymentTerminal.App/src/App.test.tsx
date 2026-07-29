@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
+import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext } from "./localJournalBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 
 describe("App startup and payable-basis readiness workflow", () => {
@@ -39,17 +40,25 @@ describe("App startup and payable-basis readiness workflow", () => {
   });
 
   it("displays compact operational context", () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} localJournalBridge={bridgeWithLocalState()} />);
 
     expect(screen.getByLabelText("Operational context")).toBeInTheDocument();
     expect(screen.getByText("ExitPass Demo Parking")).toBeInTheDocument();
     expect(screen.getByText("Development Cashier")).toBeInTheDocument();
+    expect(screen.getByText("No active shift")).toBeInTheDocument();
     expect(screen.getByText("Development Cashier Terminal 1")).toBeInTheDocument();
     expect(screen.getByText("Configured: POS-DEV-001")).toBeInTheDocument();
   });
 
+  it("does not allow the development profile to fabricate Shift OPEN on a fresh local database", async () => {
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} localJournalBridge={bridgeWithLocalState()} />);
+
+    expect(await screen.findByText("No active shift")).toBeInTheDocument();
+    expect(screen.getByText("Configured shift posture")).toBeInTheDocument();
+  });
+
   it("resolves a ticket through the APT payable-basis facade and displays Central PMS readiness", async () => {
-    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
+    render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} localJournalBridge={bridgeWithLocalState()} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
@@ -69,6 +78,92 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
     expect(screen.getByText(/Revalidation will still run immediately before CASH_RECEIVED/)).toBeInTheDocument();
     expect(screen.queryByText("Payable basis is current")).not.toBeInTheDocument();
+  });
+
+  it("keeps cash blocked when a durable shift exists without active cash custody", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState({ activeShift: true })} />);
+
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByText("Authoritative payable basis")).toBeInTheDocument();
+    expect(screen.getAllByText("OPEN").length).toBeGreaterThan(0);
+    expect(screen.getByText("No active cash-custody session is recorded in local recovery state.")).toBeInTheDocument();
+    expect(screen.getByTestId("local-cash-prerequisites-value")).toHaveTextContent("Blocked");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
+  });
+
+  it("displays durable active shift recovery without using configured shift as the bridge filter", async () => {
+    const config = { ...mode1Config(), shiftId: "CONFIGURED-SHIFT-FIXTURE", nonLiveCashCaptureEnabled: true };
+    let requestedContext: LocalOperationalContext | undefined;
+    const postMessage = vi.fn();
+    window.chrome = {
+      webview: {
+        postMessage,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    };
+    render(
+      <TerminalShell
+        config={config}
+        client={new MockCentralPmsClient(config)}
+        localJournalBridge={bridgeWithLocalState({
+          activeShift: true,
+          onHealthContext: (context) => {
+            requestedContext = context;
+          },
+          hideRecoveredStateWhenShiftFilterPresent: true,
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(requestedContext).toBeDefined());
+
+    expect(requestedContext).not.toHaveProperty("cashierShiftId");
+    expect(screen.getAllByText("OPEN").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No active shift")).not.toBeInTheDocument();
+    expect(screen.getByText("Recovered shift ID")).toBeInTheDocument();
+    expect(screen.getByText("SHIFT-DEV-20260714-A")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByText("Authoritative payable basis")).toBeInTheDocument();
+    expect(screen.getByText("No active cash-custody session is recorded in local recovery state.")).toBeInTheDocument();
+    expect(screen.getByTestId("local-cash-prerequisites-value")).toHaveTextContent("Blocked");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
+
+    const diagnostic = postMessage.mock.calls
+      .map(([message]) => JSON.parse(message as string))
+      .find((message) => message.source === "apt-manual-proof-diagnostic");
+    expect(diagnostic).toMatchObject({
+      configuredCashierShiftId: "CONFIGURED-SHIFT-FIXTURE",
+      shiftFilterSent: false,
+      bridgeReturnedActiveShiftId: "SHIFT-DEV-20260714-A",
+      bridgeReturnedActiveShiftStatus: "Open",
+      reactReceivedActiveShiftId: "SHIFT-DEV-20260714-A",
+      reactReceivedActiveShiftStatus: "Open",
+      reactRenderedShiftLabel: "OPEN",
+      activeCustodyId: null,
+      cashBlockedWithoutCustody: true,
+    });
+    expect(diagnostic.bridgeRequestScope).not.toHaveProperty("cashierShiftId");
+    window.chrome = undefined;
+  });
+
+  it("allows local prerequisites to pass only when durable shift and custody are recovered", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState({ activeShift: true, activeCustody: true })} />);
+
+    await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByText("Authoritative payable basis")).toBeInTheDocument();
+    expect(screen.getByTestId("central-cash-ready-value")).toHaveTextContent("true");
+    expect(screen.getByTestId("local-cash-prerequisites-value")).toHaveTextContent("Satisfied");
+    expect(screen.getByTestId("continue-to-cash")).toBeEnabled();
   });
 
   it("resolves a plate without requiring a ticket", async () => {
@@ -178,4 +273,90 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.getByRole("button", { name: "Check Review Status" })).toBeInTheDocument();
     expect(screen.queryByText(/full statutory ID/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("reviewerUserId");
-  });});
+  });
+});
+
+function bridgeWithLocalState(options: {
+  activeShift?: boolean;
+  activeCustody?: boolean;
+  onHealthContext?: (context?: LocalOperationalContext) => void;
+  hideRecoveredStateWhenShiftFilterPresent?: boolean;
+} = {}): LocalJournalBridge {
+  function healthForContext(context?: LocalOperationalContext): LocalJournalHealth {
+    const configuredShiftFilterWouldHideRecovery = options.hideRecoveredStateWhenShiftFilterPresent && Boolean(context?.cashierShiftId);
+    const includeActiveShift = Boolean(options.activeShift && !configuredShiftFilterWouldHideRecovery);
+    const includeActiveCustody = Boolean(options.activeCustody && includeActiveShift);
+
+    return {
+      healthy: true,
+      enabled: true,
+      databasePath: "C:\\Users\\darwi\\AppData\\Local\\ExitPass\\AssistedPaymentTerminal\\ManualEncryptionProof\\LocalOperations\\cash-journal.db",
+      cashDrawerEnabled: false,
+      authorityWarning: "Local CASH_RECEIVED is terminal-local custody evidence only.",
+      localPersistence: {
+        encryptionConfigured: true,
+        dpapiScope: "CurrentUser",
+        keyEnvelopeExists: true,
+        keyAvailable: true,
+        databaseExists: true,
+        databaseEncrypted: true,
+        legacyPlaintextDetected: false,
+        migrationRequired: false,
+        integrityValidated: true,
+        schemaReady: true,
+        persistenceReady: true,
+        recoveryAllowed: true,
+        cashOperationsAllowed: true,
+        safeStatus: "Ready",
+        safeAction: "Local encrypted persistence is ready.",
+        databasePath: "C:\\Users\\darwi\\AppData\\Local\\ExitPass\\AssistedPaymentTerminal\\ManualEncryptionProof\\LocalOperations\\cash-journal.db",
+        keyEnvelopePath: "C:\\Users\\darwi\\AppData\\Local\\ExitPass\\AssistedPaymentTerminal\\ManualEncryptionProof\\LocalOperations\\cash-journal.key",
+      },
+      operationalState: {
+        activeShiftRecordCount: includeActiveShift ? 1 : 0,
+        activeCashCustodySessionRecordCount: includeActiveCustody ? 1 : 0,
+        activeShift: includeActiveShift
+          ? {
+              id: "SHIFT-DEV-20260714-A",
+              cashierId: "CASHIER-DEV-001",
+              authenticatedCashierSessionReference: "dev-auth:CASHIER-DEV-001:SHIFT-DEV-20260714-A",
+              terminalId: "APT-DEV-001",
+              siteId: "11111111-1111-1111-1111-111111111111",
+              siteGroupId: "22222222-2222-2222-2222-222222222222",
+              posServerId: "POS-DEV-001",
+              openedAt: "2026-07-15T00:00:00Z",
+              closedAt: null,
+              status: "Open",
+            }
+          : null,
+        activeCashCustodySession: includeActiveCustody
+          ? {
+              id: "33333333-3333-4333-8333-333333333333",
+              cashierId: "CASHIER-DEV-001",
+              authenticatedCashierSessionReference: "dev-auth:CASHIER-DEV-001:SHIFT-DEV-20260714-A",
+              cashierShiftId: "SHIFT-DEV-20260714-A",
+              terminalId: "APT-DEV-001",
+              siteId: "11111111-1111-1111-1111-111111111111",
+              siteGroupId: "22222222-2222-2222-2222-222222222222",
+              posServerId: "POS-DEV-001",
+              openingCashAmount: 0,
+              openedAt: "2026-07-15T00:01:00Z",
+              status: "Open",
+            }
+          : null,
+      },
+    };
+  }
+
+  return {
+    health: vi.fn(async (correlationId: string, context?: LocalOperationalContext) => {
+      options.onHealthContext?.(context);
+      return {
+      ok: true,
+      command: "localJournal.health",
+      correlationId,
+      payload: healthForContext(context),
+    };
+    }),
+  } as unknown as LocalJournalBridge;
+}

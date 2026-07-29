@@ -41,6 +41,122 @@ public sealed class LocalJournalBridgeHandlerTests
     }
 
     [Fact]
+    public async Task HealthReportsFreshDatabaseWithoutActiveShiftOrCashCustody()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var handler = database.CreateHandler(enabled: true);
+
+        var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-fresh", ScopedHealthPayload());
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var operationalState = response.RootElement.GetProperty("payload").GetProperty("operationalState");
+        Assert.Equal(0, operationalState.GetProperty("activeShiftRecordCount").GetInt32());
+        Assert.Equal(0, operationalState.GetProperty("activeCashCustodySessionRecordCount").GetInt32());
+        Assert.Equal(JsonValueKind.Null, operationalState.GetProperty("activeShift").ValueKind);
+        Assert.Equal(JsonValueKind.Null, operationalState.GetProperty("activeCashCustodySession").ValueKind);
+    }
+
+    [Fact]
+    public async Task HealthReportsDurableActiveShiftAndCashCustodyIndependently()
+    {
+        using var database = DesktopTestDatabase.Create();
+        await database.Service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            "shift-bridge",
+            "cashier-bridge",
+            "auth-bridge",
+            "terminal-bridge",
+            SiteId,
+            SiteGroupId,
+            "pos-bridge",
+            DateTimeOffset.Parse("2026-07-15T00:00:00Z")));
+        await database.Service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
+            "cashier-bridge",
+            "auth-bridge",
+            "shift-bridge",
+            "terminal-bridge",
+            SiteId,
+            SiteGroupId,
+            "pos-bridge",
+            0m,
+            OpenedAt: DateTimeOffset.Parse("2026-07-15T00:01:00Z")));
+        var handler = database.CreateHandler(enabled: true);
+
+        var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-active", ScopedHealthPayload());
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var operationalState = response.RootElement.GetProperty("payload").GetProperty("operationalState");
+        Assert.Equal(1, operationalState.GetProperty("activeShiftRecordCount").GetInt32());
+        Assert.Equal(1, operationalState.GetProperty("activeCashCustodySessionRecordCount").GetInt32());
+        Assert.Equal("Open", operationalState.GetProperty("activeShift").GetProperty("status").GetString());
+        Assert.Equal("Open", operationalState.GetProperty("activeCashCustodySession").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task HealthIgnoresConfiguredShiftFixtureWhenRecoveringDurableActiveShift()
+    {
+        using var database = DesktopTestDatabase.Create();
+        await database.Service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            "shift-bridge",
+            "cashier-bridge",
+            "auth-bridge",
+            "terminal-bridge",
+            SiteId,
+            SiteGroupId,
+            "pos-bridge",
+            DateTimeOffset.Parse("2026-07-15T00:00:00Z")));
+        var handler = database.CreateHandler(enabled: true);
+
+        var response = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.Health,
+            "corr-health-configured-shift",
+            new
+            {
+                cashierId = "cashier-bridge",
+                cashierShiftId = "configured-shift-fixture",
+                terminalId = "terminal-bridge",
+                siteId = SiteId,
+                siteGroupId = SiteGroupId,
+                posServerId = "pos-bridge"
+            });
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var operationalState = response.RootElement.GetProperty("payload").GetProperty("operationalState");
+        Assert.Equal(1, operationalState.GetProperty("activeShiftRecordCount").GetInt32());
+        Assert.Equal(0, operationalState.GetProperty("activeCashCustodySessionRecordCount").GetInt32());
+        Assert.Equal("shift-bridge", operationalState.GetProperty("activeShift").GetProperty("id").GetString());
+        Assert.Equal("Open", operationalState.GetProperty("activeShift").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, operationalState.GetProperty("activeCashCustodySession").ValueKind);
+    }
+
+    [Fact]
+    public async Task HealthReportsDurableActiveShiftWhenCashMutationBridgeIsDisabled()
+    {
+        using var database = DesktopTestDatabase.Create();
+        await database.Service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            "shift-bridge",
+            "cashier-bridge",
+            "auth-bridge",
+            "terminal-bridge",
+            SiteId,
+            SiteGroupId,
+            "pos-bridge",
+            DateTimeOffset.Parse("2026-07-15T00:00:00Z")));
+        var handler = database.CreateHandler(enabled: false);
+
+        var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-disabled", ScopedHealthPayload());
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var payload = response.RootElement.GetProperty("payload");
+        Assert.False(payload.GetProperty("enabled").GetBoolean());
+        var operationalState = payload.GetProperty("operationalState");
+        Assert.Equal(1, operationalState.GetProperty("activeShiftRecordCount").GetInt32());
+        Assert.Equal("shift-bridge", operationalState.GetProperty("activeShift").GetProperty("id").GetString());
+        Assert.Equal("Open", operationalState.GetProperty("activeShift").GetProperty("status").GetString());
+        Assert.Equal(0, operationalState.GetProperty("activeCashCustodySessionRecordCount").GetInt32());
+    }
+
+    [Fact]
     public async Task StartTenderCommandMapsToLocalJournal()
     {
         using var database = DesktopTestDatabase.Create();
@@ -293,6 +409,17 @@ public sealed class LocalJournalBridgeHandlerTests
         }
     }
 
+    private static object ScopedHealthPayload() =>
+        new
+        {
+            cashierId = "cashier-bridge",
+            cashierShiftId = "shift-bridge",
+            terminalId = "terminal-bridge",
+            siteId = SiteId,
+            siteGroupId = SiteGroupId,
+            posServerId = "pos-bridge"
+        };
+
     private static async Task<JsonDocument> SendAsync(LocalJournalBridgeHandler handler, string command, string correlationId, object payload)
     {
         var request = JsonSerializer.Serialize(
@@ -322,6 +449,8 @@ internal sealed class DesktopTestDatabase : IDisposable
     private string DirectoryPath { get; }
 
     private string DatabasePath { get; }
+
+    public CashJournalService Service => new(new LocalOperationsDatabaseOptions(DatabasePath));
 
     public static DesktopTestDatabase Create()
     {
