@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AssistedPaymentTerminal.LocalOperations\AssistedPaymentTerminal.LocalOperations.csproj" />
+    <ProjectReference Include="..\..\tools\AssistedPaymentTerminal.PlaintextDatabaseMigration.ValidationHarness\AssistedPaymentTerminal.PlaintextDatabaseMigration.ValidationHarness.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
