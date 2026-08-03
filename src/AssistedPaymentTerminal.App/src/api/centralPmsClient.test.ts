@@ -1,6 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 import { LiveCentralPmsClient } from "./centralPmsClient";
-import type { PayableBasisResponse } from "./centralPmsTypes";
+import type { PayableBasisResponse, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
 import { mode1Config } from "../test/testConfig";
 
 describe("LiveCentralPmsClient", () => {
@@ -38,6 +38,73 @@ describe("LiveCentralPmsClient", () => {
     expect(result.ok).toBe(true);
     expect(vi.mocked(fetchMock).mock.calls[0][0]).toContain("/v1/terminal-cash-payments/payable-basis/revalidate");
     expect(vi.mocked(fetchMock).mock.calls[0][0]).not.toContain("/v1/webpay/parking-session");
+  });
+
+  it("resolves APT ordinance availability using one authoritative parking-session lookup and no privileged UI headers", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ordinanceAvailabilityPayload() })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.resolveStatutoryOrdinanceAvailability!(payableBasisPayload(), "SENIOR_CITIZEN", "ordinance-resolve-corr");
+
+    expect(result.ok).toBe(true);
+    const [url, init] = vi.mocked(fetchMock).mock.calls[0];
+    expect(url).toContain("/v1/apt/statutory-discounts/ordinance-availability/resolve");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body).toEqual(expect.objectContaining({
+      parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+      siteId: "11111111-1111-1111-1111-111111111111",
+      siteGroupId: "22222222-2222-2222-2222-222222222222",
+      entitlementType: "SENIOR_CITIZEN",
+    }));
+    expect(body).not.toHaveProperty("ticketReference");
+    expect(body).not.toHaveProperty("plateNumber");
+    expect(init?.headers).not.toHaveProperty("Authorization");
+    expect(init?.headers).not.toHaveProperty("X-ExitPass-Permissions");
+    expect(init?.headers).not.toHaveProperty("X-ExitPass-Service-Identity-Id");
+  });
+
+  it("uses the dedicated immediate ordinance revalidation route and preserves canonical pass fields", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ordinanceAvailabilityPayload({ operation: "REVALIDATE", revalidationOutcome: "PASSED_UNCHANGED", preCashRevalidationPassed: true, readyForStatutoryCashFlow: true }) })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.revalidateStatutoryOrdinanceAvailability!(payableBasisPayload(), "PWD", "ordinance-revalidate-corr");
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    if (result.ok) {
+      expect(result.response.revalidationOutcome).toBe("PASSED_UNCHANGED");
+      expect(result.response.readyForStatutoryCashFlow).toBe(true);
+    }
+    expect(vi.mocked(fetchMock).mock.calls[0][0]).toContain("/v1/apt/statutory-discounts/ordinance-availability/revalidate");
+  });
+
+  it("fails closed on malformed ordinance availability without exposing the raw payload", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ classification: "AVAILABLE", internalPolicyId: "must-not-escape" }) })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.resolveStatutoryOrdinanceAvailability!(payableBasisPayload(), "PWD", "ordinance-malformed-corr");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("malformed_response");
+      expect(JSON.stringify(result.error)).not.toContain("internalPolicyId");
+      expect(JSON.stringify(result.error)).not.toContain("must-not-escape");
+    }
+  });
+
+  it("fails closed on contradictory AVAILABLE flags instead of enabling the statutory path", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ordinanceAvailabilityPayload({ ordinanceCoverageAvailable: false }),
+    })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.resolveStatutoryOrdinanceAvailability!(payableBasisPayload(), "PWD", "ordinance-contradictory-corr");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("malformed_response");
+      expect(result.error.retryable).toBe(false);
+    }
   });
 
 
@@ -232,6 +299,37 @@ function statutoryDecisionPayload(overrides: Partial<import("./centralPmsTypes")
     payableBasisReady: false,
     payableBasisReadinessStatus: "AWAITING_REVIEW",
     payableBasisReadinessAction: "POLL_READBACK",
+    ...overrides,
+  };
+}
+
+function ordinanceAvailabilityPayload(overrides: Partial<StatutoryOrdinanceAvailabilityResponse> = {}): StatutoryOrdinanceAvailabilityResponse {
+  return {
+    operation: "RESOLVE",
+    revalidationOutcome: null,
+    classification: "AVAILABLE",
+    entitlementType: "PWD",
+    ordinanceCoverageAvailable: true,
+    statutoryRequestAllowed: true,
+    preCashRevalidationPassed: false,
+    readyForStatutoryCashFlow: true,
+    ordinaryPaymentPreserved: true,
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    resolvedScopeType: "SITE",
+    coverageClassification: "ACTIVE_COVERED",
+    policyStatusClassification: "ACTIVE",
+    effectiveFrom: "2026-01-01T00:00:00Z",
+    effectiveTo: null,
+    authorityClassification: "CENTRAL_PMS_STATUTORY_POLICY",
+    jurisdictionDisplayName: "Synthetic locality",
+    supportReference: "ordinance-support-reference",
+    correlationId: "ordinance-correlation",
+    evaluatedAt: "2026-08-03T00:00:00Z",
+    authoritativeUpdatedAt: "2026-08-01T00:00:00Z",
+    retryable: false,
+    safeMessage: "Coverage is available; customer entitlement still requires review.",
     ...overrides,
   };
 }

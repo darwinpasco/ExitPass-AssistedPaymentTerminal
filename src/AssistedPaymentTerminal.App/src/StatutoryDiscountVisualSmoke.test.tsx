@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App, TerminalShell } from "./App";
-import type { CentralPmsClient, PayableBasisResponse } from "./api/centralPmsTypes";
+import type { CentralPmsClient, PayableBasisResponse, StatutoryOrdinanceAvailabilityResult } from "./api/centralPmsTypes";
 import {
   shouldUseStatutoryDiscountVisualSmoke,
   StatutoryDiscountVisualSmokeShell,
@@ -10,16 +10,19 @@ import {
 } from "./StatutoryDiscountVisualSmoke";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 
-function renderSmoke(onRevalidate?: (basis: PayableBasisResponse) => void) {
+function renderSmoke(
+  onRevalidate?: (basis: PayableBasisResponse) => void,
+  ordinanceRevalidate?: NonNullable<CentralPmsClient["revalidateStatutoryOrdinanceAvailability"]>,
+) {
   render(
     <StatutoryDiscountVisualSmokeShell
       config={{ ...mode1Config(), nonLiveCashCaptureEnabled: true }}
       renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, bridge, initialCashEntryRequested, renderKey }) => {
-        const wrappedClient: CentralPmsClient = onRevalidate
+        const wrappedClient: CentralPmsClient = onRevalidate || ordinanceRevalidate
           ? {
             resolvePayableBasis: (...args) => client.resolvePayableBasis(...args),
             revalidatePayableBasis: (basis, correlationId) => {
-              onRevalidate(basis);
+              onRevalidate?.(basis);
               return client.revalidatePayableBasis(basis, correlationId);
             },
             ...(client.submitStatutoryDiscountDecision
@@ -27,6 +30,14 @@ function renderSmoke(onRevalidate?: (basis: PayableBasisResponse) => void) {
               : {}),
             ...(client.getStatutoryDiscountDecision
               ? { getStatutoryDiscountDecision: (...args) => client.getStatutoryDiscountDecision!(...args) }
+              : {}),
+            ...(client.resolveStatutoryOrdinanceAvailability
+              ? { resolveStatutoryOrdinanceAvailability: (...args) => client.resolveStatutoryOrdinanceAvailability!(...args) }
+              : {}),
+            ...(ordinanceRevalidate
+              ? { revalidateStatutoryOrdinanceAvailability: ordinanceRevalidate }
+              : client.revalidateStatutoryOrdinanceAvailability
+                ? { revalidateStatutoryOrdinanceAvailability: (...args) => client.revalidateStatutoryOrdinanceAvailability!(...args) }
               : {}),
           }
           : client;
@@ -147,6 +158,110 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeDisabled();
     expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
+  });
+
+  it("blocks before local cash custody when J-005 revokes ordinance coverage", async () => {
+    let calls = 0;
+    renderSmoke(undefined, async (basis, entitlementType, correlationId): Promise<StatutoryOrdinanceAvailabilityResult> => {
+      calls += 1;
+      return {
+        ok: true,
+        response: {
+          operation: "REVALIDATE",
+          revalidationOutcome: "FAILED",
+          classification: "EXPIRED",
+          entitlementType,
+          ordinanceCoverageAvailable: false,
+          statutoryRequestAllowed: false,
+          preCashRevalidationPassed: false,
+          readyForStatutoryCashFlow: false,
+          ordinaryPaymentPreserved: true,
+          parkingSessionId: basis.parkingSessionId,
+          siteId: basis.siteId,
+          siteGroupId: basis.siteGroupId,
+          resolvedScopeType: "SITE",
+          coverageClassification: "EXPIRED",
+          policyStatusClassification: "EXPIRED",
+          supportReference: correlationId,
+          correlationId,
+          evaluatedAt: "2026-08-03T00:00:00Z",
+          retryable: false,
+          safeMessage: "Statutory parking coverage is no longer effective. Cash acceptance remains blocked for the statutory path.",
+        },
+      };
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "APPLIED complete and Continue to Cash enabled" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+
+    expect((await screen.findAllByText("Statutory parking coverage is no longer effective. Cash acceptance remains blocked for the statutory path.")).length).toBeGreaterThan(0);
+    expect(calls).toBe(1);
+    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ordinary-payment-preserved")).toHaveTextContent("Ordinary payment remains available");
+  });
+
+  it("blocks the second J-005 check immediately before CASH_RECEIVED", async () => {
+    let calls = 0;
+    renderSmoke(undefined, async (basis, entitlementType, correlationId): Promise<StatutoryOrdinanceAvailabilityResult> => {
+      calls += 1;
+      const passed = calls === 1;
+      return {
+        ok: true,
+        response: {
+          operation: "REVALIDATE",
+          revalidationOutcome: passed ? "PASSED_UNCHANGED" : "FAILED",
+          classification: passed ? "AVAILABLE" : "SOURCE_UNAVAILABLE",
+          entitlementType,
+          ordinanceCoverageAvailable: passed,
+          statutoryRequestAllowed: passed,
+          preCashRevalidationPassed: passed,
+          readyForStatutoryCashFlow: passed,
+          ordinaryPaymentPreserved: true,
+          parkingSessionId: basis.parkingSessionId,
+          siteId: basis.siteId,
+          siteGroupId: basis.siteGroupId,
+          resolvedScopeType: "SITE",
+          coverageClassification: passed ? "AVAILABLE" : "SOURCE_UNAVAILABLE",
+          policyStatusClassification: passed ? "ACTIVE" : "SOURCE_UNAVAILABLE",
+          supportReference: correlationId,
+          correlationId,
+          evaluatedAt: "2026-08-03T00:00:00Z",
+          retryable: !passed,
+          safeMessage: passed
+            ? "Statutory parking coverage remains available."
+            : "Statutory coverage could not be revalidated. Do not accept cash for the statutory path.",
+        },
+      };
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Statutory CASH_RECEIVED recorded once" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+    await screen.findByLabelText("Non-live cash custody capture");
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect((await screen.findAllByText("Statutory coverage could not be revalidated. Do not accept cash for the statutory path.")).length).toBeGreaterThan(0);
+    expect(calls).toBe(2);
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("statutory-tender-evidence")).not.toBeInTheDocument();
+  });
+
+  it("exposes deterministic interactive J-005 failure scenarios", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash ordinance coverage revoked" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+    expect((await screen.findAllByText("Statutory parking coverage expired before cash acceptance.")).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Immediate Record Cash Received ordinance unavailable" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+    await screen.findByLabelText("Non-live cash custody capture");
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+    expect((await screen.findAllByText("Statutory coverage could not be revalidated. Do not accept cash for the statutory path.")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
   });
 
   it("records statutory CASH_RECEIVED once after the second immediate revalidation", async () => {
