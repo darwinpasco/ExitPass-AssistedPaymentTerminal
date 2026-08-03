@@ -3,7 +3,19 @@ import type { AptConfig, ConfigLoadResult } from "./config";
 import { loadAptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import { createCentralPmsClient } from "./api/clientFactory";
-import type { CentralPmsClient, CentralPmsResult, PayableBasisReferenceType, PayableBasisResponse, StatutoryDiscountDecisionResponse, StatutoryDiscountWorkflowState } from "./api/centralPmsTypes";
+import type {
+  CentralPmsClient,
+  CentralPmsFailureKind,
+  CentralPmsResult,
+  PayableBasisReferenceType,
+  PayableBasisResponse,
+  StatutoryDiscountDecisionResponse,
+  StatutoryDiscountWorkflowState,
+  StatutoryEntitlementType,
+  StatutoryOrdinanceAvailabilityResponse,
+  StatutoryOrdinanceAvailabilitySnapshot,
+  StatutoryOrdinanceAvailabilityViewState,
+} from "./api/centralPmsTypes";
 import { CashCapturePanel } from "./CashCapturePanel";
 import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
@@ -131,12 +143,20 @@ export function TerminalShell({
   const [referenceValue, setReferenceValue] = useState(initialReferenceValue);
   const [lookupState, setLookupState] = useState<LookupState>(() => initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
   const [statutoryWorkflowState, setStatutoryWorkflowState] = useState<StatutoryDiscountWorkflowState>(initialStatutoryState);
+  const [ordinanceAvailability, setOrdinanceAvailability] = useState<StatutoryOrdinanceAvailabilityViewState>({ status: "idle" });
+  const [ordinanceRefreshToken, setOrdinanceRefreshToken] = useState(0);
   const [localPrerequisiteMessage, setLocalPrerequisiteMessage] = useState<string | null>(null);
   const [cashEntryRequested, setCashEntryRequested] = useState(initialCashEntryRequested);
   const [preCashStatus, setPreCashStatus] = useState<"idle" | "revalidating" | "passed" | "blocked">("idle");
   const [localJournalHealth, setLocalJournalHealth] = useState<LocalJournalHealth | null>(null);
   const [localJournalHealthMessage, setLocalJournalHealthMessage] = useState<string | null>(null);
   const latestRequestId = useRef(0);
+  const latestOrdinanceRequestId = useRef(0);
+  const statutoryWorkflowStateRef = useRef(statutoryWorkflowState);
+
+  useEffect(() => {
+    statutoryWorkflowStateRef.current = statutoryWorkflowState;
+  }, [statutoryWorkflowState]);
 
   useEffect(() => {
     latestRequestId.current += 1;
@@ -144,6 +164,8 @@ export function TerminalShell({
     setReferenceValue(initialReferenceValue);
     setLookupState(initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
     setStatutoryWorkflowState(initialStatutoryState);
+    setOrdinanceAvailability({ status: "idle" });
+    setOrdinanceRefreshToken((current) => current + 1);
     setLocalPrerequisiteMessage(null);
     setCashEntryRequested(initialCashEntryRequested);
     setPreCashStatus("idle");
@@ -171,6 +193,7 @@ export function TerminalShell({
       const restoredBasis = basisFromState(result.payload);
       setStatutoryWorkflowState(restoredStatutoryState);
       setLookupState(initialLookupState(restoredBasis, restoredStatutoryState, "restored"));
+      setOrdinanceRefreshToken((current) => current + 1);
     }
 
     void restore();
@@ -213,6 +236,54 @@ export function TerminalShell({
     };
   }, [context.cashierId, context.posServerId, context.siteGroupId, context.siteId, context.terminalId, localJournalBridge]);
   const displayedBasis = lookupState.status === "resolved" ? lookupState.basis : lookupState.status === "amount_changed" && lookupState.acknowledged ? lookupState.current : undefined;
+
+  useEffect(() => {
+    if (!displayedBasis) {
+      latestOrdinanceRequestId.current += 1;
+      setOrdinanceAvailability({ status: "idle" });
+      return;
+    }
+
+    const basis = displayedBasis;
+    const requestId = latestOrdinanceRequestId.current + 1;
+    latestOrdinanceRequestId.current = requestId;
+    const restoredRefresh = lookupState.status === "resolved" && lookupState.source === "restored";
+    setOrdinanceAvailability({ status: "loading", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh });
+
+    async function resolveAvailability() {
+      const [seniorCitizen, pwd] = await Promise.all([
+        resolveOrdinanceForEntitlement(client, basis, "SENIOR_CITIZEN"),
+        resolveOrdinanceForEntitlement(client, basis, "PWD"),
+      ]);
+      if (latestOrdinanceRequestId.current !== requestId) {
+        return;
+      }
+      if (!ordinanceResponseMatchesBasis(seniorCitizen, basis) || !ordinanceResponseMatchesBasis(pwd, basis)) {
+        const malformedSenior = malformedOrdinanceResponse(basis, "SENIOR_CITIZEN", seniorCitizen.correlationId);
+        const malformedPwd = malformedOrdinanceResponse(basis, "PWD", pwd.correlationId);
+        setOrdinanceAvailability({ status: "ready", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh, seniorCitizen: malformedSenior, pwd: malformedPwd });
+        return;
+      }
+
+      setOrdinanceAvailability({ status: "ready", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh, seniorCitizen, pwd });
+      const snapshot = ordinanceSnapshot(basis, seniorCitizen, pwd);
+      const nextState = { ...statutoryWorkflowStateRef.current, ordinanceAvailability: snapshot };
+      statutoryWorkflowStateRef.current = nextState;
+      setStatutoryWorkflowState(nextState);
+      await persistPayableBasis(
+        basis,
+        basis.ticketReference ? "ticket" : "plate",
+        basis.ticketReference ?? basis.plateNumber ?? referenceValue,
+        false,
+        false,
+        null,
+        nextState,
+      );
+    }
+
+    void resolveAvailability();
+  }, [client, displayedBasis?.parkingSessionId, displayedBasis?.siteGroupId, displayedBasis?.siteId, ordinanceRefreshToken]);
+
   const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
   const statutoryWorkflowActive = statutoryWorkflowState.status !== "none";
   const centralReady = Boolean(displayedBasis?.readyForCashAcceptance) && !tariffExpired && lookupState.status !== "amount_changed";
@@ -246,6 +317,7 @@ export function TerminalShell({
     setCashEntryRequested(false);
     setPreCashStatus("idle");
     setStatutoryWorkflowState(noStatutoryWorkflow);
+    setOrdinanceAvailability({ status: "idle" });
     setLookupState({ status: "loading", correlationId, requestId, referenceType, referenceValue: trimmed });
 
     const result = await client.resolvePayableBasis(referenceType, trimmed, correlationId);
@@ -258,6 +330,7 @@ export function TerminalShell({
       setCashEntryRequested(false);
       setPreCashStatus("idle");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
+      setOrdinanceRefreshToken((current) => current + 1);
       return;
     }
 
@@ -268,6 +341,7 @@ export function TerminalShell({
     latestRequestId.current += 1;
     setLookupState({ status: "idle" });
     setReferenceValue("");
+    setOrdinanceAvailability({ status: "idle" });
     setLocalPrerequisiteMessage(null);
   }
 
@@ -306,6 +380,32 @@ export function TerminalShell({
     );
 
     if (outcome === "PASSED_UNCHANGED" && result.response.readyForCashAcceptance && revalidatedBasisMatchesCurrentStatutoryAuthority(result.response, nextStatutoryState)) {
+      if (nextStatutoryState.status !== "none") {
+        const entitlementType = asStatutoryEntitlementType(nextStatutoryState.entitlementType);
+        if (!entitlementType) {
+          return { ok: false, message: "The active statutory workflow has no supported entitlement type. Cash acceptance remains blocked." };
+        }
+        const ordinanceResult = await revalidateOrdinanceForEntitlement(client, result.response, entitlementType);
+        if (!ordinanceRevalidationPassed(ordinanceResult, result.response, entitlementType)) {
+          const updatedAvailability = replaceOrdinanceAvailability(ordinanceAvailability, result.response, ordinanceResult);
+          setOrdinanceAvailability(updatedAvailability);
+          const nextSnapshot = snapshotFromViewState(updatedAvailability);
+          const blockedState = { ...nextStatutoryState, ordinanceAvailability: nextSnapshot, amountAcknowledged: false, updatedAt: new Date().toISOString() };
+          statutoryWorkflowStateRef.current = blockedState;
+          setStatutoryWorkflowState(blockedState);
+          await persistPayableBasis(
+            result.response,
+            result.response.ticketReference ? "ticket" : "plate",
+            result.response.ticketReference ?? result.response.plateNumber ?? referenceValue,
+            false,
+            false,
+            currentBasis.authoritativeAmountMinorUnits,
+            blockedState,
+          );
+          return { ok: false, message: ordinanceResult.safeMessage };
+        }
+        setOrdinanceAvailability(replaceOrdinanceAvailability(ordinanceAvailability, result.response, ordinanceResult));
+      }
       setCashEntryRequested(preserveCashEntry);
       setPreCashStatus("idle");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
@@ -444,11 +544,13 @@ export function TerminalShell({
     setReferenceType(nextType);
     setReferenceValue("");
     setStatutoryWorkflowState(noStatutoryWorkflow);
+    setOrdinanceAvailability({ status: "idle" });
     setLookupState({ status: "idle" });
   }
 
 
   async function handleStatutoryStateChange(next: StatutoryDiscountWorkflowState) {
+    statutoryWorkflowStateRef.current = next;
     setStatutoryWorkflowState(next);
     if (displayedBasis) {
       await persistPayableBasis(
@@ -573,6 +675,8 @@ export function TerminalShell({
                     client={client}
                     context={context}
                     state={statutoryWorkflowState}
+                    ordinanceAvailability={ordinanceAvailability}
+                    onRetryAvailability={() => setOrdinanceRefreshToken((current) => current + 1)}
                     onStateChange={(next) => void handleStatutoryStateChange(next)}
                     onAppliedBasisReady={handleAppliedStatutoryBasis}
                   />
@@ -980,7 +1084,182 @@ function parseStatutoryState(raw?: string | null, restoredAfterRestart = false):
 }
 
 function serializeStatutoryState(state: StatutoryDiscountWorkflowState): string | null {
-  return state.status === "none" ? null : JSON.stringify(state);
+  return state.status === "none" && !state.ordinanceAvailability ? null : JSON.stringify(state);
+}
+
+async function resolveOrdinanceForEntitlement(
+  client: CentralPmsClient,
+  basis: PayableBasisResponse,
+  entitlementType: StatutoryEntitlementType,
+): Promise<StatutoryOrdinanceAvailabilityResponse> {
+  const correlationId = createCorrelationId();
+  if (!client.resolveStatutoryOrdinanceAvailability) {
+    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Central PMS ordinance availability is unavailable from this terminal.", "RESOLVE");
+  }
+  try {
+    const result = await client.resolveStatutoryOrdinanceAvailability(basis, entitlementType, correlationId);
+    return result.ok
+      ? result.response
+      : unavailableOrdinanceResponse(basis, entitlementType, result.error.correlationId, classificationForFailure(result.kind), result.error.retryable, result.error.message, "RESOLVE");
+  } catch {
+    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Central PMS ordinance availability is unavailable from this terminal.", "RESOLVE");
+  }
+}
+
+async function revalidateOrdinanceForEntitlement(
+  client: CentralPmsClient,
+  basis: PayableBasisResponse,
+  entitlementType: StatutoryEntitlementType,
+): Promise<StatutoryOrdinanceAvailabilityResponse> {
+  const correlationId = createCorrelationId();
+  if (!client.revalidateStatutoryOrdinanceAvailability) {
+    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Statutory ordinance coverage could not be revalidated. Cash acceptance remains blocked.", "REVALIDATE");
+  }
+  try {
+    const result = await client.revalidateStatutoryOrdinanceAvailability(basis, entitlementType, correlationId);
+    return result.ok
+      ? result.response
+      : unavailableOrdinanceResponse(basis, entitlementType, result.error.correlationId, classificationForFailure(result.kind), result.error.retryable, result.error.message, "REVALIDATE");
+  } catch {
+    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Statutory ordinance coverage could not be revalidated. Cash acceptance remains blocked.", "REVALIDATE");
+  }
+}
+
+function unavailableOrdinanceResponse(
+  basis: PayableBasisResponse,
+  entitlementType: StatutoryEntitlementType,
+  correlationId: string,
+  classification: StatutoryOrdinanceAvailabilityResponse["classification"],
+  retryable: boolean,
+  safeMessage: string,
+  operation: "RESOLVE" | "REVALIDATE",
+): StatutoryOrdinanceAvailabilityResponse {
+  return {
+    operation,
+    revalidationOutcome: operation === "REVALIDATE" ? "FAILED" : null,
+    classification,
+    entitlementType,
+    ordinanceCoverageAvailable: false,
+    statutoryRequestAllowed: false,
+    preCashRevalidationPassed: false,
+    readyForStatutoryCashFlow: false,
+    ordinaryPaymentPreserved: true,
+    parkingSessionId: basis.parkingSessionId,
+    siteId: basis.siteId,
+    siteGroupId: basis.siteGroupId,
+    resolvedScopeType: "SITE",
+    coverageClassification: classification,
+    policyStatusClassification: classification,
+    supportReference: correlationId,
+    correlationId,
+    evaluatedAt: new Date().toISOString(),
+    retryable,
+    safeMessage,
+  };
+}
+
+function malformedOrdinanceResponse(
+  basis: PayableBasisResponse,
+  entitlementType: StatutoryEntitlementType,
+  correlationId: string,
+): StatutoryOrdinanceAvailabilityResponse {
+  return unavailableOrdinanceResponse(
+    basis,
+    entitlementType,
+    correlationId,
+    "MALFORMED_AUTHORITATIVE_STATE",
+    false,
+    "Central PMS returned ordinance availability for a different parking session or Site. Statutory actions remain blocked.",
+    "RESOLVE",
+  );
+}
+
+function classificationForFailure(kind: CentralPmsFailureKind): StatutoryOrdinanceAvailabilityResponse["classification"] {
+  switch (kind) {
+    case "unauthorized": return "ACCESS_DENIED";
+    case "not_found": return "SESSION_NOT_FOUND";
+    case "ambiguous": return "AMBIGUOUS_SESSION";
+    case "malformed_response": return "MALFORMED_AUTHORITATIVE_STATE";
+    case "service_unavailable":
+    case "timeout": return "SOURCE_UNAVAILABLE";
+    default: return "UNEXPECTED_FAILURE";
+  }
+}
+
+function ordinanceResponseMatchesBasis(response: StatutoryOrdinanceAvailabilityResponse, basis: PayableBasisResponse): boolean {
+  return response.parkingSessionId === basis.parkingSessionId
+    && response.siteId === basis.siteId
+    && response.siteGroupId === basis.siteGroupId;
+}
+
+function ordinanceSnapshot(
+  basis: PayableBasisResponse,
+  seniorCitizen: StatutoryOrdinanceAvailabilityResponse,
+  pwd: StatutoryOrdinanceAvailabilityResponse,
+): StatutoryOrdinanceAvailabilitySnapshot {
+  return {
+    authoritative: false,
+    parkingSessionId: basis.parkingSessionId,
+    siteId: basis.siteId,
+    siteGroupId: basis.siteGroupId,
+    recordedAt: new Date().toISOString(),
+    seniorCitizen,
+    pwd,
+  };
+}
+
+function snapshotFromViewState(state: StatutoryOrdinanceAvailabilityViewState): StatutoryOrdinanceAvailabilitySnapshot | null {
+  return state.status === "ready"
+    ? {
+        authoritative: false,
+        parkingSessionId: state.parkingSessionId,
+        siteId: state.siteId,
+        siteGroupId: state.seniorCitizen.siteGroupId,
+        recordedAt: new Date().toISOString(),
+        seniorCitizen: state.seniorCitizen,
+        pwd: state.pwd,
+      }
+    : null;
+}
+
+function asStatutoryEntitlementType(value?: string | null): StatutoryEntitlementType | null {
+  return value === "SENIOR_CITIZEN" || value === "PWD" ? value : null;
+}
+
+function ordinanceRevalidationPassed(
+  response: StatutoryOrdinanceAvailabilityResponse,
+  basis: PayableBasisResponse,
+  entitlementType: StatutoryEntitlementType,
+): boolean {
+  return response.operation === "REVALIDATE"
+    && response.revalidationOutcome === "PASSED_UNCHANGED"
+    && response.classification === "AVAILABLE"
+    && response.entitlementType === entitlementType
+    && ordinanceResponseMatchesBasis(response, basis)
+    && response.ordinanceCoverageAvailable
+    && response.preCashRevalidationPassed
+    && response.readyForStatutoryCashFlow;
+}
+
+function replaceOrdinanceAvailability(
+  current: StatutoryOrdinanceAvailabilityViewState,
+  basis: PayableBasisResponse,
+  response: StatutoryOrdinanceAvailabilityResponse,
+): StatutoryOrdinanceAvailabilityViewState {
+  const seniorCitizen = current.status === "ready"
+    ? current.seniorCitizen
+    : unavailableOrdinanceResponse(basis, "SENIOR_CITIZEN", response.correlationId, "SOURCE_UNAVAILABLE", true, "Fresh ordinance availability is required.", "RESOLVE");
+  const pwd = current.status === "ready"
+    ? current.pwd
+    : unavailableOrdinanceResponse(basis, "PWD", response.correlationId, "SOURCE_UNAVAILABLE", true, "Fresh ordinance availability is required.", "RESOLVE");
+  return {
+    status: "ready",
+    parkingSessionId: basis.parkingSessionId,
+    siteId: basis.siteId,
+    restoredRefresh: false,
+    seniorCitizen: response.entitlementType === "SENIOR_CITIZEN" ? response : seniorCitizen,
+    pwd: response.entitlementType === "PWD" ? response : pwd,
+  };
 }
 
 function statutoryCashGateStatus(

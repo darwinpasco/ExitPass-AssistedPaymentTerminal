@@ -1,5 +1,86 @@
 ﻿export type PayableBasisReferenceType = "ticket" | "plate";
 
+export type StatutoryEntitlementType = "SENIOR_CITIZEN" | "PWD";
+
+export type StatutoryOrdinanceAvailabilityClassification =
+  | "AVAILABLE"
+  | "NOT_AVAILABLE"
+  | "NO_CONFIGURED_POLICY"
+  | "NOT_YET_EFFECTIVE"
+  | "EXPIRED"
+  | "INACTIVE"
+  | "AMBIGUOUS_SCOPE"
+  | "SESSION_NOT_FOUND"
+  | "AMBIGUOUS_SESSION"
+  | "SOURCE_UNAVAILABLE"
+  | "MALFORMED_AUTHORITATIVE_STATE"
+  | "ACCESS_DENIED"
+  | "UNEXPECTED_FAILURE";
+
+export type StatutoryOrdinanceAvailabilityRequest = {
+  siteGroupId: string;
+  siteId: string;
+  terminalId: string;
+  vendorSystemId?: string;
+  parkingSessionId: string;
+  entitlementType: StatutoryEntitlementType;
+  correlationId: string;
+};
+
+export type StatutoryOrdinanceAvailabilityResponse = {
+  operation: "RESOLVE" | "REVALIDATE";
+  revalidationOutcome?: "PASSED_UNCHANGED" | "FAILED" | null;
+  classification: StatutoryOrdinanceAvailabilityClassification;
+  entitlementType: StatutoryEntitlementType;
+  ordinanceCoverageAvailable: boolean;
+  statutoryRequestAllowed: boolean;
+  preCashRevalidationPassed: boolean;
+  readyForStatutoryCashFlow: boolean;
+  ordinaryPaymentPreserved: boolean;
+  parkingSessionId: string;
+  siteId: string;
+  siteGroupId: string;
+  resolvedScopeType: string;
+  coverageClassification: string;
+  policyStatusClassification: string;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  authorityClassification?: string | null;
+  jurisdictionDisplayName?: string | null;
+  supportReference: string;
+  correlationId: string;
+  evaluatedAt: string;
+  authoritativeUpdatedAt?: string | null;
+  retryable: boolean;
+  safeMessage: string;
+};
+
+export type StatutoryOrdinanceAvailabilityResult =
+  | { ok: true; response: StatutoryOrdinanceAvailabilityResponse }
+  | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
+
+export type StatutoryOrdinanceAvailabilitySnapshot = {
+  authoritative: false;
+  parkingSessionId: string;
+  siteId: string;
+  siteGroupId: string;
+  recordedAt: string;
+  seniorCitizen?: StatutoryOrdinanceAvailabilityResponse | null;
+  pwd?: StatutoryOrdinanceAvailabilityResponse | null;
+};
+
+export type StatutoryOrdinanceAvailabilityViewState =
+  | { status: "idle" }
+  | { status: "loading"; parkingSessionId: string; siteId: string; restoredRefresh: boolean }
+  | {
+      status: "ready";
+      parkingSessionId: string;
+      siteId: string;
+      restoredRefresh: boolean;
+      seniorCitizen: StatutoryOrdinanceAvailabilityResponse;
+      pwd: StatutoryOrdinanceAvailabilityResponse;
+    };
+
 export type ResolvePayableBasisRequest = {
   siteGroupId: string;
   siteId: string;
@@ -273,6 +354,7 @@ export type StatutoryDiscountWorkflowState = {
   lastReadbackAt?: string | null;
   restoredAfterRestart?: boolean;
   amountAcknowledged?: boolean;
+  ordinanceAvailability?: StatutoryOrdinanceAvailabilitySnapshot | null;
 };
 
 export type ResolveVendorParkingRequest = ResolvePayableBasisRequest;
@@ -320,6 +402,16 @@ export interface CentralPmsClient {
     statutoryDiscountDecisionCommandId?: string | null,
   ): Promise<CentralPmsResult>;
   revalidatePayableBasis(displayedBasis: PayableBasisResponse, correlationId: string): Promise<CentralPmsResult>;
+  resolveStatutoryOrdinanceAvailability?(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult>;
+  revalidateStatutoryOrdinanceAvailability?(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult>;
   submitStatutoryDiscountDecision?(
     request: StatutoryDiscountDecisionSubmitRequest,
     correlationId: string,

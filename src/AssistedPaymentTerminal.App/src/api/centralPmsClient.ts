@@ -11,6 +11,10 @@ import type {
   StatutoryDiscountDecisionResponse,
   StatutoryDiscountDecisionResult,
   StatutoryDiscountDecisionSubmitRequest,
+  StatutoryEntitlementType,
+  StatutoryOrdinanceAvailabilityRequest,
+  StatutoryOrdinanceAvailabilityResponse,
+  StatutoryOrdinanceAvailabilityResult,
 } from "./centralPmsTypes";
 
 export class LiveCentralPmsClient implements CentralPmsClient {
@@ -66,6 +70,34 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     return this.postPayableBasis("/v1/terminal-cash-payments/payable-basis/revalidate", request, correlationId);
   }
 
+  async resolveStatutoryOrdinanceAvailability(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    return this.requestStatutoryOrdinanceAvailability(
+      "RESOLVE",
+      "/v1/apt/statutory-discounts/ordinance-availability/resolve",
+      displayedBasis,
+      entitlementType,
+      correlationId,
+    );
+  }
+
+  async revalidateStatutoryOrdinanceAvailability(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    return this.requestStatutoryOrdinanceAvailability(
+      "REVALIDATE",
+      "/v1/apt/statutory-discounts/ordinance-availability/revalidate",
+      displayedBasis,
+      entitlementType,
+      correlationId,
+    );
+  }
+
   async submitStatutoryDiscountDecision(
     request: StatutoryDiscountDecisionSubmitRequest,
     correlationId: string,
@@ -117,6 +149,38 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     }
 
     return { ok: true, response: normalizeStatutoryDiscountDecisionResponse(result.payload) };
+  }
+
+  private async requestStatutoryOrdinanceAvailability(
+    operation: "RESOLVE" | "REVALIDATE",
+    path: string,
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    const request: StatutoryOrdinanceAvailabilityRequest = {
+      siteGroupId: displayedBasis.siteGroupId,
+      siteId: displayedBasis.siteId,
+      terminalId: displayedBasis.terminalId ?? this.config.terminalId,
+      vendorSystemId: displayedBasis.vendorSystemId ?? this.config.vendorSystemId,
+      parkingSessionId: displayedBasis.parkingSessionId,
+      entitlementType,
+      correlationId,
+    };
+    const result = await this.send(path, "POST", correlationId, undefined, request);
+    if (!result.ok) {
+      return result;
+    }
+    if (!isStatutoryOrdinanceAvailabilityResponse(result.payload, operation)) {
+      return failure(
+        "malformed_response",
+        "MALFORMED_STATUTORY_ORDINANCE_AVAILABILITY_RESPONSE",
+        "Central PMS ordinance availability response did not match the APT contract.",
+        correlationId,
+        false,
+      );
+    }
+    return { ok: true, response: normalizeStatutoryOrdinanceAvailabilityResponse(result.payload) };
   }
 
   private async send(
@@ -249,6 +313,86 @@ export function normalizeStatutoryDiscountDecisionResponse(payload: StatutoryDis
     applicationRequested: Boolean(payload.applicationRequested),
     oneShotComplete: Boolean(payload.oneShotComplete),
     payableBasisReady: Boolean(payload.payableBasisReady),
+  };
+}
+
+const ordinanceClassifications = new Set([
+  "AVAILABLE",
+  "NOT_AVAILABLE",
+  "NO_CONFIGURED_POLICY",
+  "NOT_YET_EFFECTIVE",
+  "EXPIRED",
+  "INACTIVE",
+  "AMBIGUOUS_SCOPE",
+  "SESSION_NOT_FOUND",
+  "AMBIGUOUS_SESSION",
+  "SOURCE_UNAVAILABLE",
+  "MALFORMED_AUTHORITATIVE_STATE",
+  "ACCESS_DENIED",
+  "UNEXPECTED_FAILURE",
+]);
+
+export function isStatutoryOrdinanceAvailabilityResponse(
+  payload: unknown,
+  operation?: "RESOLVE" | "REVALIDATE",
+): payload is StatutoryOrdinanceAvailabilityResponse {
+  const candidate = payload as Partial<StatutoryOrdinanceAvailabilityResponse> | null;
+  return Boolean(
+    candidate
+      && (candidate.operation === "RESOLVE" || candidate.operation === "REVALIDATE")
+      && (!operation || candidate.operation === operation)
+      && ordinanceClassifications.has(candidate.classification ?? "")
+      && (candidate.entitlementType === "SENIOR_CITIZEN" || candidate.entitlementType === "PWD")
+      && typeof candidate.ordinanceCoverageAvailable === "boolean"
+      && typeof candidate.statutoryRequestAllowed === "boolean"
+      && typeof candidate.preCashRevalidationPassed === "boolean"
+      && typeof candidate.readyForStatutoryCashFlow === "boolean"
+      && typeof candidate.ordinaryPaymentPreserved === "boolean"
+      && typeof candidate.parkingSessionId === "string"
+      && typeof candidate.siteId === "string"
+      && typeof candidate.siteGroupId === "string"
+      && typeof candidate.resolvedScopeType === "string"
+      && typeof candidate.coverageClassification === "string"
+      && typeof candidate.policyStatusClassification === "string"
+      && (candidate.supportReference == null || typeof candidate.supportReference === "string")
+      && typeof candidate.correlationId === "string"
+      && typeof candidate.evaluatedAt === "string"
+      && typeof candidate.retryable === "boolean"
+      && typeof candidate.safeMessage === "string"
+      && (candidate.operation !== "REVALIDATE" || candidate.revalidationOutcome === "PASSED_UNCHANGED" || candidate.revalidationOutcome === "FAILED")
+      && isSemanticallyConsistentOrdinanceResponse(candidate),
+  );
+}
+
+function isSemanticallyConsistentOrdinanceResponse(
+  candidate: Partial<StatutoryOrdinanceAvailabilityResponse>,
+): boolean {
+  const available = candidate.classification === "AVAILABLE";
+  if (candidate.ordinaryPaymentPreserved !== true
+    || candidate.ordinanceCoverageAvailable !== available
+    || candidate.statutoryRequestAllowed !== available
+    || candidate.readyForStatutoryCashFlow !== available) {
+    return false;
+  }
+
+  return candidate.operation === "REVALIDATE"
+    ? candidate.revalidationOutcome === (available ? "PASSED_UNCHANGED" : "FAILED")
+      && candidate.preCashRevalidationPassed === available
+    : (candidate.revalidationOutcome == null && candidate.preCashRevalidationPassed === false);
+}
+
+export function normalizeStatutoryOrdinanceAvailabilityResponse(
+  payload: StatutoryOrdinanceAvailabilityResponse,
+): StatutoryOrdinanceAvailabilityResponse {
+  return {
+    ...payload,
+    ordinanceCoverageAvailable: Boolean(payload.ordinanceCoverageAvailable),
+    statutoryRequestAllowed: Boolean(payload.statutoryRequestAllowed),
+    preCashRevalidationPassed: Boolean(payload.preCashRevalidationPassed),
+    readyForStatutoryCashFlow: Boolean(payload.readyForStatutoryCashFlow),
+    ordinaryPaymentPreserved: Boolean(payload.ordinaryPaymentPreserved),
+    supportReference: payload.supportReference || payload.correlationId,
+    retryable: Boolean(payload.retryable),
   };
 }
 

@@ -27,10 +27,12 @@ export type StatutoryDiscountVisualSmokeScenarioId =
   | "continue-revalidation-passed"
   | "continue-revalidation-amount-changed"
   | "continue-revalidation-statutory-blocked"
+  | "continue-ordinance-revoked"
   | "record-cash-revalidation-passed"
   | "record-cash-revalidation-amount-changed"
   | "record-cash-revalidation-retryable"
   | "record-cash-revalidation-terminal"
+  | "record-cash-ordinance-unavailable"
   | "statutory-cash-received-once"
   | "restart-before-statutory-cash-received"
   | "restart-after-statutory-cash-received-evidence"
@@ -84,10 +86,12 @@ export const statutoryDiscountVisualSmokeScenarios: StatutoryDiscountVisualSmoke
   { id: "continue-revalidation-passed", label: "Continue to Cash revalidation PASSED_UNCHANGED", expectedPosture: "Continue to Cash runs statutory-aware revalidation before opening cash entry.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "continue-revalidation-amount-changed", label: "Continue to Cash revalidation AMOUNT_CHANGED", expectedPosture: "Continue to Cash returns to amount acknowledgement when Central PMS changes the applied amount.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "continue-revalidation-statutory-blocked", label: "Continue to Cash statutory blocked", expectedPosture: "Statutory-aware revalidation blocks cash when Central PMS reports statutory readiness blocked.", state: appliedState(true), localCashCaptureEnabled: true },
+  { id: "continue-ordinance-revoked", label: "Continue to Cash ordinance coverage revoked", expectedPosture: "J-005 reports expired coverage and cash entry remains closed.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "record-cash-revalidation-passed", label: "Immediate Record Cash Received revalidation PASSED_UNCHANGED", expectedPosture: "Record Cash Received performs a second statutory-aware revalidation before local custody is recorded.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "record-cash-revalidation-amount-changed", label: "Immediate Record Cash Received revalidation AMOUNT_CHANGED", expectedPosture: "The second revalidation blocks CASH_RECEIVED when the amount changes.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "record-cash-revalidation-retryable", label: "Immediate Record Cash Received retryable failure", expectedPosture: "The second revalidation blocks CASH_RECEIVED on retryable Central PMS failure.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "record-cash-revalidation-terminal", label: "Immediate Record Cash Received terminal failure", expectedPosture: "The second revalidation blocks CASH_RECEIVED on terminal readback failure.", state: appliedState(true), localCashCaptureEnabled: true },
+  { id: "record-cash-ordinance-unavailable", label: "Immediate Record Cash Received ordinance unavailable", expectedPosture: "The second J-005 check fails retryably and no local custody event is recorded.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "statutory-cash-received-once", label: "Statutory CASH_RECEIVED recorded once", expectedPosture: "Successful statutory cash recording creates one local custody event and one tender identity.", state: appliedState(true), localCashCaptureEnabled: true },
   { id: "restart-before-statutory-cash-received", label: "Restart before statutory CASH_RECEIVED requires revalidation", expectedPosture: "Restart restores applied statutory basis but still requires fresh immediate revalidation before cash.", state: { ...appliedState(true), restoredAfterRestart: true }, localCashCaptureEnabled: true },
   { id: "restart-after-statutory-cash-received-evidence", label: "Restart after statutory CASH_RECEIVED preserves custody evidence", expectedPosture: "Restart after CASH_RECEIVED preserves applied snapshot, final amount, and statutory references.", state: { ...appliedState(true), restoredAfterRestart: true }, localCashCaptureEnabled: true, postCashRecovery: "evidence" },
@@ -165,11 +169,12 @@ export function StatutoryDiscountVisualSmokeShell({ config, renderTerminalShell 
 }
 
 function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscountVisualSmokeScenario): CentralPmsClient {
-  if (!isActionRevalidationScenario(scenario.id)) {
+  if (!isActionRevalidationScenario(scenario.id) && !isOrdinanceRevalidationScenario(scenario.id)) {
     return base;
   }
 
   let revalidationCount = 0;
+  let ordinanceRevalidationCount = 0;
   return {
     resolvePayableBasis: (...args) => base.resolvePayableBasis(...args),
     revalidatePayableBasis: async (displayedBasis, correlationId) => {
@@ -183,8 +188,69 @@ function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscou
     },
     submitStatutoryDiscountDecision: (...args) => base.submitStatutoryDiscountDecision(...args),
     getStatutoryDiscountDecision: (...args) => base.getStatutoryDiscountDecision(...args),
+    resolveStatutoryOrdinanceAvailability: (...args) => base.resolveStatutoryOrdinanceAvailability(...args),
+    revalidateStatutoryOrdinanceAvailability: async (basis, entitlementType, correlationId) => {
+      ordinanceRevalidationCount += 1;
+      return ordinanceRevalidationOutcome(scenario.id, ordinanceRevalidationCount, basis, entitlementType, correlationId)
+        ?? base.revalidateStatutoryOrdinanceAvailability(basis, entitlementType, correlationId);
+    },
     resolveTicket: (...args) => base.resolveTicket(...args),
     recalculateFee: (...args) => base.recalculateFee(...args),
+  };
+}
+
+function isOrdinanceRevalidationScenario(id: StatutoryDiscountVisualSmokeScenarioId): boolean {
+  return id === "continue-ordinance-revoked" || id === "record-cash-ordinance-unavailable";
+}
+
+function ordinanceRevalidationOutcome(
+  id: StatutoryDiscountVisualSmokeScenarioId,
+  revalidationCount: number,
+  basis: PayableBasisResponse,
+  entitlementType: "SENIOR_CITIZEN" | "PWD",
+  correlationId: string,
+) {
+  if (id === "continue-ordinance-revoked" && revalidationCount === 1) {
+    return failedOrdinanceRevalidation(basis, entitlementType, correlationId, "EXPIRED", false, "Statutory parking coverage expired before cash acceptance.");
+  }
+  if (id === "record-cash-ordinance-unavailable" && revalidationCount === 2) {
+    return failedOrdinanceRevalidation(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Statutory coverage could not be revalidated. Do not accept cash for the statutory path.");
+  }
+  return null;
+}
+
+function failedOrdinanceRevalidation(
+  basis: PayableBasisResponse,
+  entitlementType: "SENIOR_CITIZEN" | "PWD",
+  correlationId: string,
+  classification: "EXPIRED" | "SOURCE_UNAVAILABLE",
+  retryable: boolean,
+  safeMessage: string,
+) {
+  return {
+    ok: true as const,
+    response: {
+      operation: "REVALIDATE" as const,
+      revalidationOutcome: "FAILED" as const,
+      classification,
+      entitlementType,
+      ordinanceCoverageAvailable: false,
+      statutoryRequestAllowed: false,
+      preCashRevalidationPassed: false,
+      readyForStatutoryCashFlow: false,
+      ordinaryPaymentPreserved: true,
+      parkingSessionId: basis.parkingSessionId,
+      siteId: basis.siteId,
+      siteGroupId: basis.siteGroupId,
+      resolvedScopeType: "SITE",
+      coverageClassification: classification,
+      policyStatusClassification: classification,
+      supportReference: correlationId,
+      correlationId,
+      evaluatedAt: "2026-08-03T00:00:00Z",
+      retryable,
+      safeMessage,
+    },
   };
 }
 
@@ -387,7 +453,7 @@ function basisForScenario(config: AptConfig, scenario: StatutoryDiscountVisualSm
   const now = new Date();
   const validUntil = new Date(now.getTime() + 20 * 60 * 1000).toISOString();
   return {
-    operation: "resolve",
+    operation: "RESOLVE",
     revalidationOutcome: null,
     parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
     tariffSnapshotId: snapshot,

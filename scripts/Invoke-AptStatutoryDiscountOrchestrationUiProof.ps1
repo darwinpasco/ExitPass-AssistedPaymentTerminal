@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Push-Location $repoRoot
 try {
-  npm.cmd run test --workspace src/AssistedPaymentTerminal.App -- App.test.tsx StatutoryDiscountVisualSmoke.test.tsx centralPmsClient.test.ts
+  npm.cmd run test --workspace src/AssistedPaymentTerminal.App -- App.test.tsx StatutoryOrdinanceAvailability.test.tsx StatutoryDiscountVisualSmoke.test.tsx centralPmsClient.test.ts
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   dotnet test tests\AssistedPaymentTerminal.LocalOperations.Tests\AssistedPaymentTerminal.LocalOperations.Tests.csproj --no-restore --filter "FullyQualifiedName~CashJournalServiceTests" -m:1 /p:UseSharedCompilation=false
@@ -25,10 +25,26 @@ try {
     "src\AssistedPaymentTerminal.LocalOperations\CashJournalService.cs"
   )
 
-  $sharedRoutes = Select-String -Path "src\AssistedPaymentTerminal.App\src\api\centralPmsClient.ts" -Pattern "/v1/statutory-discounts/decisions|/v1/terminal-cash-payments/payable-basis/resolve|/v1/terminal-cash-payments/payable-basis/revalidate" -AllMatches
-  if ($sharedRoutes.Count -lt 3) {
-    Write-Error "Expected shared statutory decision and statutory-aware payable-basis facade routes were not all found."
-    exit 1
+  $clientSource = Get-Content -Raw "src\AssistedPaymentTerminal.App\src\api\centralPmsClient.ts"
+  $requiredRoutes = @(
+    "/v1/statutory-discounts/decisions",
+    "/v1/terminal-cash-payments/payable-basis/resolve",
+    "/v1/terminal-cash-payments/payable-basis/revalidate",
+    "/v1/apt/statutory-discounts/ordinance-availability/resolve",
+    "/v1/apt/statutory-discounts/ordinance-availability/revalidate"
+  )
+  foreach ($route in $requiredRoutes) {
+    if (-not $clientSource.Contains($route)) {
+      Write-Error "Expected Central PMS APT route was not found: $route"
+      exit 1
+    }
+  }
+
+  foreach ($marker in @('"RESOLVE"', '"REVALIDATE"', '"PASSED_UNCHANGED"', 'isSemanticallyConsistentOrdinanceResponse')) {
+    if (-not $clientSource.Contains($marker)) {
+      Write-Error "Missing canonical ordinance availability contract marker: $marker"
+      exit 1
+    }
   }
 
   $cashBlocker = Select-String -Path "src\AssistedPaymentTerminal.App\src\App.tsx","src\AssistedPaymentTerminal.App\src\StatutoryDiscountPanel.tsx" -Pattern "statutoryWorkflowActive|statutoryCashGateStatus|Statutory payable basis ready for Continue to Cash" -AllMatches
@@ -59,6 +75,7 @@ try {
   }
 
   Write-Host "APT statutory-discount orchestration UI proof completed successfully."
+  Write-Host "Senior Citizen and PWD coverage, no coverage, unavailable, malformed, restart, Site isolation, and immediate J-005 revalidation are covered by focused tests."
   Write-Host "Pending review, approval, application processing, APPLIED, rejected, retryable, terminal, and restart scenarios are covered by focused tests."
   Write-Host "The desktop uses shared statutory decision routes and the statutory-aware APT payable-basis facade."
   Write-Host "Statutory cash entry remains gated by canonical statutory state, amount acknowledgement, local prerequisites, and immediate revalidation."

@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
-import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext } from "./localJournalBridge";
+import type { StatutoryOrdinanceAvailabilityResult } from "./api/centralPmsTypes";
+import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext, PayableBasisStateSnapshot } from "./localJournalBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 
 describe("App startup and payable-basis readiness workflow", () => {
@@ -241,7 +242,7 @@ describe("App startup and payable-basis readiness workflow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
     await screen.findByText("Authoritative payable basis");
 
-    await userEvent.click(screen.getByRole("button", { name: "Start statutory request" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start statutory request" }));
     expect(screen.getByText("Draft statutory request")).toBeInTheDocument();
     expect(screen.getByLabelText(/Cashier attests safe entitlement facts/)).not.toBeChecked();
     expect(screen.getByRole("button", { name: "Submit for Operator Review" })).toBeDisabled();
@@ -264,7 +265,7 @@ describe("App startup and payable-basis readiness workflow", () => {
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
     await screen.findByText("Authoritative payable basis");
-    await userEvent.click(screen.getByRole("button", { name: "Start statutory request" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start statutory request" }));
     await userEvent.click(screen.getByLabelText(/Cashier attests safe entitlement facts/));
     await userEvent.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
     await screen.findByText("Awaiting Operator Review");
@@ -274,13 +275,135 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.queryByText(/full statutory ID/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("reviewerUserId");
   });
+
+  it("shows both authoritative entitlement options while keeping ordinary payment separate", async () => {
+    const config = mode1Config();
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-ACTIVE-1001");
+
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toHaveTextContent("Available");
+    expect(screen.getByTestId("pwd-ordinance-availability")).toHaveTextContent("Available");
+    expect(screen.getByRole("option", { name: "Senior citizen" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Person with disability" })).toBeInTheDocument();
+    expect(screen.getByTestId("ordinary-payment-preserved")).toHaveTextContent("Ordinary payment remains available");
+  });
+
+  it("shows only Senior Citizen controls when PWD is not covered", async () => {
+    const config = mode1Config();
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-SENIOR-ONLY");
+
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toHaveTextContent("Available");
+    expect(screen.getByTestId("pwd-ordinance-availability")).toHaveTextContent("Not Available");
+    expect(screen.getByTestId("covered-entitlement-selector")).toHaveValue("SENIOR_CITIZEN");
+    expect(screen.queryByRole("option", { name: "Person with disability" })).not.toBeInTheDocument();
+  });
+
+  it("shows only PWD controls when Senior Citizen is not covered", async () => {
+    const config = mode1Config();
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-PWD-ONLY");
+
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toHaveTextContent("Not Available");
+    expect(screen.getByTestId("pwd-ordinance-availability")).toHaveTextContent("Available");
+    expect(screen.getByTestId("covered-entitlement-selector")).toHaveValue("PWD");
+    expect(screen.queryByRole("option", { name: "Senior citizen" })).not.toBeInTheDocument();
+  });
+
+  it("suppresses statutory initiation for authoritative no coverage and preserves ordinary payment", async () => {
+    const config = mode1Config();
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-NO-ORDINANCE");
+
+    expect(await screen.findByTestId("statutory-request-unavailable")).toHaveTextContent("No statutory request option is available");
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("ordinary-payment-preserved")).toHaveTextContent("Ordinary payment remains available");
+    expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
+  });
+
+  it("keeps ordinary cash available when no ordinance is covered and independent readiness passes", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
+    render(
+      <TerminalShell
+        config={config}
+        client={new MockCentralPmsClient(config)}
+        localJournalBridge={bridgeWithLocalState({ activeShift: true, activeCustody: true })}
+      />,
+    );
+
+    await resolveTicket("APT-NO-ORDINANCE");
+
+    expect(await screen.findByTestId("statutory-request-unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("continue-to-cash")).toBeEnabled());
+  });
+
+  it("discards a coverage response for another Site instead of enabling stale controls", async () => {
+    const config = mode1Config();
+    const client = new MockCentralPmsClient(config);
+    const resolveAvailability = client.resolveStatutoryOrdinanceAvailability.bind(client);
+    vi.spyOn(client, "resolveStatutoryOrdinanceAvailability").mockImplementation(async (...args): Promise<StatutoryOrdinanceAvailabilityResult> => {
+      const result = await resolveAvailability(...args);
+      return result.ok
+        ? { ok: true, response: { ...result.response, siteId: "SITE-OTHER" } }
+        : result;
+    });
+    render(<TerminalShell config={config} client={client} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-ACTIVE-1001");
+
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toHaveTextContent("Malformed Authoritative State");
+    expect(screen.getByTestId("pwd-ordinance-availability")).toHaveTextContent("Malformed Authoritative State");
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+  });
+
+  it("distinguishes retryable source failure from no coverage", async () => {
+    const config = mode1Config();
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState()} />);
+
+    await resolveTicket("APT-ORDINANCE-UNAVAILABLE");
+
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toHaveTextContent("Source Unavailable");
+    expect(screen.getByRole("button", { name: "Retry ordinance availability" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("ordinary-payment-preserved")).toHaveTextContent("Ordinary payment remains available");
+  });
+
+  it("treats restored local availability as advisory and re-resolves both entitlements", async () => {
+    const config = mode1Config();
+    const client = new MockCentralPmsClient(config);
+    const availabilitySpy = vi.spyOn(client, "resolveStatutoryOrdinanceAvailability");
+    render(
+      <TerminalShell
+        config={config}
+        client={client}
+        localJournalBridge={bridgeWithLocalState({ latestPayableBasisState: restoredPayableBasisState() })}
+      />,
+    );
+
+    expect(await screen.findByText("Recovered local state was advisory only. Central PMS was checked again after restart.")).toBeInTheDocument();
+    expect(availabilitySpy).toHaveBeenCalledTimes(2);
+    expect(availabilitySpy.mock.calls.map((call) => call[1]).sort()).toEqual(["PWD", "SENIOR_CITIZEN"]);
+    expect(await screen.findByRole("button", { name: "Start statutory request" })).toBeEnabled();
+  });
 });
+
+async function resolveTicket(reference: string) {
+  await userEvent.type(screen.getByLabelText("Ticket reference"), reference);
+  await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+  await screen.findByText("Authoritative payable basis");
+}
 
 function bridgeWithLocalState(options: {
   activeShift?: boolean;
   activeCustody?: boolean;
   onHealthContext?: (context?: LocalOperationalContext) => void;
   hideRecoveredStateWhenShiftFilterPresent?: boolean;
+  latestPayableBasisState?: PayableBasisStateSnapshot;
 } = {}): LocalJournalBridge {
   function healthForContext(context?: LocalOperationalContext): LocalJournalHealth {
     const configuredShiftFilterWouldHideRecovery = options.hideRecoveredStateWhenShiftFilterPresent && Boolean(context?.cashierShiftId);
@@ -358,5 +481,63 @@ function bridgeWithLocalState(options: {
       payload: healthForContext(context),
     };
     }),
+    getLatestPayableBasisState: vi.fn(async (correlationId: string) => ({
+      ok: true,
+      command: "payableBasisState.getLatest",
+      correlationId,
+      payload: options.latestPayableBasisState ?? null,
+    })),
   } as unknown as LocalJournalBridge;
+}
+
+function restoredPayableBasisState(): PayableBasisStateSnapshot {
+  const now = new Date().toISOString();
+  return {
+    id: "restored-ordinance-proof",
+    localWorkflowId: "restored-ordinance-proof",
+    lookupReferenceType: "ticket",
+    lookupReferenceValue: "APT-ACTIVE-1001",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+    tariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    sitePosServerId: "POS-DEV-001",
+    terminalId: "APT-DEV-001",
+    authoritativeAmountMinorUnits: 12500,
+    currency: "PHP",
+    tariffCalculatedAt: now,
+    tariffValidUntil: new Date(Date.now() + 600000).toISOString(),
+    feeValidUntil: new Date(Date.now() + 600000).toISOString(),
+    parkingStatus: "Active",
+    paymentStatus: "Unpaid",
+    sessionReadiness: "RESOLVED_PAYABLE",
+    tariffReadiness: "CURRENT",
+    paymentEligibility: "ELIGIBLE",
+    terminalCashAvailability: "AVAILABLE",
+    fiscalReadiness: "READY",
+    salesInvoiceConfigurationReadiness: "READY",
+    cashAcceptanceReadiness: "READY",
+    readyForCashAcceptance: true,
+    blockingReasonCodes: [],
+    retryable: false,
+    safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
+    centralPmsCorrelationId: "restored-basis-correlation",
+    revalidationOutcome: null,
+    cashierAcknowledgementRequired: false,
+    amountChanged: false,
+    priorDisplayedAmountMinorUnits: null,
+    statutoryDiscountStateJson: JSON.stringify({
+      status: "none",
+      ordinanceAvailability: {
+        authoritative: false,
+        parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+        siteId: "11111111-1111-1111-1111-111111111111",
+        siteGroupId: "22222222-2222-2222-2222-222222222222",
+        recordedAt: "2026-08-02T00:00:00Z",
+      },
+    }),
+    resolvedAt: now,
+    lastRevalidatedAt: null,
+    updatedAt: now,
+  };
 }

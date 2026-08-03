@@ -8,6 +8,8 @@ import type {
   StatutoryDiscountDecisionResult,
   StatutoryDiscountDecisionSubmitRequest,
   StatutoryDiscountReadiness,
+  StatutoryEntitlementType,
+  StatutoryOrdinanceAvailabilityResult,
 } from "./centralPmsTypes";
 
 const ids = {
@@ -207,6 +209,22 @@ export class MockCentralPmsClient implements CentralPmsClient {
     };
   }
 
+  async resolveStatutoryOrdinanceAvailability(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    return this.ordinanceAvailability("RESOLVE", displayedBasis, entitlementType, correlationId);
+  }
+
+  async revalidateStatutoryOrdinanceAvailability(
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    return this.ordinanceAvailability("REVALIDATE", displayedBasis, entitlementType, correlationId);
+  }
+
   private async resolveScenario(
     referenceType: PayableBasisReferenceType,
     referenceValue: string,
@@ -398,6 +416,62 @@ export class MockCentralPmsClient implements CentralPmsClient {
       safeErrorCode: response.safeErrorCode,
       blockingReasonCode: ready ? null : blockerForReadinessStatus(status),
       message: ready ? "Statutory payable basis is applied." : friendlyStatus(status),
+    };
+  }
+
+  private async ordinanceAvailability(
+    operation: "RESOLVE" | "REVALIDATE",
+    displayedBasis: PayableBasisResponse,
+    entitlementType: StatutoryEntitlementType,
+    correlationId: string,
+  ): Promise<StatutoryOrdinanceAvailabilityResult> {
+    await delay(20);
+    const reference = (displayedBasis.ticketReference ?? displayedBasis.plateNumber ?? "").toUpperCase();
+    const unavailableForEntitlement = reference.includes(entitlementType === "SENIOR_CITIZEN" ? "PWD-ONLY" : "SENIOR-ONLY");
+    const unavailable = unavailableForEntitlement || reference.includes("NO-ORDINANCE");
+    const classification = reference.includes("ORDINANCE-UNAVAILABLE")
+      ? "SOURCE_UNAVAILABLE"
+      : reference.includes("ORDINANCE-MALFORMED")
+        ? "MALFORMED_AUTHORITATIVE_STATE"
+        : unavailable
+          ? "NOT_AVAILABLE"
+          : "AVAILABLE";
+    const available = classification === "AVAILABLE";
+    const retryable = classification === "SOURCE_UNAVAILABLE";
+
+    return {
+      ok: true,
+      response: {
+        operation,
+        revalidationOutcome: operation === "REVALIDATE" ? (available ? "PASSED_UNCHANGED" : "FAILED") : null,
+        classification,
+        entitlementType,
+        ordinanceCoverageAvailable: available,
+        statutoryRequestAllowed: available,
+        preCashRevalidationPassed: operation === "REVALIDATE" && available,
+        readyForStatutoryCashFlow: available,
+        ordinaryPaymentPreserved: true,
+        parkingSessionId: displayedBasis.parkingSessionId,
+        siteId: displayedBasis.siteId,
+        siteGroupId: displayedBasis.siteGroupId,
+        resolvedScopeType: "SITE",
+        coverageClassification: classification,
+        policyStatusClassification: available ? "ACTIVE" : classification,
+        effectiveFrom: available ? "2026-01-01T00:00:00Z" : null,
+        effectiveTo: null,
+        authorityClassification: "CENTRAL_PMS_STATUTORY_POLICY",
+        jurisdictionDisplayName: "Synthetic validation locality",
+        supportReference: correlationId,
+        correlationId,
+        evaluatedAt: new Date().toISOString(),
+        authoritativeUpdatedAt: available ? "2026-01-01T00:00:00Z" : null,
+        retryable,
+        safeMessage: available
+          ? "Statutory parking coverage is available at this Site. Customer entitlement still requires review."
+          : retryable
+            ? "Statutory parking coverage could not be confirmed. Retry is available."
+            : "This statutory entitlement is not available for the resolved Site.",
+      },
     };
   }
 
