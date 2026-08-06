@@ -8,16 +8,22 @@ import {
   StatutoryDiscountVisualSmokeShell,
   statutoryDiscountVisualSmokeScenarios,
 } from "./StatutoryDiscountVisualSmoke";
+import type { StatutoryEvidenceBridge, StatutoryEvidenceBridgeResult, StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 
 function renderSmoke(
   onRevalidate?: (basis: PayableBasisResponse) => void,
   ordinanceRevalidate?: NonNullable<CentralPmsClient["revalidateStatutoryOrdinanceAvailability"]>,
+  evidenceRevalidate?: (
+    original: StatutoryEvidenceBridge["revalidate"],
+    correlationId: string,
+    decisionCommandId: string,
+  ) => Promise<StatutoryEvidenceBridgeResult<StatutoryEvidenceChannelResponse>>,
 ) {
   render(
     <StatutoryDiscountVisualSmokeShell
       config={{ ...mode1Config(), nonLiveCashCaptureEnabled: true }}
-      renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, bridge, initialCashEntryRequested, renderKey }) => {
+      renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, bridge, evidenceBridge, initialCashEntryRequested, renderKey }) => {
         const wrappedClient: CentralPmsClient = onRevalidate || ordinanceRevalidate
           ? {
             resolvePayableBasis: (...args) => client.resolvePayableBasis(...args),
@@ -51,6 +57,9 @@ function renderSmoke(
             initialResolvedBasis={initialResolvedBasis}
             initialStatutoryState={initialStatutoryState}
             localJournalBridge={bridge}
+            statutoryEvidenceBridge={evidenceRevalidate
+              ? { ...evidenceBridge, revalidate: (correlationId, decisionCommandId) => evidenceRevalidate(evidenceBridge.revalidate, correlationId, decisionCommandId) }
+              : evidenceBridge}
             restorePayableBasisOnMount={false}
             initialCashEntryRequested={initialCashEntryRequested}
           />
@@ -76,7 +85,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByLabelText("Statutory discount visual smoke scenarios")).toBeInTheDocument();
   });
 
-  it("exposes every required statutory orchestration scenario as an interactive button", () => {
+  it("exposes every required statutory orchestration scenario as an interactive button", async () => {
     renderSmoke();
 
     for (const scenario of statutoryDiscountVisualSmokeScenarios) {
@@ -85,6 +94,8 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     expect(screen.getByRole("heading", { name: "Statutory Discount Visual Smoke" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Receipt Visual Smoke" })).not.toBeInTheDocument();
+    expect(await screen.findByTestId("senior-citizen-ordinance-availability")).toBeInTheDocument();
+    expect(await screen.findByTestId("pwd-ordinance-availability")).toBeInTheDocument();
   });
 
   it("enables Continue to Cash only for applied acknowledged statutory basis with local prerequisites", async () => {
@@ -283,6 +294,38 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(within(evidence).getByText(/Revalidated at/)).toBeInTheDocument();
   });
 
+  it("blocks statutory cash when evidence readiness fails before entry or immediate custody", async () => {
+    const scanPending = evidenceBridgeSuccess("SCAN_PENDING", false);
+    renderSmoke(undefined, undefined, async () => scanPending);
+
+    await userEvent.click(screen.getByRole("button", { name: "Statutory CASH_RECEIVED recorded once" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+
+    expect((await screen.findAllByText("Evidence security scanning is pending.")).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("statutory-tender-evidence")).not.toBeInTheDocument();
+  });
+
+  it("does not write CASH_RECEIVED when evidence changes after cash entry opens", async () => {
+    let calls = 0;
+    renderSmoke(undefined, undefined, async (original, correlationId, decisionCommandId) => {
+      calls++;
+      return calls === 1
+        ? original(correlationId, decisionCommandId)
+        : evidenceBridgeSuccess("SCAN_PENDING", false);
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Statutory CASH_RECEIVED recorded once" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+    await screen.findByLabelText("Non-live cash custody capture");
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect((await screen.findAllByText("Evidence security scanning is pending.")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("statutory-tender-evidence")).not.toBeInTheDocument();
+  });
+
   it("keeps second-stage revalidation failures before statutory CASH_RECEIVED", async () => {
     renderSmoke();
 
@@ -447,3 +490,40 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByText("A terminal statutory failure requires support. Blind retry is disabled.")).toBeInTheDocument();
   });
 });
+
+function evidenceBridgeSuccess(
+  lifecycleClassification: string,
+  readyForAptPreCash: boolean,
+): StatutoryEvidenceBridgeResult<StatutoryEvidenceChannelResponse> {
+  return {
+    ok: true,
+    command: "statutoryEvidence.revalidate",
+    correlationId: "statutory-evidence-failure-correlation",
+    payload: {
+      classification: "RESOLVED",
+      retryable: lifecycleClassification === "SCAN_RETRYABLE",
+      errorCode: null,
+      correlationId: "statutory-evidence-failure-correlation",
+      sourceChannel: "ASSISTED_PAYMENT_TERMINAL",
+      evidenceRequired: true,
+      evidenceSetReference: "11111111-1111-4111-8111-111111110001",
+      evidenceItemReference: "22222222-2222-4222-8222-222222220001",
+      allowedContentTypes: ["image/jpeg", "image/png"],
+      maximumContentLengthBytes: 5 * 1024 * 1024,
+      maximumImageWidth: 4096,
+      maximumImageHeight: 4096,
+      maximumImagePixelCount: 16_000_000,
+      requiredDocumentType: "STATUTORY_ID_IMAGE",
+      requiredItemRole: "PRIMARY_IDENTITY_EVIDENCE",
+      lifecycleClassification,
+      replacementPosture: "REPLACEMENT_NOT_ALLOWED",
+      readyForReview: false,
+      readyForAptPreCash,
+      blockingReasonCode: readyForAptPreCash ? null : `STATUTORY_EVIDENCE_${lifecycleClassification}`,
+      evaluatedAt: "2026-08-05T10:00:00Z",
+      safeMessage: lifecycleClassification === "SCAN_PENDING"
+        ? "Evidence security scanning is pending."
+        : lifecycleClassification,
+    },
+  };
+}

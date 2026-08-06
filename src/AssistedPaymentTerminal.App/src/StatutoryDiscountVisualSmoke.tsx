@@ -4,6 +4,7 @@ import type { CentralPmsClient, CentralPmsResult, PayableBasisResponse, Statutor
 import type { AptConfig } from "./config";
 import type { CashTenderSnapshot, CentralPmsCashSubmissionStatus } from "./localJournalBridge";
 import { createPayableBasisVisualSmokeBridge, type PayableBasisVisualSmokeBridge } from "./PayableBasisVisualSmoke";
+import type { StatutoryEvidenceBridge, StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
 
 export type StatutoryDiscountVisualSmokeScenarioId =
   | "none"
@@ -46,6 +47,7 @@ export type StatutoryDiscountVisualSmokeRenderArgs = {
   initialResolvedBasis: PayableBasisResponse;
   initialStatutoryState: StatutoryDiscountWorkflowState;
   bridge: PayableBasisVisualSmokeBridge;
+  evidenceBridge: StatutoryEvidenceBridge;
   initialCashEntryRequested?: boolean;
   renderKey: string;
 };
@@ -128,6 +130,7 @@ export function StatutoryDiscountVisualSmokeShell({ config, renderTerminalShell 
     seedPostCashRecovery(seededBridge, scenario);
     return seededBridge;
   }, [scenario]);
+  const evidenceBridge = useMemo(() => createStatutoryEvidenceVisualSmokeBridge(scenario), [scenario]);
 
   function selectScenario(value: StatutoryDiscountVisualSmokeScenario) {
     setSelectedId(value.id);
@@ -161,6 +164,7 @@ export function StatutoryDiscountVisualSmokeShell({ config, renderTerminalShell 
         initialResolvedBasis: basis,
         initialStatutoryState: scenario.state,
         bridge,
+        evidenceBridge,
         initialCashEntryRequested: Boolean(scenario.postCashRecovery),
         renderKey: scenario.id,
       })}
@@ -169,10 +173,6 @@ export function StatutoryDiscountVisualSmokeShell({ config, renderTerminalShell 
 }
 
 function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscountVisualSmokeScenario): CentralPmsClient {
-  if (!isActionRevalidationScenario(scenario.id) && !isOrdinanceRevalidationScenario(scenario.id)) {
-    return base;
-  }
-
   let revalidationCount = 0;
   let ordinanceRevalidationCount = 0;
   return {
@@ -181,6 +181,20 @@ function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscou
       revalidationCount += 1;
       const queuedOutcome = actionRevalidationOutcome(scenario.id, revalidationCount, displayedBasis, correlationId);
       if (!queuedOutcome) {
+        if (scenario.state.status === "applied") {
+          return {
+            ok: true as const,
+            response: {
+              ...displayedBasis,
+              operation: "revalidate",
+              revalidationOutcome: "PASSED_UNCHANGED",
+              correlationId,
+              readyForCashAcceptance: true,
+              cashAcceptanceReadiness: "READY",
+              blockingReasonCodes: [],
+            },
+          };
+        }
         return base.revalidatePayableBasis(displayedBasis, correlationId);
       }
 
@@ -441,6 +455,23 @@ function appliedState(amountAcknowledged: boolean): StatutoryDiscountWorkflowSta
     payableBasisReadinessStatus: "APPLIED",
     payableBasisReadinessAction: null,
     amountAcknowledged,
+    evidenceRequired: true,
+    evidenceRecorded: true,
+    evidenceRecovery: {
+      authoritative: false,
+      statutoryDiscountDecisionCommandId: decisionId,
+      evidenceSetReference: "11111111-1111-4111-8111-111111110001",
+      evidenceItemReference: "22222222-2222-4222-8222-222222220001",
+      lifecycleClassification: "APPLIED",
+      replacementPosture: "REPLACEMENT_NOT_ALLOWED",
+      readyForReview: true,
+      readyForAptPreCash: true,
+      retryable: false,
+      blockingReasonCode: null,
+      correlationId: "statutory-evidence-smoke-correlation",
+      lastSynchronizedAt: new Date().toISOString(),
+      fileReselectionRequired: false,
+    },
   });
 }
 
@@ -513,7 +544,8 @@ function basisForScenario(config: AptConfig, scenario: StatutoryDiscountVisualSm
     appliedTariffSnapshotId: applied ? appliedSnapshot : null,
     policyResolutionBasis: applied ? "CENTRAL_PMS_STATUTORY_POLICY" : null,
     benefitType: scenario.state.entitlementType ?? null,
-    readinessDimensions: null,
+    readinessDimensions: scenario.state.status === "none" ? [{ name: "statutoryEvidenceReadiness", status: "READY", ready: true, blockingReasonCode: null, retryable: false, message: "No statutory evidence is required." }] : [{ name: "statutoryEvidenceReadiness", status: applied ? "READY" : "BLOCKED", ready: applied, blockingReasonCode: applied ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: applied ? "Statutory evidence is applied." : "Statutory evidence is not ready." }],
+    statutoryEvidenceReadiness: { name: "statutoryEvidenceReadiness", status: applied || scenario.state.status === "none" ? "READY" : "BLOCKED", ready: applied || scenario.state.status === "none", blockingReasonCode: applied || scenario.state.status === "none" ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: applied || scenario.state.status === "none" ? "Statutory evidence is ready." : "Statutory evidence is not ready." },
     sessionReadiness: "RESOLVED_PAYABLE",
     tariffReadiness: "CURRENT",
     paymentEligibility: "ELIGIBLE",
@@ -549,6 +581,50 @@ function statutoryBlockerForScenario(state: StatutoryDiscountWorkflowState): str
     default:
       return "STATUTORY_DISCOUNT_AWAITING_REVIEW";
   }
+}
+
+function createStatutoryEvidenceVisualSmokeBridge(scenario: StatutoryDiscountVisualSmokeScenario): StatutoryEvidenceBridge {
+  const response = evidenceResponseForScenario(scenario);
+  const channel = (command: string, correlationId: string) => Promise.resolve({ ok: true as const, command, correlationId, payload: { ...response, correlationId } });
+  return {
+    bootstrap: (correlationId) => channel("statutoryEvidence.bootstrap", correlationId),
+    status: (correlationId) => channel("statutoryEvidence.status", correlationId),
+    revalidate: (correlationId) => channel("statutoryEvidence.revalidate", correlationId),
+    selectFile: (correlationId) => Promise.resolve({ ok: false, command: "statutoryEvidence.selectFile", correlationId, error: { code: "VISUAL_SMOKE_NO_FILE", message: "Use the Windows evidence walkthrough for file selection.", retryable: false } }),
+    createUploadSession: (correlationId) => Promise.resolve({ ok: false, command: "statutoryEvidence.createUploadSession", correlationId, error: { code: "VISUAL_SMOKE_NO_FILE", message: "Use the Windows evidence walkthrough for upload.", retryable: false } }),
+    upload: (correlationId) => Promise.resolve({ ok: false, command: "statutoryEvidence.upload", correlationId, error: { code: "VISUAL_SMOKE_NO_FILE", message: "Use the Windows evidence walkthrough for upload.", retryable: false } }),
+    cancelUpload: (correlationId) => Promise.resolve({ ok: true, command: "statutoryEvidence.cancelUpload", correlationId, payload: { cancelled: false, reconciliationRequired: true, safeMessage: "No visual-smoke upload is active." } }),
+    finalize: (correlationId) => channel("statutoryEvidence.finalize", correlationId),
+  };
+}
+
+function evidenceResponseForScenario(scenario: StatutoryDiscountVisualSmokeScenario): StatutoryEvidenceChannelResponse {
+  const applied = scenario.state.status === "applied";
+  const lifecycle = applied ? "APPLIED" : scenario.state.status === "rejected" ? "REJECTED" : "REVIEW_PENDING";
+  return {
+    classification: "RESOLVED",
+    retryable: false,
+    errorCode: null,
+    correlationId: "statutory-evidence-smoke-correlation",
+    sourceChannel: "ASSISTED_PAYMENT_TERMINAL",
+    evidenceRequired: true,
+    evidenceSetReference: "11111111-1111-4111-8111-111111110001",
+    evidenceItemReference: "22222222-2222-4222-8222-222222220001",
+    allowedContentTypes: ["image/jpeg", "image/png"],
+    maximumContentLengthBytes: 5 * 1024 * 1024,
+    maximumImageWidth: 4096,
+    maximumImageHeight: 4096,
+    maximumImagePixelCount: 16_000_000,
+    requiredDocumentType: "STATUTORY_ID_IMAGE",
+    requiredItemRole: "PRIMARY_IDENTITY_EVIDENCE",
+    lifecycleClassification: lifecycle,
+    replacementPosture: applied ? "REPLACEMENT_NOT_ALLOWED" : "REPLACEMENT_ALLOWED",
+    readyForReview: applied,
+    readyForAptPreCash: applied,
+    blockingReasonCode: applied ? null : "STATUTORY_EVIDENCE_REVIEW_PENDING",
+    evaluatedAt: new Date().toISOString(),
+    safeMessage: applied ? "Evidence and the statutory payable basis are applied." : "Authorized review is pending.",
+  };
 }
 
 function statutoryPostCashTender(): CashTenderSnapshot {

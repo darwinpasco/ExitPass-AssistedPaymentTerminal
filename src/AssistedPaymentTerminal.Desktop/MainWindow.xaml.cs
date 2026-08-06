@@ -14,6 +14,7 @@ public partial class MainWindow : Window
     private readonly StartupOptions _options;
     private readonly CashJournalService _journal;
     private readonly LocalJournalBridgeHandler _localJournalBridge;
+    private readonly StatutoryEvidenceBridgeHandler _statutoryEvidenceBridge;
     private bool _eventsRegistered;
 
     public MainWindow(WebViewSource source, StartupOptions options)
@@ -51,6 +52,11 @@ public partial class MainWindow : Window
             receiptPrinterName: options.ReceiptPrinterName,
             receiptPrinter: receiptPrinter,
             siteTimeZoneId: options.SiteTimeZoneId);
+        _statutoryEvidenceBridge = new StatutoryEvidenceBridgeHandler(
+            new CentralPmsStatutoryEvidenceClient(
+                new HttpClient { Timeout = TimeSpan.FromSeconds(30) },
+                options.CentralPmsBaseUrl,
+                options.CentralPmsServiceIdentityId));
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -229,7 +235,8 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var response = await _localJournalBridge.HandleWebMessageAsync(message);
+            var response = await _statutoryEvidenceBridge.HandleWebMessageAsync(message)
+                ?? await _localJournalBridge.HandleWebMessageAsync(message);
 
             if (response is not null)
             {
