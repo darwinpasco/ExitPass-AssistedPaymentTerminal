@@ -12,6 +12,10 @@ import type {
 } from "./api/centralPmsTypes";
 import { createCorrelationId } from "./correlation";
 import type { TerminalContext } from "./terminalContext";
+import { StatutoryEvidencePanel } from "./StatutoryEvidencePanel";
+import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge } from "./statutoryEvidenceBridge";
+
+const defaultEvidenceBridge = createWebViewStatutoryEvidenceBridge();
 
 export type StatutoryDiscountPanelProps = {
   basis: PayableBasisResponse;
@@ -22,6 +26,7 @@ export type StatutoryDiscountPanelProps = {
   onRetryAvailability: () => void;
   onStateChange: (next: StatutoryDiscountWorkflowState) => void;
   onAppliedBasisReady: (decisionCommandId: string, response: StatutoryDiscountDecisionResponse, nextState: StatutoryDiscountWorkflowState) => Promise<void>;
+  evidenceBridge?: StatutoryEvidenceBridge;
 };
 
 const defaultDraft = {
@@ -30,12 +35,11 @@ const defaultDraft = {
   idDocumentType: "OSCA_ID",
   issuingAuthority: "OSCA",
   expiryDate: "",
-  safeEvidenceReference: "",
   requesterAttested: false,
   attestationNotes: "",
 };
 
-export function StatutoryDiscountPanel({ basis, client, context, state, ordinanceAvailability, onRetryAvailability, onStateChange, onAppliedBasisReady }: StatutoryDiscountPanelProps) {
+export function StatutoryDiscountPanel({ basis, client, context, state, ordinanceAvailability, onRetryAvailability, onStateChange, onAppliedBasisReady, evidenceBridge = defaultEvidenceBridge }: StatutoryDiscountPanelProps) {
   const [draft, setDraft] = useState(() => ({
     ...defaultDraft,
     entitlementType: state.entitlementType ?? defaultDraft.entitlementType,
@@ -43,7 +47,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
     idDocumentType: state.idDocumentType ?? defaultDraft.idDocumentType,
     issuingAuthority: state.issuingAuthority ?? defaultDraft.issuingAuthority,
     expiryDate: state.expiryDate ?? defaultDraft.expiryDate,
-    safeEvidenceReference: state.safeEvidenceReference ?? defaultDraft.safeEvidenceReference,
     requesterAttested: Boolean(state.requesterAttested),
     attestationNotes: state.attestationNotes ?? defaultDraft.attestationNotes,
   }));
@@ -125,7 +128,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
       idDocumentType: draft.idDocumentType,
       issuingAuthority: draft.issuingAuthority,
       expiryDate: draft.expiryDate || null,
-      safeEvidenceReference: draft.safeEvidenceReference || null,
       requesterAttested: draft.requesterAttested,
       attestationNotes: draft.attestationNotes || null,
       requestReference,
@@ -254,10 +256,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
             Expiry date
             <input type="date" value={draft.expiryDate ?? ""} onChange={(event) => updateDraft("expiryDate", event.target.value)} disabled={status !== "draft" && status !== "none"} />
           </label>
-          <label>
-            Safe evidence reference
-            <input value={draft.safeEvidenceReference ?? ""} onChange={(event) => updateDraft("safeEvidenceReference", event.target.value)} disabled={status !== "draft" && status !== "none"} />
-          </label>
           <label className="checkbox-line">
             <input type="checkbox" checked={draft.requesterAttested} onChange={(event) => updateDraft("requesterAttested", event.target.checked)} disabled={status !== "draft" && status !== "none"} />
             Cashier attests safe entitlement facts were presented for Operator Console review.
@@ -288,6 +286,20 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
             <div><dt>Applied tariff snapshot</dt><dd>{state.appliedTariffSnapshotId ?? "Unavailable"}</dd></div>
           </dl>
         </section>
+      )}
+
+      {decisionId && (
+        <StatutoryEvidencePanel
+          decisionCommandId={decisionId}
+          restored={Boolean(state.restoredAfterRestart)}
+          recovery={state.evidenceRecovery}
+          bridge={evidenceBridge}
+          onRecoveryChange={(evidenceRecovery) => onStateChange({
+            ...state,
+            evidenceRecovery,
+            updatedAt: new Date().toISOString(),
+          })}
+        />
       )}
 
       <div className="statutory-actions">
@@ -363,10 +375,8 @@ function buildDecisionRequest({
     issuingAuthority: draft.issuingAuthority,
     expiryDate: draft.expiryDate || null,
     maskedIdReference: draft.maskedIdReference,
-    evidenceCaptureRequested: Boolean(draft.safeEvidenceReference?.trim()),
-    evidenceReferences: draft.safeEvidenceReference?.trim()
-      ? [{ evidenceType: "SAFE_REFERENCE", captureMethod: "MANUAL_REFERENCE", storageReference: draft.safeEvidenceReference.trim(), referenceNumberMasked: draft.maskedIdReference, fileName: null, contentType: null, sizeBytes: null, verificationStatus: "PENDING_REVIEW" }]
-      : null,
+    evidenceCaptureRequested: true,
+    evidenceReferences: null,
     requesterAttestation: draft.requesterAttested,
     attestationNotes: draft.attestationNotes || null,
     reasonCode: null,
@@ -403,6 +413,8 @@ export function mapDecisionResponse(response: StatutoryDiscountDecisionResponse,
     payableBasisReady: response.payableBasisReady,
     payableBasisReadinessStatus: response.payableBasisReadinessStatus,
     payableBasisReadinessAction: response.payableBasisReadinessAction,
+    evidenceRequired: response.evidenceRequired,
+    evidenceRecorded: response.evidenceRecorded,
     correlationId: response.correlationId,
     createdAt: response.createdAt,
     lastReadbackAt: new Date().toISOString(),

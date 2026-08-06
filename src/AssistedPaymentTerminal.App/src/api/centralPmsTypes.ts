@@ -155,6 +155,15 @@ export type StatutoryDiscountReadiness = {
   message: string;
 };
 
+export type AptReadinessDimension = {
+  name: string;
+  status: string;
+  ready: boolean;
+  blockingReasonCode?: string | null;
+  retryable: boolean;
+  message: string;
+};
+
 export type PayableBasisResponse = {
   operation?: "resolve" | "revalidate" | string;
   revalidationOutcome?: PayableBasisRevalidationOutcome | string | null;
@@ -191,7 +200,8 @@ export type PayableBasisResponse = {
   appliedTariffSnapshotId?: string | null;
   policyResolutionBasis?: string | null;
   benefitType?: string | null;
-  readinessDimensions?: Record<string, string | boolean | null> | null;
+  readinessDimensions?: AptReadinessDimension[] | null;
+  statutoryEvidenceReadiness?: AptReadinessDimension | null;
   sessionReadiness?: string | null;
   tariffReadiness?: string | null;
   paymentEligibility?: string | null;
@@ -320,7 +330,6 @@ export type StatutoryDiscountWorkflowState = {
   idDocumentType?: string | null;
   issuingAuthority?: string | null;
   expiryDate?: string | null;
-  safeEvidenceReference?: string | null;
   requesterAttested?: boolean;
   attestationNotes?: string | null;
   requestReference?: string | null;
@@ -355,6 +364,27 @@ export type StatutoryDiscountWorkflowState = {
   restoredAfterRestart?: boolean;
   amountAcknowledged?: boolean;
   ordinanceAvailability?: StatutoryOrdinanceAvailabilitySnapshot | null;
+  evidenceRequired?: boolean;
+  evidenceRecorded?: boolean;
+  evidenceRecovery?: StatutoryEvidenceRecoveryState | null;
+};
+
+export type StatutoryEvidenceRecoveryState = {
+  authoritative: false;
+  statutoryDiscountDecisionCommandId: string;
+  evidenceSetReference?: string | null;
+  evidenceItemReference?: string | null;
+  opaqueUploadSessionReference?: string | null;
+  uploadSessionExpiresAt?: string | null;
+  lifecycleClassification?: string | null;
+  replacementPosture?: string | null;
+  readyForReview: boolean;
+  readyForAptPreCash: boolean;
+  retryable: boolean;
+  blockingReasonCode?: string | null;
+  correlationId?: string | null;
+  lastSynchronizedAt: string;
+  fileReselectionRequired: boolean;
 };
 
 export type ResolveVendorParkingRequest = ResolvePayableBasisRequest;

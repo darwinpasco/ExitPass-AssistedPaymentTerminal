@@ -30,6 +30,7 @@ import {
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type LocalJournalHealth, type PayableBasisStateSnapshot } from "./localJournalBridge";
+import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge, type StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
 
 type LookupState =
   | { status: "idle" }
@@ -43,6 +44,7 @@ type PreCashResult =
   | { ok: false; message: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
+const defaultEvidenceBridge = createWebViewStatutoryEvidenceBridge();
 const noStatutoryWorkflow: StatutoryDiscountWorkflowState = { status: "none" };
 
 export function App() {
@@ -69,12 +71,13 @@ export function App() {
     return (
       <StatutoryDiscountVisualSmokeShell
         config={configResult.config}
-        renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, bridge, initialCashEntryRequested, renderKey }) => (
+        renderTerminalShell={({ config, client, initialResolvedBasis, initialStatutoryState, bridge, evidenceBridge, initialCashEntryRequested, renderKey }) => (
           <TerminalShell
             key={renderKey}
             config={config}
             client={client}
             localJournalBridge={bridge}
+            statutoryEvidenceBridge={evidenceBridge}
             initialReferenceType="ticket"
             initialReferenceValue="APT-ACTIVE-1001"
             initialResolvedBasis={initialResolvedBasis}
@@ -121,6 +124,7 @@ export function TerminalShell({
   config,
   client,
   localJournalBridge = defaultBridge,
+  statutoryEvidenceBridge = defaultEvidenceBridge,
   initialReferenceType = "ticket",
   initialReferenceValue = "",
   restorePayableBasisOnMount = true,
@@ -131,6 +135,7 @@ export function TerminalShell({
   config: AptConfig;
   client: CentralPmsClient;
   localJournalBridge?: LocalJournalBridge;
+  statutoryEvidenceBridge?: StatutoryEvidenceBridge;
   initialReferenceType?: PayableBasisReferenceType;
   initialReferenceValue?: string;
   restorePayableBasisOnMount?: boolean;
@@ -247,6 +252,7 @@ export function TerminalShell({
     const basis = displayedBasis;
     const requestId = latestOrdinanceRequestId.current + 1;
     latestOrdinanceRequestId.current = requestId;
+    let cancelled = false;
     const restoredRefresh = lookupState.status === "resolved" && lookupState.source === "restored";
     setOrdinanceAvailability({ status: "loading", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh });
 
@@ -255,7 +261,7 @@ export function TerminalShell({
         resolveOrdinanceForEntitlement(client, basis, "SENIOR_CITIZEN"),
         resolveOrdinanceForEntitlement(client, basis, "PWD"),
       ]);
-      if (latestOrdinanceRequestId.current !== requestId) {
+      if (cancelled || latestOrdinanceRequestId.current !== requestId) {
         return;
       }
       if (!ordinanceResponseMatchesBasis(seniorCitizen, basis) || !ordinanceResponseMatchesBasis(pwd, basis)) {
@@ -282,6 +288,12 @@ export function TerminalShell({
     }
 
     void resolveAvailability();
+    return () => {
+      cancelled = true;
+      if (latestOrdinanceRequestId.current === requestId) {
+        latestOrdinanceRequestId.current += 1;
+      }
+    };
   }, [client, displayedBasis?.parkingSessionId, displayedBasis?.siteGroupId, displayedBasis?.siteId, ordinanceRefreshToken]);
 
   const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
@@ -365,7 +377,7 @@ export function TerminalShell({
     }
 
     const outcome = result.response.revalidationOutcome ?? "UNKNOWN";
-    const nextStatutoryState = statutoryStateFromPayableBasis(result.response, statutoryWorkflowState, outcome);
+    let nextStatutoryState = statutoryStateFromPayableBasis(result.response, statutoryWorkflowState, outcome);
     if (nextStatutoryState !== statutoryWorkflowState) {
       setStatutoryWorkflowState(nextStatutoryState);
     }
@@ -405,6 +417,34 @@ export function TerminalShell({
           return { ok: false, message: ordinanceResult.safeMessage };
         }
         setOrdinanceAvailability(replaceOrdinanceAvailability(ordinanceAvailability, result.response, ordinanceResult));
+
+        const evidenceResult = await statutoryEvidenceBridge.revalidate(
+          createCorrelationId(),
+          nextStatutoryState.statutoryDiscountDecisionCommandId ?? "",
+        );
+        if (!evidenceResult.ok) {
+          return { ok: false, message: evidenceResult.error.message };
+        }
+
+        nextStatutoryState = {
+          ...nextStatutoryState,
+          evidenceRecovery: evidenceRecoveryFromResponse(evidenceResult.payload, nextStatutoryState.statutoryDiscountDecisionCommandId ?? ""),
+          updatedAt: new Date().toISOString(),
+        };
+        statutoryWorkflowStateRef.current = nextStatutoryState;
+        setStatutoryWorkflowState(nextStatutoryState);
+        await persistPayableBasis(
+          result.response,
+          result.response.ticketReference ? "ticket" : "plate",
+          result.response.ticketReference ?? result.response.plateNumber ?? referenceValue,
+          false,
+          false,
+          currentBasis.authoritativeAmountMinorUnits,
+          nextStatutoryState,
+        );
+        if (!evidenceRevalidationPassed(evidenceResult.payload, result.response)) {
+          return { ok: false, message: evidenceResult.payload.safeMessage };
+        }
       }
       setCashEntryRequested(preserveCashEntry);
       setPreCashStatus("idle");
@@ -679,6 +719,7 @@ export function TerminalShell({
                     onRetryAvailability={() => setOrdinanceRefreshToken((current) => current + 1)}
                     onStateChange={(next) => void handleStatutoryStateChange(next)}
                     onAppliedBasisReady={handleAppliedStatutoryBasis}
+                    evidenceBridge={statutoryEvidenceBridge}
                   />
                   {!localPrerequisitesReady && (
                     <StatusNotice tone="danger" title="Local cash prerequisites unavailable" dataTestId="local-cash-prerequisites-notice">
@@ -1076,8 +1117,22 @@ function StatusNotice({
 function parseStatutoryState(raw?: string | null, restoredAfterRestart = false): StatutoryDiscountWorkflowState {
   if (!raw) return noStatutoryWorkflow;
   try {
-    const parsed = JSON.parse(raw) as StatutoryDiscountWorkflowState;
-    return parsed?.status ? { ...parsed, restoredAfterRestart } : noStatutoryWorkflow;
+    const parsedWithLegacy = JSON.parse(raw) as StatutoryDiscountWorkflowState & { safeEvidenceReference?: unknown };
+    const { safeEvidenceReference: _discardedLegacyEvidenceReference, ...parsed } = parsedWithLegacy;
+    if (!parsed?.status) return noStatutoryWorkflow;
+    return {
+      ...parsed,
+      restoredAfterRestart,
+      evidenceRecovery: restoredAfterRestart && parsed.evidenceRecovery
+        ? {
+            ...parsed.evidenceRecovery,
+            authoritative: false,
+            readyForAptPreCash: false,
+            lifecycleClassification: "STALE_LOCAL_STATE",
+            fileReselectionRequired: true,
+          }
+        : parsed.evidenceRecovery,
+    };
   } catch {
     return { status: "required_facts_unavailable", safeErrorCode: "LOCAL_STATUTORY_STATE_MALFORMED", restoredAfterRestart };
   }
@@ -1315,11 +1370,53 @@ function statutoryCashGateStatus(
     return { ready: false, message: "Canonical statutory decision and application references are required before cash acceptance." };
   }
 
+  const evidenceReadiness = basis.statutoryEvidenceReadiness ??
+    basis.readinessDimensions?.find((dimension) => dimension.name === "statutoryEvidenceReadiness") ?? null;
+  if (!evidenceReadiness?.ready) {
+    return { ready: false, message: evidenceReadiness?.message ?? "Central PMS has not marked statutory evidence ready for cash acceptance." };
+  }
+
+  if (!statutoryState.evidenceRecovery?.readyForAptPreCash) {
+    return { ready: false, message: "Authoritative statutory evidence readiness must be refreshed before Continue to Cash." };
+  }
+
   if (basis.blockingReasonCodes.length > 0) {
     return { ready: false, message: blockerMessage(basis) };
   }
 
   return { ready: true, message: "Statutory payable basis is ready for cash acceptance." };
+}
+
+function evidenceRecoveryFromResponse(
+  response: StatutoryEvidenceChannelResponse,
+  decisionCommandId: string,
+) {
+  return {
+    authoritative: false as const,
+    statutoryDiscountDecisionCommandId: decisionCommandId,
+    evidenceSetReference: response.evidenceSetReference ?? null,
+    evidenceItemReference: response.evidenceItemReference ?? null,
+    opaqueUploadSessionReference: null,
+    uploadSessionExpiresAt: null,
+    lifecycleClassification: response.lifecycleClassification ?? "UNKNOWN_FAIL_CLOSED",
+    replacementPosture: response.replacementPosture,
+    readyForReview: response.readyForReview,
+    readyForAptPreCash: response.readyForAptPreCash,
+    retryable: response.retryable,
+    blockingReasonCode: response.blockingReasonCode ?? null,
+    correlationId: response.correlationId,
+    lastSynchronizedAt: new Date().toISOString(),
+    fileReselectionRequired: false,
+  };
+}
+
+function evidenceRevalidationPassed(response: StatutoryEvidenceChannelResponse, basis: PayableBasisResponse): boolean {
+  const evidenceReadiness = basis.statutoryEvidenceReadiness ??
+    basis.readinessDimensions?.find((dimension) => dimension.name === "statutoryEvidenceReadiness") ?? null;
+  return response.readyForAptPreCash &&
+    response.classification !== "REJECTED" &&
+    ["NOT_REQUIRED", "APPLIED"].includes(response.lifecycleClassification ?? "") &&
+    evidenceReadiness?.ready === true;
 }
 
 function revalidatedBasisMatchesCurrentStatutoryAuthority(

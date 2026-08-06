@@ -262,12 +262,15 @@ export function isPayableBasisResponse(payload: unknown): payload is PayableBasi
 export const isResolveResponse = isPayableBasisResponse;
 
 export function normalizePayableBasisResponse(payload: PayableBasisResponse): PayableBasisResponse {
+  const readinessDimensions = Array.isArray(payload.readinessDimensions) ? payload.readinessDimensions : [];
   return {
     ...payload,
     blockingReasonCodes: payload.blockingReasonCodes ?? [],
     safeUserFacingClassification: payload.safeUserFacingClassification || "UNKNOWN",
     retryable: Boolean(payload.retryable),
     readyForCashAcceptance: Boolean(payload.readyForCashAcceptance),
+    readinessDimensions,
+    statutoryEvidenceReadiness: payload.statutoryEvidenceReadiness ?? readinessDimensions.find((dimension) => dimension.name === "statutoryEvidenceReadiness") ?? null,
     statutoryDiscountReadiness: payload.statutoryDiscountReadiness
       ? {
           ...payload.statutoryDiscountReadiness,
