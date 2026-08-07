@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { activeCustodyId, activeShiftId, installLocalJournalBridgeFixture } from "../local-journal-fixture.mjs";
+import { installLocalJournalBridgeFixture } from "../local-journal-fixture.mjs";
 
 test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tickets", async ({ page }) => {
   await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
@@ -10,10 +10,10 @@ test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tic
   await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
-  await expect(page.getByText("Configured: POS-DEV-001")).toBeVisible();
+  await expect(page.getByTestId("operational-pos-readiness-summary")).toHaveText("Configured");
   await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("recovered-shift-id")).toHaveText(activeShiftId);
-  await expect(page.getByTestId("active-custody-id")).toHaveText(activeCustodyId);
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText("Open");
+  await expect(page.getByTestId("active-custody-id")).toHaveText("Open");
   await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
@@ -77,7 +77,7 @@ test("unsupported profile refuses startup", async ({ page }) => {
   await expect(page.getByText("CONTINUITY_TERMINAL is not implemented in this slice.")).toBeVisible();
 });
 
-test("service unavailable scenario shows support reference", async ({ page }) => {
+test("service unavailable scenario does not expose an internal diagnostic correlation", async ({ page }) => {
   await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
   await page.goto("/");
 
@@ -86,5 +86,5 @@ test("service unavailable scenario shows support reference", async ({ page }) =>
 
   await expect(page.getByText("Central PMS temporarily unavailable")).toBeVisible();
   await expect(page.getByText("Retry is available after Central PMS is reachable.")).toBeVisible();
-  await expect(page.getByText(/Support reference:/)).toBeVisible();
+  await expect(page.getByText(/Support reference:/)).toHaveCount(0);
 });

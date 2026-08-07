@@ -1,4 +1,5 @@
-﻿import type { AptConfig } from "../config";
+import type { AptConfig } from "../config";
+import { maskStatutoryId } from "../statutoryIdMasking";
 import type {
   CentralPmsClient,
   CentralPmsResult,
@@ -581,7 +582,7 @@ function baseDecisionRequest(config: AptConfig): StatutoryDiscountDecisionSubmit
     idDocumentType: "OSCA_ID",
     issuingAuthority: "OSCA",
     expiryDate: null,
-    maskedIdReference: "SC-****-0001",
+    maskedIdReference: maskStatutoryId("AB1234567890"),
     evidenceCaptureRequested: false,
     evidenceReferences: null,
     requesterAttestation: true,

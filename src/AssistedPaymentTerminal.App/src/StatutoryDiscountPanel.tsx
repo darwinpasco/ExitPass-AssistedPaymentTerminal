@@ -1,5 +1,4 @@
-﻿import { useMemo, useState } from "react";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   CentralPmsClient,
   PayableBasisResponse,
@@ -11,6 +10,8 @@ import type {
   StatutoryOrdinanceAvailabilityViewState,
 } from "./api/centralPmsTypes";
 import { createCorrelationId } from "./correlation";
+import { cashierSafeSupportReference } from "./cashierSafeReferences";
+import { containsManualStatutoryIdMask, maskStatutoryId } from "./statutoryIdMasking";
 import type { TerminalContext } from "./terminalContext";
 import { StatutoryEvidencePanel } from "./StatutoryEvidencePanel";
 import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge } from "./statutoryEvidenceBridge";
@@ -31,7 +32,7 @@ export type StatutoryDiscountPanelProps = {
 
 const defaultDraft = {
   entitlementType: "SENIOR_CITIZEN",
-  maskedIdReference: "SC-****-0001",
+  maskedIdReference: "",
   idDocumentType: "OSCA_ID",
   issuingAuthority: "OSCA",
   expiryDate: "",
@@ -51,6 +52,8 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
     attestationNotes: state.attestationNotes ?? defaultDraft.attestationNotes,
   }));
   const [message, setMessage] = useState<string | null>(null);
+  const [rawIdInput, setRawIdInput] = useState("");
+  const [statutoryIdEditing, setStatutoryIdEditing] = useState(false);
   const active = state.status !== "none";
   const status = state.status;
   const decisionId = state.statutoryDiscountDecisionCommandId;
@@ -66,7 +69,10 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
   const selectedEntitlementAllowed = selectedAvailability?.classification === "AVAILABLE" && selectedAvailability.statutoryRequestAllowed;
   const entitlementOptions = active && selectedEntitlement ? [selectedEntitlement] : availableEntitlements;
   const retryAvailable = ordinanceAvailability.status === "ready" && (ordinanceAvailability.seniorCitizen.retryable || ordinanceAvailability.pwd.retryable);
-  const canSubmitDecision = status === "draft" && selectedEntitlementAllowed && draft.requesterAttested && draft.maskedIdReference.trim() && draft.entitlementType.trim();
+  const maskedIdFromRawInput = maskStatutoryId(rawIdInput);
+  const rawIdHasManualMask = containsManualStatutoryIdMask(rawIdInput);
+  const maskedIdForSubmission = rawIdInput.trim() ? maskedIdFromRawInput : draft.maskedIdReference.trim();
+  const canSubmitDecision = Boolean(status === "draft" && selectedEntitlementAllowed && draft.requesterAttested && maskedIdForSubmission && !rawIdHasManualMask && draft.entitlementType.trim());
   const canCheckReview = Boolean(decisionId) && ["awaiting_review", "retryable_failure"].includes(status);
   const canSubmitApplication = status === "approved_application_not_requested" && Boolean(decisionId);
   const appliedComplete = status === "applied" && Boolean(state.appliedTariffSnapshotId) && state.finalPayableAmountMinorUnits != null && Boolean(state.currency);
@@ -79,14 +85,13 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
   }, [availableEntitlements.join("|"), draft.entitlementType, status]);
 
   const facts = useMemo(() => ([
-    ["Decision command", decisionId ?? "Not recorded"],
-    ["Application command", applicationId ?? "Not requested"],
+    ["Decision", decisionId ? "Recorded" : "Not recorded"],
+    ["Application", applicationId ? "Recorded" : "Not requested"],
     ["Decision status", friendly(state.decisionResultStatus ?? state.decisionStatus ?? status)],
     ["Application status", friendly(state.applicationCommandStatus ?? "NOT_REQUESTED")],
     ["Readiness", friendly(state.payableBasisReadinessStatus ?? "NOT_SUBMITTED")],
     ["Readiness action", friendly(action ?? "No action")],
-    ["Support reference", state.correlationId ?? basis.correlationId],
-  ]), [action, applicationId, basis.correlationId, decisionId, state.applicationCommandStatus, state.correlationId, state.decisionResultStatus, state.decisionStatus, state.payableBasisReadinessStatus, status]);
+  ]), [action, applicationId, decisionId, state.applicationCommandStatus, state.decisionResultStatus, state.decisionStatus, state.payableBasisReadinessStatus, status]);
 
   function updateDraft<K extends keyof typeof draft>(key: K, value: (typeof draft)[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -104,6 +109,18 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
     onStateChange(next);
   }
 
+  function commitStatutoryIdMask() {
+    setStatutoryIdEditing(false);
+    if (!rawIdInput.trim()) return;
+    if (rawIdHasManualMask) {
+      setDraft((current) => ({ ...current, maskedIdReference: "" }));
+      setMessage("Enter the statutory ID normally without asterisks. Masking is automatic.");
+      return;
+    }
+    setDraft((current) => ({ ...current, maskedIdReference: maskedIdFromRawInput }));
+    setMessage(null);
+  }
+
   async function submitDecision(applyPayableBasis: boolean) {
     if (!selectedEntitlementAllowed) {
       setMessage("Authoritative ordinance coverage is required before a statutory request or application can be submitted.");
@@ -113,6 +130,17 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
       setMessage("Central PMS statutory-discount client is unavailable.");
       return;
     }
+    if (!maskedIdForSubmission || rawIdHasManualMask) {
+      setMessage(rawIdHasManualMask
+        ? "Enter the statutory ID normally without asterisks. Masking is automatic."
+        : "Enter the statutory ID before submitting the statutory request.");
+      return;
+    }
+
+    const submissionDraft = { ...draft, maskedIdReference: maskedIdForSubmission };
+    setDraft(submissionDraft);
+    setRawIdInput("");
+    setStatutoryIdEditing(false);
 
     const correlationId = createCorrelationId();
     const requestReference = state.requestReference ?? createCorrelationId();
@@ -123,13 +151,13 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
     const submittingState = {
       ...state,
       status: submittingStatus as StatutoryDiscountWorkflowState["status"],
-      entitlementType: draft.entitlementType,
-      maskedIdReference: draft.maskedIdReference,
-      idDocumentType: draft.idDocumentType,
-      issuingAuthority: draft.issuingAuthority,
-      expiryDate: draft.expiryDate || null,
-      requesterAttested: draft.requesterAttested,
-      attestationNotes: draft.attestationNotes || null,
+      entitlementType: submissionDraft.entitlementType,
+      maskedIdReference: submissionDraft.maskedIdReference,
+      idDocumentType: submissionDraft.idDocumentType,
+      issuingAuthority: submissionDraft.issuingAuthority,
+      expiryDate: submissionDraft.expiryDate || null,
+      requesterAttested: submissionDraft.requesterAttested,
+      attestationNotes: submissionDraft.attestationNotes || null,
       requestReference,
       decisionIdempotencyKey,
       applicationIdempotencyKey,
@@ -138,7 +166,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
     onStateChange(submittingState);
     setMessage(null);
 
-    const request = buildDecisionRequest({ basis, context, draft, requestReference, applyPayableBasis });
+    const request = buildDecisionRequest({ basis, context, draft: submissionDraft, requestReference, applyPayableBasis });
     const result = await client.submitStatutoryDiscountDecision(request, correlationId, idempotencyKey);
     if (!result.ok) {
       onStateChange({
@@ -241,8 +269,22 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
             </select>
           </label>
           <label>
-            Masked statutory ID reference
-            <input value={draft.maskedIdReference} onChange={(event) => updateDraft("maskedIdReference", event.target.value)} disabled={status !== "draft" && status !== "none"} />
+            Statutory ID
+            <input
+              aria-label="Statutory ID"
+              aria-describedby="statutory-id-mask-guidance"
+              autoComplete="off"
+              spellCheck={false}
+              value={statutoryIdEditing ? rawIdInput : (rawIdInput.trim() ? maskedIdFromRawInput : draft.maskedIdReference)}
+              onChange={(event) => {
+                setRawIdInput(event.target.value);
+                setDraft((current) => ({ ...current, maskedIdReference: "" }));
+              }}
+              onFocus={() => setStatutoryIdEditing(true)}
+              onBlur={commitStatutoryIdMask}
+              disabled={status !== "draft" && status !== "none"}
+            />
+            <span id="statutory-id-mask-guidance">Enter the ID normally. The application masks it automatically after entry.</span>
           </label>
           <label>
             ID document type
@@ -282,8 +324,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
             <div><dt>VAT treatment</dt><dd>{friendly(state.vatTreatment)}</dd></div>
             <div><dt>Statutory discount</dt><dd>{formatCurrency(state.statutoryDiscountAmountMinorUnits, state.currency)}</dd></div>
             <div><dt>Final payable amount</dt><dd>{formatCurrency(state.finalPayableAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Original tariff snapshot</dt><dd>{state.originalTariffSnapshotId ?? "Unavailable"}</dd></div>
-            <div><dt>Applied tariff snapshot</dt><dd>{state.appliedTariffSnapshotId ?? "Unavailable"}</dd></div>
+            <div><dt>Tariff application</dt><dd>Authoritative version applied</dd></div>
           </dl>
         </section>
       )}
@@ -313,15 +354,15 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
 }
 
 function AvailabilityRow({ label, response, testId }: { label: string; response: StatutoryOrdinanceAvailabilityResponse; testId: string }) {
+  const supportReference = cashierSafeSupportReference(response.supportReference);
   return (
     <div className="ordinance-coverage-row" data-testid={testId}>
       <dt>{label}</dt>
       <dd>
         <strong>{friendly(response.classification)}</strong>
         <span>{response.safeMessage}</span>
-        <span>Site: {response.siteId}</span>
         <span>Evaluated: {formatDate(response.evaluatedAt)}</span>
-        <span>Support reference: {response.supportReference}</span>
+        {supportReference && <span>Support reference: {supportReference}</span>}
         <span>Retryable: {response.retryable ? "Yes" : "No"}</span>
       </dd>
     </div>
@@ -507,5 +548,3 @@ function formatCurrency(amountMinorUnits?: number | null, currency?: string | nu
   if (amountMinorUnits == null) return "Unavailable";
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: currency ?? "PHP" }).format(amountMinorUnits / 100);
 }
-
-

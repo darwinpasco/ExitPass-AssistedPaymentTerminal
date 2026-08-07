@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AptConfig, ConfigLoadResult } from "./config";
 import { loadAptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
+import { cashierSafeSupportReference } from "./cashierSafeReferences";
 import { createCentralPmsClient } from "./api/clientFactory";
 import type {
   CentralPmsClient,
@@ -695,7 +696,7 @@ export function TerminalShell({
 
           {lookupState.status === "loading" && (
             <StatusNotice tone="info" title="Resolving parking session">
-              Request sent to {context.centralPmsConnectionMode}. Support reference: <strong>{lookupState.correlationId}</strong>
+              Request sent to {context.centralPmsConnectionMode}. The terminal retains an internal diagnostic reference for support.
             </StatusNotice>
           )}
 
@@ -792,7 +793,7 @@ function PreCashBoundaryPanel({
       <dl className="central-pms-details">
         <div><dt>readyForCashAcceptance</dt><dd data-testid="central-cash-ready-value">{basis.readyForCashAcceptance ? "true" : "false"}</dd></div>
         <div><dt>Local prerequisites</dt><dd data-testid="local-cash-prerequisites-value">{localPrerequisitesReady ? "Satisfied" : "Blocked"}</dd></div>
-        <div><dt>Tariff snapshot</dt><dd>{basis.tariffSnapshotId}</dd></div>
+        <div><dt>Authoritative tariff</dt><dd>Current version confirmed</dd></div>
       </dl>
       <button type="button" className="primary-action" disabled={disabled} onClick={onContinue} data-testid="continue-to-cash">
         Continue to Cash
@@ -879,19 +880,19 @@ function OperationalContextPanel({ context, health }: { context: TerminalContext
     ["Cashier", context.cashierDisplayName, "operational-cashier-summary"],
     ["Shift", recoveredShiftStatus, "operational-shift-summary"],
     ["Terminal", context.terminalDisplayName, "operational-terminal-summary"],
-    ["POS readiness", `Configured: ${context.posServerId}`, "operational-pos-readiness-summary"],
+    ["POS readiness", context.posServerId ? "Configured" : "Unavailable", "operational-pos-readiness-summary"],
   ];
 
   const detailRows = [
-    ["Terminal ID", context.terminalId, "configured-terminal-id"],
-    ["Site ID", context.siteId, "configured-site-id"],
-    ["Site-group ID", context.siteGroupId, "configured-site-group-id"],
-    ["POS Server ID", context.posServerId, "configured-pos-server-id"],
-    ["Cashier ID", context.cashierId, "configured-cashier-id"],
-    ["Configured shift ID", context.shiftId, "configured-shift-id"],
+    ["Terminal", context.terminalId ? "Configured" : "Unavailable", "configured-terminal-id"],
+    ["Site scope", context.siteId ? "Configured" : "Unavailable", "configured-site-id"],
+    ["Site-group scope", context.siteGroupId ? "Configured" : "Unavailable", "configured-site-group-id"],
+    ["POS Server", context.posServerId ? "Configured" : "Unavailable", "configured-pos-server-id"],
+    ["Cashier context", context.cashierId ? "Configured" : "Unavailable", "configured-cashier-id"],
+    ["Configured shift", context.shiftId ? "Configured" : "Unavailable", "configured-shift-id"],
     ["Configured shift posture", context.shiftStatus, "configured-shift-posture"],
-    ["Recovered shift ID", activeShift?.id ?? "None", "recovered-shift-id"],
-    ["Cash custody session", activeCustody?.id ?? "None", "active-custody-id"],
+    ["Recovered shift", activeShift ? activeShift.status : "None", "recovered-shift-id"],
+    ["Cash custody", activeCustody ? activeCustody.status : "None", "active-custody-id"],
     ["Central PMS", context.centralPmsConnectionMode, "configured-central-pms-mode"],
   ];
 
@@ -949,20 +950,19 @@ function SessionSummary({ basis, restored, statutoryWorkflowActive, statutoryCas
   const amount = formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency);
   const primaryRows = [
     [basis.ticketReference ? "Ticket reference" : "Plate number", basis.ticketReference ?? basis.plateNumber ?? "Unavailable"],
-    ["Parking session ID", basis.parkingSessionId],
-    ["Tariff snapshot ID", basis.tariffSnapshotId],
+    ["Parking session", "Authoritatively resolved"],
+    ["Tariff version", "Authoritatively resolved"],
     ["Tariff valid until", formatDate(basis.tariffValidUntil)],
     ["Payment status", basis.paymentStatus],
   ];
 
   const secondaryRows = [
     ["Masked plate", maskPlate(basis.plateNumber)],
-    ["Site", basis.siteName ?? basis.siteId],
+    ["Site", basis.siteName ?? "Authoritative Site"],
     ["Entry timestamp", formatDate(basis.entryTimestamp)],
     ["Currency", basis.currency],
     ["Tariff calculated", formatDate(basis.tariffCalculatedAt)],
     ["Fee valid until", formatDate(basis.feeValidUntil)],
-    ["Correlation ID", basis.correlationId],
   ];
 
   return (
@@ -1018,7 +1018,7 @@ function ReadinessPanel({ basis, tariffExpired, statutoryWorkflowActive, statuto
           <dl className="central-pms-details">
             <div><dt>Status</dt><dd data-testid="statutory-readiness-value">{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessStatus)}</dd></div>
             <div><dt>Action</dt><dd>{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessAction)}</dd></div>
-            <div><dt>Decision</dt><dd>{basis.statutoryDiscountReadiness.statutoryDiscountDecisionCommandId ?? "Unavailable"}</dd></div>
+            <div><dt>Decision</dt><dd>{basis.statutoryDiscountReadiness.statutoryDiscountDecisionCommandId ? "Recorded" : "Unavailable"}</dd></div>
           </dl>
         </details>
       )}
@@ -1027,7 +1027,7 @@ function ReadinessPanel({ basis, tariffExpired, statutoryWorkflowActive, statuto
           <summary>Support details</summary>
           <p>Safe codes: {basis.blockingReasonCodes.join(", ")}</p>
           <p>Classification: {basis.safeUserFacingClassification}</p>
-          <p>Support reference: {basis.correlationId}</p>
+          <p>An internal diagnostic reference is retained for support.</p>
         </details>
       )}
     </StatusNotice>
@@ -1036,22 +1036,16 @@ function ReadinessPanel({ basis, tariffExpired, statutoryWorkflowActive, statuto
 
 function AmountChangedNotice({ previous, current, onAcknowledge }: { previous: PayableBasisResponse; current: PayableBasisResponse; onAcknowledge: () => void }) {
   const statutoryApplied = current.statutoryDiscountReadiness?.applicable === true;
-  const originalSnapshot = current.statutoryDiscountReadiness?.originalTariffSnapshotId ?? previous.tariffSnapshotId;
-  const appliedSnapshot = current.statutoryDiscountReadiness?.appliedTariffSnapshotId ?? current.appliedTariffSnapshotId ?? current.tariffSnapshotId;
   return (
     <StatusNotice tone="danger" title="Parking fee changed before cash acceptance">
       <p>Review the new authoritative payable basis before accepting cash. CASH_RECEIVED remains blocked until acknowledgement and a later unchanged revalidation.</p>
       <dl className="central-pms-details">
         <div><dt>Previous amount</dt><dd>{formatCurrency(previous.authoritativeAmountMinorUnits, previous.currency)}</dd></div>
         <div><dt>{statutoryApplied ? "Authoritative applied amount" : "New amount"}</dt><dd>{formatCurrency(current.authoritativeAmountMinorUnits, current.currency)}</dd></div>
-        <div><dt>Previous tariff snapshot</dt><dd>{previous.tariffSnapshotId}</dd></div>
-        <div><dt>Authoritative tariff snapshot</dt><dd>{current.tariffSnapshotId}</dd></div>
-        <div><dt>Original tariff snapshot</dt><dd>{originalSnapshot}</dd></div>
-        <div><dt>Applied tariff snapshot</dt><dd>{appliedSnapshot}</dd></div>
-        {statutoryApplied && <div><dt>Statutory decision</dt><dd>{current.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId ?? "Unavailable"}</dd></div>}
-        {statutoryApplied && <div><dt>Statutory application</dt><dd>{current.statutoryDiscountReadiness?.statutoryDiscountPayableBasisApplicationCommandId ?? "Unavailable"}</dd></div>}
+        <div><dt>Tariff update</dt><dd>Authoritative version changed</dd></div>
+        {statutoryApplied && <div><dt>Statutory decision</dt><dd>{current.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId ? "Recorded" : "Unavailable"}</dd></div>}
+        {statutoryApplied && <div><dt>Statutory application</dt><dd>{current.statutoryDiscountReadiness?.statutoryDiscountPayableBasisApplicationCommandId ? "Recorded" : "Unavailable"}</dd></div>}
         <div><dt>Recalculated at</dt><dd>{formatDate(current.tariffCalculatedAt)}</dd></div>
-        <div><dt>Support reference</dt><dd>{current.correlationId}</dd></div>
       </dl>
       <button className="secondary-action" type="button" onClick={onAcknowledge}>Acknowledge new amount</button>
     </StatusNotice>
@@ -1072,6 +1066,7 @@ function PaymentStage() {
 }
 
 function FailureNotice({ result, onReset }: { result: Exclude<CentralPmsResult, { ok: true }>; onReset: () => void }) {
+  const supportReference = cashierSafeSupportReference((result.error as { supportReference?: string | null }).supportReference);
   const titleByKind: Record<string, string> = {
     not_found: "Parking session not found",
     inactive: "Parking session is not payable",
@@ -1094,7 +1089,7 @@ function FailureNotice({ result, onReset }: { result: Exclude<CentralPmsResult, 
     <StatusNotice tone={result.error.retryable ? "info" : "danger"} title={titleByKind[result.kind] ?? "Lookup failed"}>
       <p>{result.error.message}</p>
       {result.error.retryable && <p>Retry is available after Central PMS is reachable.</p>}
-      <p className="support-line">Support reference: {result.error.correlationId}</p>
+      {supportReference && <p className="support-line">Support reference: {supportReference}</p>}
       <button className="secondary-action" type="button" onClick={onReset}>Back to lookup</button>
     </StatusNotice>
   );

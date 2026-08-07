@@ -74,7 +74,6 @@ export function StatutoryEvidencePanel({
     ["Ready for review", authoritative.readyForReview ? "Yes" : "No"],
     ["Ready for APT pre-cash", authoritative.readyForAptPreCash ? "Yes" : "No"],
     ["Evaluated", formatDate(authoritative.evaluatedAt)],
-    ["Support reference", authoritative.correlationId],
   ] : [], [authoritative]);
 
   function applyAuthoritative(

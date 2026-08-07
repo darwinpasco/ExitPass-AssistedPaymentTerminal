@@ -282,8 +282,8 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
           </div>
           <dl className="summary-primary">
             <div className="summary-row">
-              <dt>Parking session ID</dt>
-              <dd>{scenario.parkingSessionId}</dd>
+              <dt>Parking session</dt>
+              <dd>Authoritatively resolved</dd>
             </div>
             <div className="summary-row">
               <dt>Ticket reference</dt>

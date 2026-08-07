@@ -132,8 +132,8 @@ export function TransactionCompletionVisualSmokeShell({ config }: { config: AptC
           </div>
           <dl className="summary-primary">
             <div className="summary-row"><dt>Ticket reference</dt><dd>VISUAL-COMPLETE-1001</dd></div>
-            <div className="summary-row"><dt>Parking session ID</dt><dd>{session.parkingSessionId}</dd></div>
-            <div className="summary-row"><dt>Terminal cash tender ID</dt><dd>{terminalCashTenderId}</dd></div>
+            <div className="summary-row"><dt>Parking session</dt><dd>Authoritatively resolved</dd></div>
+            <div className="summary-row"><dt>Cash custody</dt><dd>Durable record restored</dd></div>
           </dl>
         </section>
         <CashCapturePanel

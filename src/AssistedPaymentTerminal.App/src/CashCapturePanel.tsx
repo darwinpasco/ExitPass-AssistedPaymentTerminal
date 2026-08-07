@@ -834,23 +834,20 @@ export function CashCapturePanel({
         <div className="cash-error" role="alert">
           <strong>Duplicate local cash tender rejected.</strong>
           <p>{status.message}</p>
-          <p>Existing local tender ID: {status.existingTenderId ?? "Unavailable"}</p>
           <p>Existing local state: {status.existingState ?? "Unavailable"}</p>
-          <p>Correlation ID: {status.correlationId}</p>
+          <p>The terminal retained the existing custody record and internal diagnostic references.</p>
         </div>
       )}
 
       {existingTender && status.kind !== "success" && (
         <div className="cash-readback">
           <h3>Existing local custody record</h3>
-          <p>Local tender ID: {existingTender.id}</p>
           <p>Local state: {existingTender.currentLocalState}</p>
-          <p>Correlation ID: {existingTender.correlationId}</p>
           {existingTender.statutoryDiscountDecisionCommandId && (
             <dl className="central-pms-details" data-testid="statutory-tender-evidence">
-              <div><dt>Statutory decision</dt><dd>{existingTender.statutoryDiscountDecisionCommandId}</dd></div>
-              <div><dt>Statutory application</dt><dd>{existingTender.statutoryDiscountPayableBasisApplicationCommandId ?? "Unavailable"}</dd></div>
-              <div><dt>Applied tariff snapshot</dt><dd>{existingTender.statutoryAppliedTariffSnapshotId ?? existingTender.tariffSnapshotId}</dd></div>
+              <div><dt>Statutory decision</dt><dd>Recorded</dd></div>
+              <div><dt>Statutory application</dt><dd>{existingTender.statutoryDiscountPayableBasisApplicationCommandId ? "Recorded" : "Unavailable"}</dd></div>
+              <div><dt>Applied tariff</dt><dd>Authoritative version retained</dd></div>
               <div><dt>Final statutory amount</dt><dd>{formatMoney(existingTender.statutoryFinalAmountMinorUnits, existingTender.statutoryCurrency ?? existingTender.currency)}</dd></div>
               <div><dt>Revalidated at</dt><dd>{existingTender.statutoryImmediateRevalidatedAt ? formatDateTime(existingTender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
             </dl>
@@ -923,14 +920,12 @@ export function CashCapturePanel({
       {status.kind === "success" && (
         <div className="cash-success" role="status">
           <h3>Cash received locally</h3>
-          <p>Local tender ID: {status.tender.id}</p>
           <p>Local state: {status.tender.currentLocalState}</p>
-          <p>Correlation ID: {status.correlationId}</p>
           {status.tender.statutoryDiscountDecisionCommandId && (
             <dl className="central-pms-details" data-testid="statutory-tender-evidence">
-              <div><dt>Statutory decision</dt><dd>{status.tender.statutoryDiscountDecisionCommandId}</dd></div>
-              <div><dt>Statutory application</dt><dd>{status.tender.statutoryDiscountPayableBasisApplicationCommandId ?? "Unavailable"}</dd></div>
-              <div><dt>Applied tariff snapshot</dt><dd>{status.tender.statutoryAppliedTariffSnapshotId ?? status.tender.tariffSnapshotId}</dd></div>
+              <div><dt>Statutory decision</dt><dd>Recorded</dd></div>
+              <div><dt>Statutory application</dt><dd>{status.tender.statutoryDiscountPayableBasisApplicationCommandId ? "Recorded" : "Unavailable"}</dd></div>
+              <div><dt>Applied tariff</dt><dd>Authoritative version retained</dd></div>
               <div><dt>Final statutory amount</dt><dd>{formatMoney(status.tender.statutoryFinalAmountMinorUnits, status.tender.statutoryCurrency ?? status.tender.currency)}</dd></div>
               <div><dt>Revalidated at</dt><dd>{status.tender.statutoryImmediateRevalidatedAt ? formatDateTime(status.tender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
             </dl>
@@ -1265,11 +1260,8 @@ function CashierTransactionStatePanel({ state }: { state: CashierTransactionStat
         <PreviewMeta label="Receipt presentation" value={friendlyState(state.receiptPresentation)} testId="receipt-presentation-state" />
         <PreviewMeta label="Exit authorization" value={friendlyState(state.exitAuthorization)} testId="exit-authorization-state" />
         <PreviewMeta label="Cashier completion" value={friendlyState(state.completion)} testId="cashier-completion-state" />
-        <PreviewMeta label="Terminal cash tender ID" value={state.terminalCashTenderId} />
-        <PreviewMeta label="Payment confirmation ID" value={state.paymentConfirmationId} />
         <PreviewMeta label="Sales Invoice No." value={state.fiscalDocumentNumber} />
         <PreviewMeta label="Latest update" value={state.latestUpdatedAt ? formatDateTime(state.latestUpdatedAt) : null} />
-        <PreviewMeta label="Support reference" value={state.supportReference} />
       </dl>
       {state.exitAuthorization === "EXIT_AUTHORIZATION_READBACK_CONTRACT_MISSING" && (
         <p>ExitAuthorization readback is not evaluated in this desktop slice because no APT-usable Central PMS readback contract is present. No authorization is inferred locally.</p>
@@ -1314,7 +1306,7 @@ function CentralPmsCanonicalPaymentPanel({
         <h3>Central PMS canonical payment</h3>
         <p>{centralPmsStatus.message}</p>
         <p>Cash received locally. Canonical payment not yet confirmed. Fiscal issuance not started. Exit authorization unavailable.</p>
-        <p>Correlation ID: {centralPmsStatus.correlationId}</p>
+        <p>An internal diagnostic reference is retained for support.</p>
         <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
           Submit / Check Central PMS
         </button>
@@ -1349,14 +1341,6 @@ function CentralPmsCanonicalPaymentPanel({
           <p>{replay ? "Idempotent replay confirmed the existing command; no new charge was created." : "Central PMS accepted the persisted cash-payment command."}</p>
           <dl className="central-pms-details">
             <div>
-              <dt>Payment-attempt ID</dt>
-              <dd>{command?.canonicalPaymentAttemptId ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Payment-confirmation ID</dt>
-              <dd>{command?.canonicalPaymentConfirmationId ?? "Unavailable"}</dd>
-            </div>
-            <div>
               <dt>Result classification</dt>
               <dd>{command?.resultClassification ?? "CONFIRMED"}</dd>
             </div>
@@ -1364,16 +1348,11 @@ function CentralPmsCanonicalPaymentPanel({
               <dt>Confirmation timestamp</dt>
               <dd>{command?.confirmedAt ? formatDateTime(command.confirmedAt) : "Unavailable"}</dd>
             </div>
-            <div>
-              <dt>Correlation ID</dt>
-              <dd>{command?.originalCorrelationId ?? "Unavailable"}</dd>
-            </div>
           </dl>
         </>
       ) : conflict ? (
         <>
           <p>Central PMS reported a semantic conflict. Supervisor or support review is required.</p>
-          <p>Existing local tender reference: {command?.terminalCashTenderId ?? "Unavailable"}</p>
           <p>Safe error code: {command?.lastSafeErrorCode ?? "CONFLICT"}</p>
         </>
       ) : rejected ? (
@@ -1444,7 +1423,7 @@ function CentralPmsFiscalIssuancePanel({
         <h3>Fiscal issuance</h3>
         <p>{fiscalStatus.message}</p>
         <p>Canonical payment remains confirmed. Fiscal issuance incomplete. Supervisor or support review is required.</p>
-        <p>Correlation ID: {fiscalStatus.correlationId}</p>
+        <p>An internal diagnostic reference is retained for support.</p>
         <button className="secondary-action" type="button" onClick={onSubmitOrReadback}>
           Issue / Check Fiscal Document
         </button>
@@ -1487,14 +1466,6 @@ function CentralPmsFiscalIssuancePanel({
           <p>{replay ? "Idempotent replay restored the existing fiscal document; no duplicate document was created." : "Central PMS recorded the fiscal workflow result."}</p>
           <dl className="central-pms-details">
             <div>
-              <dt>Fiscal-issuance reference</dt>
-              <dd>{command?.fiscalIssuanceReferenceId ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>POS fiscal-document ID</dt>
-              <dd>{command?.posFiscalDocumentId ?? "Unavailable"}</dd>
-            </div>
-            <div>
               <dt>Fiscal-document number</dt>
               <dd>{command?.fiscalDocumentNumber ?? "Unavailable"}</dd>
             </div>
@@ -1510,17 +1481,11 @@ function CentralPmsFiscalIssuancePanel({
               <dt>Fiscal state</dt>
               <dd>{command?.fiscalIssuanceState ?? "Unavailable"}</dd>
             </div>
-            <div>
-              <dt>Correlation ID</dt>
-              <dd>{command?.fiscalCorrelationId ?? "Unavailable"}</dd>
-            </div>
           </dl>
         </>
       ) : conflict ? (
         <>
           <p>Central PMS reported a fiscal conflict. Supervisor or support review is required.</p>
-          <p>Fiscal command reference: {command?.localFiscalCommandId ?? "Unavailable"}</p>
-          <p>Terminal cash tender: {command?.terminalCashTenderId ?? "Unavailable"}</p>
           <p>Safe error code: {command?.lastSafeErrorCode ?? "CONFLICT"}</p>
         </>
       ) : rejected ? (
@@ -1532,7 +1497,7 @@ function CentralPmsFiscalIssuancePanel({
       ) : (
         <>
           <p>{pending ? "Fiscal issuance pending." : `Fiscal status: ${command?.statusLabel}`}</p>
-          <p>{command?.fiscalIssuanceReferenceId ? `Fiscal reference: ${command.fiscalIssuanceReferenceId}` : "No fiscal document recorded yet."}</p>
+          <p>{command?.fiscalIssuanceReferenceId ? "A fiscal issuance record is pending authoritative completion." : "No fiscal document recorded yet."}</p>
           <p>{command?.lastSafeErrorCode ? `Safe error code: ${command.lastSafeErrorCode}` : "Use the persisted fiscal command to issue or check status."}</p>
         </>
       )}
@@ -1596,7 +1561,7 @@ function CentralPmsReceiptAvailabilityPanel({
         <h3>Receipt availability</h3>
         <p>{receiptStatus.message}</p>
         <p>Fiscal document remains recorded. Receipt retrieval incomplete. Supervisor or support review is required.</p>
-        <p>Correlation ID: {receiptStatus.correlationId}</p>
+        <p>An internal diagnostic reference is retained for support.</p>
         <button className="secondary-action" type="button" onClick={onRetrieveOrCheck}>
           Retrieve / Check Receipt
         </button>
@@ -1654,14 +1619,6 @@ function CentralPmsReceiptAvailabilityPanel({
               <dd>{command?.canonicalPaymentStatus ?? "Unavailable"}</dd>
             </div>
             <div>
-              <dt>Fiscal issuance reference</dt>
-              <dd>{command?.fiscalIssuanceReferenceId ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>POS fiscal-document ID</dt>
-              <dd>{command?.posFiscalDocumentId ?? "Unavailable"}</dd>
-            </div>
-            <div>
               <dt>Fiscal-document number</dt>
               <dd>{command?.fiscalDocumentNumber ?? "Unavailable"}</dd>
             </div>
@@ -1690,28 +1647,8 @@ function CentralPmsReceiptAvailabilityPanel({
               <dd>{command?.retrievedAt ? formatDateTime(command.retrievedAt) : "Unavailable"}</dd>
             </div>
             <div>
-              <dt>Payload hash</dt>
-              <dd>{command?.authoritativePayloadHash ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Semantic hash</dt>
-              <dd>{command?.semanticRequestHash ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Semantic hash version</dt>
-              <dd>{command?.semanticRequestHashVersion ?? "Unavailable"}</dd>
-            </div>
-            <div>
               <dt>Semantic hash status</dt>
               <dd>{command?.semanticRequestHashStatus ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Correlation ID</dt>
-              <dd>{command?.retrievalCorrelationId ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Central PMS correlation ID</dt>
-              <dd>{command?.lastCentralPmsCorrelationId ?? "Unavailable"}</dd>
             </div>
             <div>
               <dt>Last Central PMS update</dt>
@@ -1738,7 +1675,6 @@ function CentralPmsReceiptAvailabilityPanel({
       ) : inconsistent ? (
         <>
           <p>Central PMS reported conflicting terminal-cash, fiscal, or POS-document references. Supervisor or support review is required.</p>
-          <p>Receipt command reference: {command?.localReceiptRetrievalId ?? "Unavailable"}</p>
           <p>Safe error code: {command?.lastSafeErrorCode ?? "INCONSISTENT"}</p>
         </>
       ) : rejected ? (
@@ -1867,10 +1803,6 @@ function ReceiptPrintPanel({
         <div>
           <dt>Copy sequence</dt>
           <dd>{latestJob?.copySequence ? String(latestJob.copySequence) : "Not printed"}</dd>
-        </div>
-        <div>
-          <dt>Support reference</dt>
-          <dd>{latestJob?.correlationId ?? "Unavailable"}</dd>
         </div>
       </dl>
 
@@ -2035,10 +1967,6 @@ function SalesInvoicePrintHistoryPanel({
               <h4>Print Attempt Detail</h4>
               <p>{status.detail.statusExplanation}</p>
               <dl className="central-pms-details">
-                <PreviewMeta label="Support reference" value={status.detail.job.correlationId} />
-                <PreviewMeta label="Print job ID" value={status.detail.job.printJobId} />
-                <PreviewMeta label="Terminal cash tender ID" value={status.detail.job.terminalCashTenderId} />
-                <PreviewMeta label="Fiscal document ID" value={status.detail.job.posFiscalDocumentId} />
                 <PreviewMeta label="Sales Invoice No." value={status.detail.job.fiscalDocumentNumber} />
                 <PreviewMeta label="Classification" value={status.detail.job.classificationLabel} />
                 <PreviewMeta label="Copy sequence" value={String(status.detail.job.copySequence)} />
@@ -2046,9 +1974,6 @@ function SalesInvoicePrintHistoryPanel({
                 <PreviewMeta label="Paper width" value={`${status.detail.job.paperWidthMm} mm`} />
                 <PreviewMeta label="Presentation version" value={status.detail.job.presentationVersion} />
                 <PreviewMeta label="Template version" value={status.detail.job.templateVersion} />
-                <PreviewMeta label="Payload hash evidence" value={status.detail.shortAuthoritativePayloadHash} />
-                <PreviewMeta label="Semantic hash evidence" value={status.detail.shortSemanticRequestHash} />
-                <PreviewMeta label="Windows spooler job ID" value={status.detail.job.windowsSpoolerJobId} />
                 <PreviewMeta label="Requested at" value={formatDateTime(status.detail.job.requestedAt)} />
                 <PreviewMeta label="Submission started at" value={status.detail.job.submissionStartedAt ? formatDateTime(status.detail.job.submissionStartedAt) : null} />
                 <PreviewMeta label="Submitted to printer at" value={status.detail.job.submittedToSpoolerAt ? formatDateTime(status.detail.job.submittedToSpoolerAt) : null} />
@@ -2131,12 +2056,7 @@ function ReceiptPreviewSurface({
                 <PreviewMeta label="Presentation version" value={command.presentationVersion} />
                 <PreviewMeta label="Template version" value={command.templateVersion} />
                 <PreviewMeta label="Content type" value={command.contentType} />
-                <PreviewMeta label="Payload hash" value={command.authoritativePayloadHash} />
-                <PreviewMeta label="Semantic hash" value={command.semanticRequestHash} />
-                <PreviewMeta label="Semantic hash version" value={command.semanticRequestHashVersion} />
                 <PreviewMeta label="Semantic hash status" value={command.semanticRequestHashStatus} />
-                <PreviewMeta label="Correlation ID" value={command.retrievalCorrelationId} />
-                <PreviewMeta label="Central PMS correlation ID" value={command.lastCentralPmsCorrelationId} />
               </dl>
             )}
           </div>
@@ -2161,13 +2081,8 @@ function ReceiptPreviewSurface({
                 <PreviewMeta label="Presentation version" value={preview.presentationVersion} />
                 <PreviewMeta label="Template version" value={preview.templateVersion} />
                 <PreviewMeta label="Content type" value={preview.contentType} />
-                <PreviewMeta label="Payload hash" value={preview.authoritativePayloadHash} />
-                <PreviewMeta label="Semantic hash" value={preview.semanticRequestHash} />
-                <PreviewMeta label="Semantic hash version" value={preview.semanticRequestHashVersion} />
                 <PreviewMeta label="Semantic hash status" value={preview.semanticRequestHashStatus} />
                 <PreviewMeta label="Retrieval timestamp" value={preview.retrievedAt ? formatDateTime(preview.retrievedAt) : "Unavailable"} />
-                <PreviewMeta label="Correlation ID" value={preview.retrievalCorrelationId} />
-                <PreviewMeta label="Central PMS correlation ID" value={preview.centralPmsCorrelationId} />
                 {preview.voided && <PreviewMeta label="Void status" value={preview.voidStatus} />}
               </dl>
             </details>

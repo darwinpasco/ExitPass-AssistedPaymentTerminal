@@ -133,7 +133,8 @@ describe("CashCapturePanel", () => {
       centralPmsCorrelationId: "corr-second-revalidation",
       readinessStatus: "APPLIED",
     });
-    expect(await screen.findByTestId("statutory-tender-evidence")).toHaveTextContent("99999999-9999-4999-8999-999999990001");
+    expect(await screen.findByTestId("statutory-tender-evidence")).toHaveTextContent("Authoritative version retained");
+    expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
   });
 
   it("blocks CASH_RECEIVED when immediate statutory revalidation changes the amount", async () => {
@@ -191,13 +192,13 @@ describe("CashCapturePanel", () => {
     expect(payload.denominations.map((denomination) => denomination.denominationCode)).not.toContain("PHP-50");
   });
 
-  it("displays local tender ID and historical local-custody checkpoint after CASH_RECEIVED", async () => {
+  it("displays the historical local-custody checkpoint without exposing the local tender identity", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
 
     await recordCashReceived();
 
     expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
-    expect(screen.getByText("Local tender ID: tender-001")).toBeInTheDocument();
+    expect(screen.queryByText("Local tender ID: tender-001")).not.toBeInTheDocument();
     expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
     expect(screen.getByText(/At this checkpoint, canonical payment had not yet been submitted/)).toBeInTheDocument();
     expect(screen.getByText(/fiscal issuance had not yet started/)).toBeInTheDocument();
@@ -236,7 +237,8 @@ describe("CashCapturePanel", () => {
     await recordCashReceived();
 
     expect(await screen.findByText("Duplicate local cash tender rejected.")).toBeInTheDocument();
-    expect(screen.getByText("Existing local tender ID: tender-existing")).toBeInTheDocument();
+    expect(screen.queryByText("Existing local tender ID: tender-existing")).not.toBeInTheDocument();
+    expect(screen.getByText(/retained the existing custody record/)).toBeInTheDocument();
   });
 
   it("does not show payment-confirmed or fiscal-complete wording", async () => {
@@ -318,7 +320,7 @@ describe("CashCapturePanel", () => {
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
   });
 
-  it("displays canonical confirmation IDs after submission", async () => {
+  it("displays canonical confirmation status without exposing payment identifiers", async () => {
     renderPanel({
       config: centralEnabledConfig(),
       bridge: new FakeBridge({ centralStatus: centralStatus("Pending"), submitStatus: centralStatus("Confirmed") }),
@@ -328,8 +330,8 @@ describe("CashCapturePanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Submit / Check Central PMS" }));
 
     expect(await screen.findByText("Canonical payment confirmed")).toBeInTheDocument();
-    expect(screen.getByText("payment-attempt-001")).toBeInTheDocument();
-    expect(screen.getAllByText("payment-confirmation-001").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("payment-attempt-001");
+    expect(document.body).not.toHaveTextContent("payment-confirmation-001");
     expect(screen.getByText("Fiscal issuance not started. Exit authorization unavailable.")).toBeInTheDocument();
   });
 
@@ -475,7 +477,7 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText("Receipt not rendered or printed. Exit authorization unavailable.")).toBeInTheDocument();
   });
 
-  it("shows recorded fiscal status with identifiers", async () => {
+  it("shows recorded fiscal status with the cashier-facing Sales Invoice number only", async () => {
     renderPanel({
       config: fiscalEnabledConfig(),
       bridge: new FakeBridge({ centralStatus: centralStatus("Confirmed"), fiscalStatus: fiscalStatus("Recorded") }),
@@ -484,8 +486,8 @@ describe("CashCapturePanel", () => {
     await recordCashReceived();
 
     expect(await screen.findByText("Fiscal document recorded")).toBeInTheDocument();
-    expect(screen.getByText("fiscal-reference-001")).toBeInTheDocument();
-    expect(screen.getByText("pos-fiscal-document-001")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("fiscal-reference-001");
+    expect(document.body).not.toHaveTextContent("pos-fiscal-document-001");
     expect(screen.getAllByText("SI-000001").length).toBeGreaterThan(0);
   });
 
@@ -633,7 +635,7 @@ describe("CashCapturePanel", () => {
     expect(within(screen.getByLabelText("Central PMS receipt availability")).getByText("Receipt not rendered or printed. Exit authorization unavailable.")).toBeInTheDocument();
   });
 
-  it("shows available receipt metadata and payload hash without raw payload", async () => {
+  it("shows cashier-safe available receipt metadata without hashes or raw payload", async () => {
     renderPanel({
       config: receiptEnabledConfig(),
       bridge: new FakeBridge({
@@ -652,7 +654,7 @@ describe("CashCapturePanel", () => {
     expect(receiptPanel.getByText("dsi-presentation-v1")).toBeInTheDocument();
     expect(receiptPanel.getByText("template-v1")).toBeInTheDocument();
     expect(receiptPanel.getByText("application/vnd.exitpass.digital-sales-invoice+json")).toBeInTheDocument();
-    expect(receiptPanel.getByText("sha256:receipt-payload")).toBeInTheDocument();
+    expect(receiptPanel.queryByText("sha256:receipt-payload")).not.toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|receiptLine|taxes|totals|merchantHeader/i);
   });
 
@@ -1082,7 +1084,7 @@ describe("CashCapturePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /Reprint.*Copy sequence 2/s }));
 
     expect(await screen.findByLabelText("Print attempt detail")).toHaveTextContent("Physical paper output is not separately confirmed");
-    expect(screen.getByText("Payload hash evidence")).toBeInTheDocument();
+    expect(screen.queryByText("Payload hash evidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/\{\"presentation\"/)).not.toBeInTheDocument();
     expect(bridge.getSalesInvoicePrintHistoryForTender).toHaveBeenCalled();
     expect(bridge.getSalesInvoicePrintHistoryDetail).toHaveBeenCalledWith(expect.any(String), "print-job-reprint");

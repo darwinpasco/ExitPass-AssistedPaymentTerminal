@@ -138,7 +138,7 @@ Do not log plaintext keys, protected key contents, connection strings, SQLCipher
 
 ## Known Limitations
 
-- Plaintext migration is not implemented.
+- Plaintext migration is implemented only as the separately authorized offline maintenance operation documented in `ExitPass_APT_Plaintext_Database_Migration_Runtime_Implementation_v1.0.md`; normal startup still never migrates automatically and remains fail closed.
 - Database-key rotation is not implemented.
 - Backup and support bundle protection are not implemented.
 - Terminal replacement recovery is not implemented.
