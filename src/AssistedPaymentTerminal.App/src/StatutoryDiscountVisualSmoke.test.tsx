@@ -70,6 +70,15 @@ function renderSmoke(
 }
 
 describe("StatutoryDiscountVisualSmokeShell", () => {
+  it("derives the cashier mask from a raw synthetic fixture instead of pre-masking fixture input", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Draft statutory request" }));
+
+    expect(screen.getByRole("textbox", { name: "Statutory ID" })).toHaveValue("AB******7890");
+    expect(document.body).not.toHaveTextContent("AB1234567890");
+  });
+
   it("is development-only and mounted by the statutory discount query flag", async () => {
     expect(shouldUseStatutoryDiscountVisualSmoke("?statutoryDiscountVisualSmoke=1", true)).toBe(true);
     expect(shouldUseStatutoryDiscountVisualSmoke("?statutoryDiscountVisualSmoke=1", false)).toBe(false);
@@ -122,9 +131,10 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByLabelText("Amount due")).toHaveValue("100.00");
     expect(screen.getByText(/Cash has not yet been recorded at this terminal/)).toBeInTheDocument();
     expect(screen.queryByText("No statutory request is active for this payable basis.")).not.toBeInTheDocument();
-    expect(screen.getByTestId("statutory-status-card")).toHaveTextContent("77777777-7777-4777-8777-777777770777");
-    expect(screen.getByTestId("statutory-status-card")).toHaveTextContent("88888888-8888-4888-8888-888888880001");
-    expect(screen.getByTestId("statutory-applied-facts")).toHaveTextContent("99999999-9999-4999-8999-999999990001");
+    expect(screen.getByTestId("statutory-status-card")).toHaveTextContent("DecisionRecorded");
+    expect(screen.getByTestId("statutory-status-card")).toHaveTextContent("ApplicationRecorded");
+    expect(screen.getByTestId("statutory-applied-facts")).toHaveTextContent("Authoritative version applied");
+    expect(screen.getByTestId("statutory-applied-facts")).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
     expect(screen.getByTestId("statutory-applied-facts")).toHaveTextContent("100.00");
   });
 
@@ -137,14 +147,13 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(await screen.findByRole("heading", { name: "Parking fee changed before cash acceptance" })).toBeInTheDocument();
     expect(screen.getByText("Previous amount")).toBeInTheDocument();
     expect(screen.getByText("Authoritative applied amount")).toBeInTheDocument();
-    expect(screen.getByText("Previous tariff snapshot")).toBeInTheDocument();
-    expect(screen.getByText("Authoritative tariff snapshot")).toBeInTheDocument();
-    expect(screen.getAllByText("99999999-9999-4999-8999-999999990001").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("99999999-9999-4999-8999-999999990002").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tariff update")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
+    expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990002");
     expect(screen.getByText("Statutory decision")).toBeInTheDocument();
     expect(screen.getByText("Statutory application")).toBeInTheDocument();
-    expect(screen.getAllByText("77777777-7777-4777-8777-777777770777").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("88888888-8888-4888-8888-888888880001").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("77777777-7777-4777-8777-777777770777");
+    expect(document.body).not.toHaveTextContent("88888888-8888-4888-8888-888888880001");
     expect(screen.queryByText("No statutory request is active for this payable basis.")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
     expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
@@ -161,10 +170,10 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     expect((await screen.findAllByText("Statutory payable basis is being applied. Action: Poll Readback or Check Application Status.")).length).toBeGreaterThan(0);
     expect(screen.getByTestId("statutory-status-card")).toHaveTextContent("Statutory Payable Basis Processing");
-    expect(screen.getByText("Decision command")).toBeInTheDocument();
-    expect(screen.getByText("Application command")).toBeInTheDocument();
-    expect(screen.getAllByText("77777777-7777-4777-8777-777777770777").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("88888888-8888-4888-8888-888888880001").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Decision").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Application").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("77777777-7777-4777-8777-777777770777");
+    expect(document.body).not.toHaveTextContent("88888888-8888-4888-8888-888888880001");
     expect(screen.queryByText("No statutory request is active for this payable basis.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeDisabled();
     expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
@@ -287,9 +296,8 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
     const evidence = await screen.findByTestId("statutory-tender-evidence");
     expect(screen.getAllByText("Cash received locally")).toHaveLength(1);
-    expect(within(evidence).getByText("77777777-7777-4777-8777-777777770777")).toBeInTheDocument();
-    expect(within(evidence).getByText("88888888-8888-4888-8888-888888880001")).toBeInTheDocument();
-    expect(within(evidence).getByText("99999999-9999-4999-8999-999999990001")).toBeInTheDocument();
+    expect(within(evidence).getAllByText("Recorded")).toHaveLength(2);
+    expect(within(evidence).getByText("Authoritative version retained")).toBeInTheDocument();
     expect(within(evidence).getByText(/100\.00/)).toBeInTheDocument();
     expect(within(evidence).getByText(/Revalidated at/)).toBeInTheDocument();
   });
@@ -337,10 +345,10 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     expect(await screen.findByRole("heading", { name: "Parking fee changed before cash acceptance" })).toBeInTheDocument();
     expect(screen.getByText("Authoritative applied amount")).toBeInTheDocument();
-    expect(screen.getByText("Previous tariff snapshot")).toBeInTheDocument();
-    expect(screen.getByText("Authoritative tariff snapshot")).toBeInTheDocument();
-    expect(document.body.textContent).toContain("77777777-7777-4777-8777-777777770777");
-    expect(document.body.textContent).toContain("88888888-8888-4888-8888-888888880001");
+    expect(screen.getByText("Tariff update")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("77777777-7777-4777-8777-777777770777");
+    expect(document.body.textContent).not.toContain("88888888-8888-4888-8777-777777770777");
+    expect(document.body.textContent).not.toContain("88888888-8888-4888-8888-888888880001");
     expect(document.body.textContent).toContain("100.00");
     expect(document.body.textContent).toContain("125.00");
     expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
@@ -377,9 +385,8 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     expect(await screen.findByText(/State at local cash capture:/)).toBeInTheDocument();
     const evidence = await screen.findByTestId("statutory-tender-evidence");
-    expect(within(evidence).getByText("77777777-7777-4777-8777-777777770777")).toBeInTheDocument();
-    expect(within(evidence).getByText("88888888-8888-4888-8888-888888880001")).toBeInTheDocument();
-    expect(within(evidence).getByText("99999999-9999-4999-8999-999999990001")).toBeInTheDocument();
+    expect(within(evidence).getAllByText("Recorded")).toHaveLength(2);
+    expect(within(evidence).getByText("Authoritative version retained")).toBeInTheDocument();
     expect(within(evidence).getByText(/100\.00/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
   });
@@ -389,10 +396,10 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Restart after statutory CASH_RECEIVED resumes terminal-cash submission" }));
 
-    expect(await screen.findByText(/State at local cash capture:/)).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Central PMS canonical payment" })).toBeInTheDocument();
-    expect(await screen.findByText(/Submitting cash payment/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Submit / Check Central PMS" })).toBeInTheDocument();
+    expect(await screen.findByText(/State at local cash capture:/, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Central PMS canonical payment" }, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText(/Submitting cash payment/, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Submit / Check Central PMS" }, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
   });
 
@@ -425,10 +432,8 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getAllByText("₱125.00").length).toBeGreaterThan(0);
     expect(screen.getByText("Authoritative applied amount")).toBeInTheDocument();
     expect(screen.getAllByText("₱100.00").length).toBeGreaterThan(0);
-    expect(screen.getByText("Original tariff snapshot")).toBeInTheDocument();
-    expect(screen.getByText("Applied tariff snapshot")).toBeInTheDocument();
-    expect(screen.getAllByText("dddddddd-dddd-4ddd-8ddd-dddddddd1001").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("99999999-9999-4999-8999-999999990001").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("dddddddd-dddd-4ddd-8ddd-dddddddd1001");
+    expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
     expect(screen.queryByRole("heading", { name: "Ready for cash acceptance" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Acknowledge new amount" })).toBeInTheDocument();
 

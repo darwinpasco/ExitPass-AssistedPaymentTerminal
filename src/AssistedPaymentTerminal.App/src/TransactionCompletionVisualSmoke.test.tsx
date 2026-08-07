@@ -110,7 +110,7 @@ describe("TransactionCompletionVisualSmokeShell", () => {
     expect(statePanel.getByTestId("payment-finality-state")).toHaveTextContent("Payment Finality Pending");
     expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction In Progress");
     expect(screen.getByText(/Restart preserves pending payment readback and the same tender identity/i)).toBeInTheDocument();
-    expect(screen.getAllByText("eeeeeeee-eeee-4eee-8eee-eeeeeeee9001").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("eeeeeeee-eeee-4eee-8eee-eeeeeeee9001");
     expect(screen.getByRole("button", { name: "Check Payment Status" })).toBeInTheDocument();
   });
 
@@ -131,13 +131,13 @@ describe("TransactionCompletionVisualSmokeShell", () => {
     expect(retryStatePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Requires Retry");
   });
 
-  it("renders restart-recovery scenarios with the same CASH_RECEIVED tender identity", async () => {
+  it("renders restart recovery without exposing the preserved CASH_RECEIVED tender identity", async () => {
     render(<TransactionCompletionVisualSmokeShell config={mode1Config()} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Restart during fiscal pending" }));
 
     const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
-    expect(screen.getAllByText("eeeeeeee-eeee-4eee-8eee-eeeeeeee9001").length).toBeGreaterThan(0);
+    expect(document.body).not.toHaveTextContent("eeeeeeee-eeee-4eee-8eee-eeeeeeee9001");
     await waitFor(() => expect(statePanel.getByTestId("fiscal-issuance-state")).toHaveTextContent("Fiscal Pending"));
     expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction In Progress");
     expect(screen.getByText(/Restart preserves payment finality and pending fiscal state/i)).toBeInTheDocument();

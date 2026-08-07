@@ -1,10 +1,11 @@
-﻿import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
 import type { CentralPmsClient, CentralPmsResult, PayableBasisResponse, StatutoryDiscountWorkflowState } from "./api/centralPmsTypes";
 import type { AptConfig } from "./config";
 import type { CashTenderSnapshot, CentralPmsCashSubmissionStatus } from "./localJournalBridge";
 import { createPayableBasisVisualSmokeBridge, type PayableBasisVisualSmokeBridge } from "./PayableBasisVisualSmoke";
 import type { StatutoryEvidenceBridge, StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
+import { maskStatutoryId } from "./statutoryIdMasking";
 
 export type StatutoryDiscountVisualSmokeScenarioId =
   | "none"
@@ -65,6 +66,7 @@ const decisionId = "77777777-7777-4777-8777-777777770777";
 const applicationId = "88888888-8888-4888-8888-888888880001";
 const originalSnapshot = "dddddddd-dddd-4ddd-8ddd-dddddddd1001";
 const appliedSnapshot = "99999999-9999-4999-8999-999999990001";
+const syntheticRawStatutoryId = "AB1234567890";
 
 export const statutoryDiscountVisualSmokeScenarios: StatutoryDiscountVisualSmokeScenario[] = [
   { id: "none", label: "No statutory request", expectedPosture: "Original payable basis is visible; no statutory request is active.", state: { status: "none" } },
@@ -409,7 +411,7 @@ function baseState(status: StatutoryDiscountWorkflowState["status"], overrides: 
   return {
     status,
     entitlementType: "SENIOR_CITIZEN",
-    maskedIdReference: "SC-****-0001",
+    maskedIdReference: maskStatutoryId(syntheticRawStatutoryId),
     idDocumentType: "OSCA_ID",
     issuingAuthority: "OSCA",
     requesterAttested: true,
@@ -687,5 +689,4 @@ function pendingSubmissionStatus(tender: CashTenderSnapshot): CentralPmsCashSubm
     },
   };
 }
-
 

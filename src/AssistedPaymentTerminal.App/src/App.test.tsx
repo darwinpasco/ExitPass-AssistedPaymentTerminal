@@ -6,6 +6,7 @@ import { MockCentralPmsClient } from "./api/mockCentralPms";
 import type { StatutoryOrdinanceAvailabilityResult } from "./api/centralPmsTypes";
 import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext, PayableBasisStateSnapshot } from "./localJournalBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
+import { containsInternalGuid } from "./cashierSafeReferences";
 
 describe("App startup and payable-basis readiness workflow", () => {
   it("refuses unsupported profile at startup", async () => {
@@ -44,11 +45,11 @@ describe("App startup and payable-basis readiness workflow", () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} localJournalBridge={bridgeWithLocalState()} />);
 
     expect(screen.getByLabelText("Operational context")).toBeInTheDocument();
-    expect(screen.getByText("ExitPass Demo Parking")).toBeInTheDocument();
-    expect(screen.getByText("Development Cashier")).toBeInTheDocument();
+    expect(screen.getByTestId("operational-site-summary")).toHaveTextContent("ExitPass Demo Parking");
+    expect(screen.getByTestId("operational-cashier-summary")).toHaveTextContent("Development Cashier");
     expect(screen.getByText("No active shift")).toBeInTheDocument();
-    expect(screen.getByText("Development Cashier Terminal 1")).toBeInTheDocument();
-    expect(screen.getByText("Configured: POS-DEV-001")).toBeInTheDocument();
+    expect(screen.getByTestId("operational-terminal-summary")).toHaveTextContent("Development Cashier Terminal 1");
+    expect(screen.getByTestId("operational-pos-readiness-summary")).toHaveTextContent("Configured");
   });
 
   it("does not allow the development profile to fabricate Shift OPEN on a fresh local database", async () => {
@@ -125,8 +126,8 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(requestedContext).not.toHaveProperty("cashierShiftId");
     expect(screen.getAllByText("OPEN").length).toBeGreaterThan(0);
     expect(screen.queryByText("No active shift")).not.toBeInTheDocument();
-    expect(screen.getByText("Recovered shift ID")).toBeInTheDocument();
-    expect(screen.getByText("SHIFT-DEV-20260714-A")).toBeInTheDocument();
+    expect(screen.getByText("Recovered shift")).toBeInTheDocument();
+    expect(screen.getByTestId("recovered-shift-id")).toHaveTextContent("Open");
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-ACTIVE-1001");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
@@ -178,14 +179,15 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.getByTestId("cash-readiness-status")).toHaveTextContent("Ready for cash acceptance");
   });
 
-  it("shows not-found failure with support reference and recovery path", async () => {
+  it("shows a safe not-found failure and recovery path without exposing the diagnostic correlation id", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} />);
 
     await userEvent.type(screen.getByLabelText("Ticket reference"), "APT-NOTFOUND-404");
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     expect(await screen.findByText("Parking session not found")).toBeInTheDocument();
-    expect(screen.getByText(/Support reference:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Support reference:/)).not.toBeInTheDocument();
+    expect(containsInternalGuid(document.body.textContent ?? "")).toBe(false);
     await userEvent.click(screen.getByRole("button", { name: "Back to lookup" }));
     expect(screen.queryByText("Parking session not found")).not.toBeInTheDocument();
   });
@@ -232,6 +234,7 @@ describe("App startup and payable-basis readiness workflow", () => {
 
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[0]).not.toBe(calls[1]);
+    expect(containsInternalGuid(document.body.textContent ?? "")).toBe(false);
   });
 
   it("submits safe statutory facts for review and keeps pending-review statutory cash blocked", async () => {
@@ -247,6 +250,10 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.getByLabelText(/Cashier attests safe entitlement facts/)).not.toBeChecked();
     expect(screen.getByRole("button", { name: "Submit for Operator Review" })).toBeDisabled();
 
+    await userEvent.type(screen.getByRole("textbox", { name: "Statutory ID" }), "AB1234567890");
+    await userEvent.tab();
+    expect(screen.getByRole("textbox", { name: "Statutory ID" })).toHaveValue("AB******7890");
+    expect(document.body).not.toHaveTextContent("AB1234567890");
     await userEvent.click(screen.getByLabelText(/Cashier attests safe entitlement facts/));
     await userEvent.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
 
@@ -266,6 +273,10 @@ describe("App startup and payable-basis readiness workflow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
     await screen.findByText("Authoritative payable basis");
     await userEvent.click(await screen.findByRole("button", { name: "Start statutory request" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Statutory ID" }), "123456789012");
+    await userEvent.tab();
+    expect(screen.getByRole("textbox", { name: "Statutory ID" })).toHaveValue("12******9012");
+    expect(document.body).not.toHaveTextContent("123456789012");
     await userEvent.click(screen.getByLabelText(/Cashier attests safe entitlement facts/));
     await userEvent.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
     await screen.findByText("Awaiting Operator Review");

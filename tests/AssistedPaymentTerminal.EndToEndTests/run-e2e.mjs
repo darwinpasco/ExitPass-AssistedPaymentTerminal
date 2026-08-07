@@ -2,7 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { activeCustodyId, activeShiftId, installLocalJournalBridgeFixture } from "./local-journal-fixture.mjs";
+import { installLocalJournalBridgeFixture } from "./local-journal-fixture.mjs";
 
 const root = path.resolve(process.cwd(), "src/AssistedPaymentTerminal.App/dist");
 const port = 4173;
@@ -31,10 +31,10 @@ async function runActiveAndExpiredWorkflow() {
   await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
-  await expect(page.getByText("Configured: POS-DEV-001")).toBeVisible();
+  await expect(page.getByTestId("operational-pos-readiness-summary")).toHaveText("Configured");
   await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("recovered-shift-id")).toHaveText(activeShiftId);
-  await expect(page.getByTestId("active-custody-id")).toHaveText(activeCustodyId);
+  await expect(page.getByTestId("recovered-shift-id")).toHaveText("Open");
+  await expect(page.getByTestId("active-custody-id")).toHaveText("Open");
   await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
@@ -111,7 +111,7 @@ async function runServiceUnavailableFailure() {
 
   await expect(page.getByText("Central PMS temporarily unavailable")).toBeVisible();
   await expect(page.getByText("Retry is available after Central PMS is reachable.")).toBeVisible();
-  await expect(page.getByText(/Support reference:/)).toBeVisible();
+  await expect(page.getByText(/Support reference:/)).toHaveCount(0);
   await page.close();
 }
 

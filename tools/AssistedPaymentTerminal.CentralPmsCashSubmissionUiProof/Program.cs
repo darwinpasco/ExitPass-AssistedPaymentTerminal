@@ -109,7 +109,7 @@ static async Task<Guid> CreateLocalCashReceivedAsync(LocalJournalBridgeHandler h
         posServerId = "pos-proof",
         openingCashAmount = 0m
     });
-    Require(session.RootElement.GetProperty("ok").GetBoolean(), "Session creation failed.");
+    RequireBridgeSuccess(session, "Session creation failed");
     var sessionId = session.RootElement.GetProperty("payload").GetProperty("id").GetGuid();
 
     var tender = await SendAsync(handler, LocalJournalBridgeCommand.StartTender, Guid.NewGuid().ToString("D"), new
@@ -193,6 +193,17 @@ static void Require(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void RequireBridgeSuccess(JsonDocument response, string message)
+{
+    if (response.RootElement.GetProperty("ok").GetBoolean())
+    {
+        return;
+    }
+
+    var safeCode = response.RootElement.GetProperty("error").GetProperty("code").GetString() ?? "UNKNOWN";
+    throw new InvalidOperationException($"{message}. Safe classification: {safeCode}.");
 }
 
 internal sealed class ProofCentralPmsHandler : HttpMessageHandler

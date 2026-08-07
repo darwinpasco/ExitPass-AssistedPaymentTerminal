@@ -1,7 +1,8 @@
-﻿import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LiveCentralPmsClient } from "./centralPmsClient";
 import type { PayableBasisResponse, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
 import { mode1Config } from "../test/testConfig";
+import { maskStatutoryId } from "../statutoryIdMasking";
 
 describe("LiveCentralPmsClient", () => {
   it("posts ticket resolves to the APT payable-basis facade with site and correlation headers", async () => {
@@ -152,7 +153,7 @@ describe("LiveCentralPmsClient", () => {
       idDocumentType: "OSCA_ID",
       issuingAuthority: "OSCA",
       expiryDate: null,
-      maskedIdReference: "SC-****-0001",
+      maskedIdReference: maskStatutoryId("AB1234567890"),
       evidenceCaptureRequested: false,
       evidenceReferences: null,
       requesterAttestation: true,
@@ -172,7 +173,7 @@ describe("LiveCentralPmsClient", () => {
     }));
     const body = String(vi.mocked(fetchMock).mock.calls[0][1]?.body);
     expect(body).toContain('"applyPayableBasis":false');
-    expect(body).toContain('"maskedIdReference":"SC-****-0001"');
+    expect(body).toContain('"maskedIdReference":"AB******7890"');
     expect(body).not.toContain("reviewerUserId");
     expect(body).not.toContain("reviewerAttestation");
     expect(body).not.toContain("statutoryDiscountAmountMinorUnits");

@@ -41,7 +41,7 @@ describe("Statutory ordinance availability gate", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Checking authoritative");
     expect(screen.queryByTestId("covered-entitlement-selector")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Masked statutory ID reference")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Statutory ID")).not.toBeInTheDocument();
   });
 
   it("offers keyboard-focusable retry only for retryable authoritative failures", () => {

@@ -11,8 +11,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$proofRoot = if ([string]::IsNullOrWhiteSpace($DatabasePath)) {
+  Join-Path $env:TEMP ("exitpass-apt-receipt-visual-smoke-" + [guid]::NewGuid().ToString("N"))
+} else {
+  $null
+}
 $databasePath = if ([string]::IsNullOrWhiteSpace($DatabasePath)) {
-  Join-Path $env:TEMP "exitpass-apt-receipt-visual-smoke.db"
+  Join-Path $proofRoot "cash-journal.db"
 } else {
   [System.IO.Path]::GetFullPath($DatabasePath)
 }
@@ -83,6 +88,9 @@ function Wait-ForLoopbackPort {
 }
 
 try {
+  if ($proofRoot) {
+    New-Item -ItemType Directory -Path $proofRoot -Force | Out-Null
+  }
   $hostProcess = Start-Process `
     -FilePath "powershell" `
     -ArgumentList @(
@@ -258,7 +266,7 @@ try {
   Write-Host ""
   Write-Host "Clean shutdown: close the desktop window or press Ctrl+C in this console."
   Write-Host "Optional cleanup after manual testing:"
-  Write-Host "Remove-Item `"$databasePath*`" -Force -ErrorAction SilentlyContinue"
+  Write-Host $(if ($proofRoot) { "Remove-Item `"$proofRoot`" -Recurse -Force -ErrorAction SilentlyContinue" } else { "Remove-Item `"$databasePath*`" -Force -ErrorAction SilentlyContinue" })
   Write-Host ""
 
   $desktopProjectPath = Join-Path $repoRoot "src\AssistedPaymentTerminal.Desktop"
@@ -287,6 +295,10 @@ finally {
   Restore-Environment
 
   if ($CleanupDatabaseOnExit) {
-    Remove-Item "$databasePath*" -Force -ErrorAction SilentlyContinue
+    if ($proofRoot) {
+      Remove-Item -LiteralPath $proofRoot -Recurse -Force -ErrorAction SilentlyContinue
+    } else {
+      Remove-Item "$databasePath*" -Force -ErrorAction SilentlyContinue
+    }
   }
 }
