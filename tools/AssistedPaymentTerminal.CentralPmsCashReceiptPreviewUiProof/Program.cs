@@ -169,6 +169,15 @@ static async Task<Guid> SeedScenarioAsync(
 {
     var options = Options(databasePath);
     var journal = new CashJournalService(options);
+    var shift = await journal.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+        CashierShiftId: "shift-preview",
+        CashierId: "cashier-preview",
+        AuthenticatedCashierSessionReference: "auth-preview",
+        TerminalId: "terminal-preview",
+        SiteId: "11111111-1111-4111-8111-111111111111",
+        SiteGroupId: "22222222-2222-4222-8222-222222222222",
+        PosServerId: "pos-preview")).ConfigureAwait(false);
+    Require(shift.IsSuccess, "Cashier shift was not created.");
     var session = await journal.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
         CashierId: "cashier-preview",
         AuthenticatedCashierSessionReference: "auth-preview",

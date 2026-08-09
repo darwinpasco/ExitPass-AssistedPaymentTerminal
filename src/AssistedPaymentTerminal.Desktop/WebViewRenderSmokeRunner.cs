@@ -16,6 +16,7 @@ public static class WebViewRenderSmokeRunner
             TaskCreationOptions.RunContinuationsAsynchronously);
         var resourceFailures = new List<string>();
         var consoleErrors = new List<string>();
+        var webMessages = new List<string>();
 
         var window = new Window
         {
@@ -54,9 +55,16 @@ public static class WebViewRenderSmokeRunner
             }
 
             core.Settings.AreDevToolsEnabled = false;
+            core.Settings.IsPasswordAutosaveEnabled = false;
+            core.Settings.IsGeneralAutofillEnabled = false;
+            await core.Profile.ClearBrowsingDataAsync(
+                CoreWebView2BrowsingDataKinds.PasswordAutosave |
+                CoreWebView2BrowsingDataKinds.GeneralAutofill);
             core.WebMessageReceived += (_, args) =>
             {
                 var message = args.TryGetWebMessageAsString();
+                webMessages.Add(message);
+                TryRespondToHumanSessionRestore(core, message);
                 Trace.TraceInformation(
                     "WebView smoke frontend diagnostic. message={0}",
                     message);
@@ -157,6 +165,12 @@ public static class WebViewRenderSmokeRunner
                     $"Browser console errors occurred: {string.Join("; ", consoleErrors)}.");
             }
 
+            var credentialBoundaryFailure = await VerifyBrowserCredentialExclusionAsync(webView, webMessages);
+            if (credentialBoundaryFailure is not null)
+            {
+                return new WebViewRenderSmokeResult(false, credentialBoundaryFailure);
+            }
+
             return new WebViewRenderSmokeResult(true, null);
         }
         catch (Exception exception)
@@ -166,6 +180,123 @@ public static class WebViewRenderSmokeRunner
         finally
         {
             window.Close();
+        }
+    }
+
+    private static async Task<string?> VerifyBrowserCredentialExclusionAsync(WebView2 webView, List<string> webMessages)
+    {
+        var hasLoginShell = await ExecuteBooleanScriptAsync(
+            webView,
+            "Boolean(document.querySelector('[data-testid=\"apt-human-login-shell\"][data-app-ready=\"true\"]'))");
+        if (!hasLoginShell)
+        {
+            return "The WebView credential-exclusion proof requires the initialized human-login shell.";
+        }
+
+        var browserOwnsPasswordInput = await ExecuteBooleanScriptAsync(
+            webView,
+            "Boolean(document.querySelector('input[type=\"password\"]'))");
+        if (browserOwnsPasswordInput)
+        {
+            return "The initialized human-login shell exposed a browser-controlled password input.";
+        }
+
+        var submitted = await ExecuteBooleanScriptAsync(
+            webView,
+            """
+            (() => {
+              const shell = document.querySelector('[data-testid="apt-human-login-shell"]');
+              const form = shell?.querySelector('form');
+              const username = shell?.querySelector('#cashierUsername');
+              if (!form || !username) return false;
+              username.value = 'cashier.webview-smoke';
+              const rogueCredentialInput = document.createElement('input');
+              rogueCredentialInput.type = 'password';
+              rogueCredentialInput.value = 'prohibited-browser-restored-value';
+              rogueCredentialInput.hidden = true;
+              form.appendChild(rogueCredentialInput);
+              form.requestSubmit();
+              rogueCredentialInput.remove();
+              return true;
+            })()
+            """);
+        if (!submitted)
+        {
+            return "The initialized human-login shell could not execute the WebView credential-exclusion proof.";
+        }
+
+        await Task.Delay(250);
+        var loginMessages = webMessages.Where(message =>
+            message.Contains("\"source\":\"apt-human-session\"", StringComparison.Ordinal)
+            && message.Contains("\"command\":\"humanSession.login\"", StringComparison.Ordinal)).ToArray();
+        if (loginMessages.Length != 1)
+        {
+            return $"Expected exactly one username-only login prompt request, observed {loginMessages.Length}.";
+        }
+
+        using var document = JsonDocument.Parse(loginMessages[0]);
+        var payload = document.RootElement.GetProperty("payload");
+        var properties = payload.EnumerateObject().Select(property => property.Name).ToArray();
+        if (properties.Length != 1
+            || !string.Equals(properties[0], "username", StringComparison.Ordinal)
+            || loginMessages[0].Contains("prohibited-browser-restored-value", StringComparison.Ordinal))
+        {
+            return "The WebView login request exposed browser-controlled credential data.";
+        }
+
+        return null;
+    }
+
+    private static void TryRespondToHumanSessionRestore(CoreWebView2 core, string message)
+    {
+        try
+        {
+            using var request = JsonDocument.Parse(message);
+            var root = request.RootElement;
+            if (!root.TryGetProperty("source", out var source)
+                || !string.Equals(source.GetString(), HumanSessionBridgeCommand.Source, StringComparison.Ordinal)
+                || !root.TryGetProperty("command", out var command)
+                || !string.Equals(command.GetString(), HumanSessionBridgeCommand.Restore, StringComparison.Ordinal)
+                || !root.TryGetProperty("correlationId", out var correlationId))
+            {
+                return;
+            }
+
+            core.PostWebMessageAsString(JsonSerializer.Serialize(new
+            {
+                source = HumanSessionBridgeCommand.Source,
+                ok = true,
+                command = HumanSessionBridgeCommand.Restore,
+                correlationId = correlationId.GetString(),
+                payload = new
+                {
+                    authenticationState = "UNAUTHENTICATED",
+                    authenticated = false,
+                    deviceTrusted = true,
+                    shiftOperationsAuthorized = false,
+                    custodyOperationsAuthorized = false,
+                    cashOperationsAuthorized = false,
+                    userReference = (string?)null,
+                    username = (string?)null,
+                    displayName = (string?)null,
+                    audience = (string?)null,
+                    assurance = (string?)null,
+                    privilegedAccount = false,
+                    mfaRequired = false,
+                    idleExpiresAt = (string?)null,
+                    absoluteExpiresAt = (string?)null,
+                    safeSupportReference = "APT-WEBVIEW-SMOKE",
+                    safeMessage = "Cashier sign-in is required.",
+                    errorCode = (string?)null,
+                    retryable = false,
+                    activeShift = (object?)null,
+                    activeCashCustodySession = (object?)null
+                }
+            }));
+        }
+        catch (JsonException)
+        {
+            // Non-human-session diagnostics are irrelevant to this bounded smoke response.
         }
     }
 

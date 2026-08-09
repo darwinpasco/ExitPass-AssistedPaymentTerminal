@@ -15,6 +15,7 @@ public partial class MainWindow : Window
     private readonly CashJournalService _journal;
     private readonly LocalJournalBridgeHandler _localJournalBridge;
     private readonly StatutoryEvidenceBridgeHandler _statutoryEvidenceBridge;
+    private readonly HumanSessionBridgeHandler _humanSessionBridge;
     private bool _eventsRegistered;
 
     public MainWindow(WebViewSource source, StartupOptions options)
@@ -24,6 +25,26 @@ public partial class MainWindow : Window
         var localOptions = CreateLocalOperationsOptions(options);
         _journal = new CashJournalService(localOptions);
         var journal = _journal;
+        var humanSessionOptions = CreateHumanSessionOptions(options);
+        var humanSessionHttpHandler = new HttpClientHandler
+        {
+            ClientCertificateOptions = ClientCertificateOption.Automatic
+        };
+        var humanAuthenticationTrace = HumanAuthenticationTrace.FromEnvironment();
+        var humanSessionRuntime = new HumanSessionRuntime(
+            new CentralPmsHumanSessionClient(
+                new HttpClient(humanSessionHttpHandler) { Timeout = TimeSpan.FromSeconds(15) },
+                options.CentralPmsBaseUrl,
+                options.CentralPmsServiceIdentityId,
+                humanAuthenticationTrace),
+            new DpapiCurrentUserHumanSessionCredentialStore(options.HumanSessionCredentialPath),
+            journal,
+            humanSessionOptions,
+            humanAuthenticationTrace);
+        _humanSessionBridge = new HumanSessionBridgeHandler(
+            humanSessionRuntime,
+            new WpfHumanCredentialPrompt(this, humanAuthenticationTrace),
+            trace: humanAuthenticationTrace);
         IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
         {
             "controlled" => new ControlledReceiptPrinter(),
@@ -51,7 +72,9 @@ public partial class MainWindow : Window
             receiptPrintingEnabled: options.EnableReceiptPrinting,
             receiptPrinterName: options.ReceiptPrinterName,
             receiptPrinter: receiptPrinter,
-            siteTimeZoneId: options.SiteTimeZoneId);
+            siteTimeZoneId: options.SiteTimeZoneId,
+            humanCashAuthorization: humanSessionRuntime,
+            allowDevelopmentSessionCommands: false);
         _statutoryEvidenceBridge = new StatutoryEvidenceBridgeHandler(
             new CentralPmsStatutoryEvidenceClient(
                 new HttpClient { Timeout = TimeSpan.FromSeconds(30) },
@@ -70,6 +93,25 @@ public partial class MainWindow : Window
             EnableCentralPmsCashSubmission: options.EnableCentralPmsCashSubmission,
             EnableCentralPmsFiscalIssuance: options.EnableCentralPmsFiscalIssuance,
             EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
+    }
+
+    public static HumanSessionRuntimeOptions? CreateHumanSessionOptions(StartupOptions options)
+    {
+        return !string.IsNullOrWhiteSpace(options.TerminalId)
+            && Guid.TryParse(options.SiteId, out var siteId)
+            && siteId != Guid.Empty
+            && Guid.TryParse(options.SiteGroupId, out var siteGroupId)
+            && siteGroupId != Guid.Empty
+            && !string.IsNullOrWhiteSpace(options.PosServerId)
+            && Guid.TryParse(options.CentralPmsServiceIdentityId, out var deviceId)
+            && deviceId != Guid.Empty
+                ? new HumanSessionRuntimeOptions(
+                    options.TerminalId.Trim(),
+                    siteId,
+                    siteGroupId,
+                    options.PosServerId.Trim(),
+                    deviceId)
+                : null;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -165,6 +207,11 @@ public partial class MainWindow : Window
 
         core.Settings.AreDevToolsEnabled = !_source.IsPackaged;
         core.Settings.IsStatusBarEnabled = false;
+        core.Settings.IsPasswordAutosaveEnabled = false;
+        core.Settings.IsGeneralAutofillEnabled = false;
+        await core.Profile.ClearBrowsingDataAsync(
+            CoreWebView2BrowsingDataKinds.PasswordAutosave |
+            CoreWebView2BrowsingDataKinds.GeneralAutofill);
 
         if (_eventsRegistered)
         {
@@ -235,7 +282,8 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var response = await _statutoryEvidenceBridge.HandleWebMessageAsync(message)
+            var response = await _humanSessionBridge.HandleWebMessageAsync(message)
+                ?? await _statutoryEvidenceBridge.HandleWebMessageAsync(message)
                 ?? await _localJournalBridge.HandleWebMessageAsync(message);
 
             if (response is not null)

@@ -33,7 +33,7 @@ describe("TransactionCompletionVisualSmokeShell", () => {
     expect(shouldUseTransactionCompletionVisualSmoke("?transactionCompletionVisualSmoke=1", false)).toBe(false);
 
     window.__APT_CONFIG__ = rawMode1Config;
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/?humanSessionFixture=1");
 
     render(<App />);
 

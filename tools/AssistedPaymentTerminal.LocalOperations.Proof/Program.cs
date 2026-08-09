@@ -48,6 +48,14 @@ if (args.Any(value => string.Equals(value, "--inspect-state", StringComparison.O
     return;
 }
 
+await RequireSuccess(service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+    CashierShiftId: "proof-shift",
+    CashierId: "proof-cashier",
+    AuthenticatedCashierSessionReference: "proof-auth-session",
+    TerminalId: "proof-terminal",
+    SiteId: "11111111-1111-4111-8111-111111111111",
+    SiteGroupId: "22222222-2222-4222-8222-222222222222",
+    PosServerId: "proof-pos-server")));
 var session = await RequireSuccess(service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
     CashierId: "proof-cashier",
     AuthenticatedCashierSessionReference: "proof-auth-session",

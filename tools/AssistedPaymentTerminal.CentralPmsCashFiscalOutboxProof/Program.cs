@@ -148,6 +148,14 @@ static async Task<TerminalCashPaymentOutboxCommand> CreatePaymentCommandAsync(
     LocalOperationsDatabaseOptions options,
     string suffix)
 {
+    await RequireSuccess(service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+        CashierShiftId: $"proof-shift-{suffix}",
+        CashierId: $"proof-cashier-{suffix}",
+        AuthenticatedCashierSessionReference: $"proof-auth-session-{suffix}",
+        TerminalId: "proof-terminal",
+        SiteId: "11111111-1111-4111-8111-111111111111",
+        SiteGroupId: "22222222-2222-4222-8222-222222222222",
+        PosServerId: "proof-pos-server")));
     var session = await RequireSuccess(service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
         CashierId: $"proof-cashier-{suffix}",
         AuthenticatedCashierSessionReference: $"proof-auth-session-{suffix}",

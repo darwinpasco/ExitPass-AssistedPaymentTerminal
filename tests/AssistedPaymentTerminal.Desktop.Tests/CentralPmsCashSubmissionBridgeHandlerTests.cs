@@ -274,6 +274,15 @@ internal sealed class SubmissionBridgeTestDatabase : IDisposable
     public async Task<TerminalCashPaymentOutboxCommand> CreateReceivedTenderWithOutboxAsync()
     {
         var service = new CashJournalService(Options);
+        var shift = await service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            CashierShiftId: "shift-bridge",
+            CashierId: "cashier-bridge",
+            AuthenticatedCashierSessionReference: "auth-bridge",
+            TerminalId: "terminal-bridge",
+            SiteId: "11111111-1111-4111-8111-111111111111",
+            SiteGroupId: "22222222-2222-4222-8222-222222222222",
+            PosServerId: "pos-bridge"));
+        Assert.True(shift.IsSuccess);
         var session = await service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
             CashierId: "cashier-bridge",
             AuthenticatedCashierSessionReference: "auth-bridge",

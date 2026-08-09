@@ -90,6 +90,7 @@ export function CashCapturePanel({
   cashAcceptanceBlockedMessage = "Central PMS has not marked this payable basis ready for cash acceptance.",
   onBeforeCashReceived,
   onLocalPrerequisiteFailure,
+  activeCashCustodySessionId,
   bridge = defaultBridge,
   developmentFixtureLocalCashTenderId,
   autoAdvanceAfterCashReceived = true,
@@ -102,6 +103,7 @@ export function CashCapturePanel({
   cashAcceptanceBlockedMessage?: string;
   onBeforeCashReceived?: (session: PayableBasisResponse) => Promise<{ ok: true; basis: PayableBasisResponse } | { ok: false; message: string }>;
   onLocalPrerequisiteFailure?: (message: string | null) => void;
+  activeCashCustodySessionId?: string | null;
   bridge?: LocalJournalBridge;
   developmentFixtureLocalCashTenderId?: string;
   autoAdvanceAfterCashReceived?: boolean;
@@ -510,6 +512,13 @@ export function CashCapturePanel({
       return;
     }
 
+    if (!activeCashCustodySessionId) {
+      const message = "An authenticated cashier's own open cash-custody session is required before CASH_RECEIVED.";
+      onLocalPrerequisiteFailure?.(message);
+      setStatus({ kind: "error", message });
+      return;
+    }
+
     const revalidation = onBeforeCashReceived ? await onBeforeCashReceived(session) : { ok: true as const, basis: session };
     if (!revalidation.ok) {
       onLocalPrerequisiteFailure?.(revalidation.message);
@@ -521,27 +530,10 @@ export function CashCapturePanel({
     onLocalPrerequisiteFailure?.(null);
     const authoritativeBasis = revalidation.basis;
     const correlationId = createCorrelationId();
-    const sessionResult = await bridge.createOrGetDevelopmentSession(createCorrelationId(), {
-      cashierId: context.cashierId,
-      authenticatedCashierSessionReference: `dev-auth:${context.cashierId}:${context.shiftId}`,
-      cashierShiftId: context.shiftId,
-      terminalId: context.terminalId,
-      siteId: context.siteId,
-      siteGroupId: context.siteGroupId,
-      posServerId: context.posServerId,
-      openingCashAmount: 0,
-    });
-
-    if (!sessionResult.ok) {
-      setStatus({ kind: "error", message: sessionResult.error.message });
-      return;
-    }
-
-    const cashSession = sessionResult.payload;
     const tariffSnapshotId = authoritativeBasis.tariffSnapshotId;
     const started = await bridge.startTender(correlationId, {
       ...(developmentFixtureLocalCashTenderId ? { localCashTenderId: developmentFixtureLocalCashTenderId } : {}),
-      cashCustodySessionId: cashSession.id,
+      cashCustodySessionId: activeCashCustodySessionId,
       parkingSessionId: authoritativeBasis.parkingSessionId,
       tariffSnapshotId,
       currency: authoritativeBasis.currency,

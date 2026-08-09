@@ -32,6 +32,14 @@ import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmok
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type LocalJournalHealth, type PayableBasisStateSnapshot } from "./localJournalBridge";
 import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge, type StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
+import {
+  createDevelopmentHumanSessionBridge,
+  createWebViewHumanSessionBridge,
+  mayUseDevelopmentHumanSessionFixture,
+  type HumanSessionBridge,
+  type HumanSessionBridgeResult,
+  type HumanSessionState,
+} from "./humanSessionBridge";
 
 type LookupState =
   | { status: "idle" }
@@ -46,6 +54,7 @@ type PreCashResult =
 
 const defaultBridge = createWebViewLocalJournalBridge();
 const defaultEvidenceBridge = createWebViewStatutoryEvidenceBridge();
+const defaultHumanSessionBridge = createWebViewHumanSessionBridge();
 const noStatutoryWorkflow: StatutoryDiscountWorkflowState = { status: "none" };
 
 export function App() {
@@ -118,7 +127,162 @@ export function App() {
     return <TransactionCompletionVisualSmokeShell config={configResult.config} />;
   }
 
-  return <TerminalShell config={configResult.config} client={createCentralPmsClient(configResult.config)} />;
+  const humanSessionBridge = mayUseDevelopmentHumanSessionFixture(configResult.config)
+    ? createDevelopmentHumanSessionBridge(configResult.config)
+    : defaultHumanSessionBridge;
+  return (
+    <AuthenticatedTerminal
+      config={configResult.config}
+      client={createCentralPmsClient(configResult.config)}
+      humanSessionBridge={humanSessionBridge}
+    />
+  );
+}
+
+export function AuthenticatedTerminal({
+  config,
+  client,
+  humanSessionBridge = defaultHumanSessionBridge,
+  localJournalBridge = defaultBridge,
+}: {
+  config: AptConfig;
+  client: CentralPmsClient;
+  humanSessionBridge?: HumanSessionBridge;
+  localJournalBridge?: LocalJournalBridge;
+}) {
+  const [humanState, setHumanState] = useState<HumanSessionState>({
+    authenticationState: "LOADING",
+    authenticated: false,
+    deviceTrusted: false,
+    shiftOperationsAuthorized: false,
+    custodyOperationsAuthorized: false,
+    cashOperationsAuthorized: false,
+    userReference: null,
+    username: null,
+    displayName: null,
+    audience: null,
+    assurance: null,
+    privilegedAccount: false,
+    mfaRequired: false,
+    idleExpiresAt: null,
+    absoluteExpiresAt: null,
+    safeSupportReference: "Unavailable",
+    safeMessage: "Validating the device-bound cashier session online...",
+    errorCode: null,
+    retryable: false,
+    activeShift: null,
+    activeCashCustodySession: null,
+  });
+
+  function apply(result: HumanSessionBridgeResult) {
+    if (result.ok) {
+      setHumanState(result.payload);
+      return;
+    }
+    setHumanState((current) => ({
+      ...current,
+      authenticationState: "UNAVAILABLE",
+      authenticated: false,
+      shiftOperationsAuthorized: false,
+      custodyOperationsAuthorized: false,
+      cashOperationsAuthorized: false,
+      errorCode: result.error.code,
+      safeMessage: result.error.message,
+    }));
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void humanSessionBridge.restore(createCorrelationId()).then((result) => {
+      if (!cancelled) apply(result);
+    });
+    return () => { cancelled = true; };
+  }, [humanSessionBridge]);
+
+  useEffect(() => {
+    if (!humanState.authenticated) return;
+    const timer = window.setInterval(() => {
+      void humanSessionBridge.refresh(createCorrelationId()).then(apply);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [humanSessionBridge, humanState.authenticated]);
+
+  if (!humanState.authenticated) {
+    return <CashierLoginPanel state={humanState} bridge={humanSessionBridge} onResult={apply} />;
+  }
+
+  return (
+    <TerminalShell
+      config={config}
+      client={client}
+      localJournalBridge={localJournalBridge}
+      humanSessionBridge={humanSessionBridge}
+      humanSessionState={humanState}
+      onHumanSessionStateChange={setHumanState}
+    />
+  );
+}
+
+export function CashierLoginPanel({
+  state,
+  bridge,
+  onResult,
+}: {
+  state: HumanSessionState;
+  bridge: HumanSessionBridge;
+  onResult: (result: HumanSessionBridgeResult) => void;
+}) {
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const loginInFlightRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function login() {
+    if (loginInFlightRef.current) return;
+    loginInFlightRef.current = true;
+    const username = usernameRef.current?.value ?? "";
+    setSubmitting(true);
+    try {
+      onResult(await bridge.login(createCorrelationId(), username));
+    } finally {
+      loginInFlightRef.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="login-shell" data-testid="apt-human-login-shell" data-app-ready="true">
+      <section className="login-panel" aria-labelledby="cashier-login-heading">
+        <p className="eyebrow">ExitPass Assisted Payment Terminal</p>
+        <h1 id="cashier-login-heading">Cashier sign in</h1>
+        <p>Terminal device trust must succeed before Central PMS can establish cashier authority.</p>
+        <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); void login(); }}>
+          <label htmlFor="cashierUsername">Username</label>
+          <input id="cashierUsername" ref={usernameRef} autoComplete="off" autoCapitalize="none" disabled={submitting} />
+          <button type="submit" disabled={submitting || !state.deviceTrusted}>
+            {submitting ? "Opening secure credential entry..." : "Sign in"}
+          </button>
+        </form>
+        <p>Password entry is handled by a secure Windows dialog and is never stored in this web interface.</p>
+        <div className={`status-notice ${state.errorCode ? "danger" : "info"}`} role={state.errorCode ? "alert" : "status"}>
+          <strong>{state.errorCode ? "Cashier authority unavailable" : "Online authentication required"}</strong>
+          <p>{state.safeMessage}</p>
+          {state.safeSupportReference !== "Unavailable" && <p>Support reference: {state.safeSupportReference}</p>}
+        </div>
+        {(state.activeShift?.status === "Open" || state.activeCashCustodySession?.status === "Open") && (
+          <div className="status-notice danger" role="status" aria-label="Preserved cash accountability">
+            <strong>Cash accountability preserved</strong>
+            <p>Current human authority is not available. Existing physical accountability remains open for governed recovery.</p>
+            <dl className="human-session-summary">
+              <div><dt>Shift</dt><dd>{state.activeShift?.status === "Open" ? "Open" : "Not open"}</dd></div>
+              <div><dt>Cash custody</dt><dd>{state.activeCashCustodySession?.status === "Open" ? "Open" : "Not open"}</dd></div>
+              <div><dt>New cash authority</dt><dd>Locked</dd></div>
+            </dl>
+          </div>
+        )}
+        <p>No offline login is available. This screen does not request an MFA code.</p>
+      </section>
+    </main>
+  );
 }
 
 export function TerminalShell({
@@ -132,6 +296,9 @@ export function TerminalShell({
   initialResolvedBasis,
   initialStatutoryState = noStatutoryWorkflow,
   initialCashEntryRequested = false,
+  humanSessionBridge,
+  humanSessionState,
+  onHumanSessionStateChange,
 }: {
   config: AptConfig;
   client: CentralPmsClient;
@@ -143,8 +310,11 @@ export function TerminalShell({
   initialResolvedBasis?: PayableBasisResponse;
   initialStatutoryState?: StatutoryDiscountWorkflowState;
   initialCashEntryRequested?: boolean;
+  humanSessionBridge?: HumanSessionBridge;
+  humanSessionState?: HumanSessionState;
+  onHumanSessionStateChange?: (state: HumanSessionState) => void;
 }) {
-  const context = useMemo(() => buildTerminalContext(config), [config]);
+  const context = useMemo(() => buildTerminalContext(config, humanSessionState), [config, humanSessionState]);
   const [referenceType, setReferenceType] = useState<PayableBasisReferenceType>(initialReferenceType);
   const [referenceValue, setReferenceValue] = useState(initialReferenceValue);
   const [lookupState, setLookupState] = useState<LookupState>(() => initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
@@ -626,20 +796,42 @@ export function TerminalShell({
       ? { status: "amount_changed", previous: displayedBasis, current: result.response, correlationId, acknowledged: false }
       : { status: "resolved", basis: result.response, source: "fresh" });
   }
-  const activeShift = localJournalHealth?.operationalState?.activeShift ?? null;
-  const activeCashCustodySession = localJournalHealth?.operationalState?.activeCashCustodySession ?? null;
+
+  async function authorizeHumanAndRevalidate(basis: PayableBasisResponse): Promise<PreCashResult> {
+    if (humanSessionBridge) {
+      const authorization = await humanSessionBridge.authorizeCash(createCorrelationId());
+      if (!authorization.ok) {
+        return { ok: false, message: authorization.error.message };
+      }
+      onHumanSessionStateChange?.(authorization.payload);
+      if (!authorization.payload.cashOperationsAuthorized
+        || !authorization.payload.activeShift
+        || !authorization.payload.activeCashCustodySession) {
+        return { ok: false, message: authorization.payload.safeMessage || "Current online cashier authority is required before cash can be accepted." };
+      }
+    }
+    return preCashRevalidate(basis, true);
+  }
+
+  const activeShift = humanSessionState?.activeShift ?? localJournalHealth?.operationalState?.activeShift ?? null;
+  const activeCashCustodySession = humanSessionState?.activeCashCustodySession ?? localJournalHealth?.operationalState?.activeCashCustodySession ?? null;
   const localPersistenceCashReady = localJournalHealth?.localPersistence?.cashOperationsAllowed === true;
   const durableShiftActive = activeShift?.status === "Open";
   const durableCashCustodyActive = activeCashCustodySession?.status === "Open";
+  const humanCashAuthorized = humanSessionState?.cashOperationsAuthorized ?? true;
   const localPrerequisitesReady = config.nonLiveCashCaptureEnabled
     && localPersistenceCashReady
     && durableShiftActive
-    && durableCashCustodyActive;
+    && durableCashCustodyActive
+    && humanCashAuthorized;
   const localPrerequisiteBlockers = localCashPrerequisiteBlockers(
     config.nonLiveCashCaptureEnabled,
     localJournalHealth,
     localJournalHealthMessage,
   );
+  if (!humanCashAuthorized) {
+    localPrerequisiteBlockers.unshift(humanSessionState?.safeMessage ?? "Current online cashier authority is required.");
+  }
 
   return (
     <main className="terminal-shell" data-testid="apt-terminal-shell" data-app-ready="true">
@@ -651,7 +843,10 @@ export function TerminalShell({
       </header>
 
       <section className="workflow-stack">
-      <OperationalContextPanel context={context} health={localJournalHealth} />
+        {humanSessionBridge && humanSessionState && onHumanSessionStateChange && (
+          <HumanSessionPanel state={humanSessionState} bridge={humanSessionBridge} onStateChange={onHumanSessionStateChange} />
+        )}
+        <OperationalContextPanel context={context} health={localJournalHealth} />
         <section className="lookup-panel" aria-labelledby="lookup-heading">
           <div className="section-heading">
             <p className="eyebrow">Session resolution</p>
@@ -746,7 +941,8 @@ export function TerminalShell({
                       tariffExpired={!centralReady}
                       cashAcceptanceReady={cashBoundaryReady && localPrerequisitesReady}
                       cashAcceptanceBlockedMessage={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryCashGate.message : blockerMessage(displayedBasis)}
-                      onBeforeCashReceived={(basis) => preCashRevalidate(basis, true)}
+                      activeCashCustodySessionId={activeCashCustodySession?.id ?? null}
+                      onBeforeCashReceived={authorizeHumanAndRevalidate}
                       onLocalPrerequisiteFailure={setLocalPrerequisiteMessage}
                       bridge={localJournalBridge}
                     />
@@ -850,7 +1046,6 @@ function postManualProofDiagnostic(
     window.chrome?.webview?.postMessage(JSON.stringify({
       source: "apt-manual-proof-diagnostic",
       event: "localJournalHealthReceived",
-      configuredCashierShiftId: context.shiftId,
       shiftFilterSent: false,
       bridgeRequestScope: healthRequest,
       bridgeReturnedActiveShiftId: activeShift?.id ?? null,
@@ -865,6 +1060,101 @@ function postManualProofDiagnostic(
   } catch {
     // Manual proof diagnostics must never affect terminal rendering.
   }
+}
+
+export function HumanSessionPanel({
+  state,
+  bridge,
+  onStateChange,
+}: {
+  state: HumanSessionState;
+  bridge: HumanSessionBridge;
+  onStateChange: (state: HumanSessionState) => void;
+}) {
+  const [openingCashAmount, setOpeningCashAmount] = useState("0.00");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function invoke(name: string, action: () => Promise<HumanSessionBridgeResult>) {
+    setBusy(name);
+    try {
+      const result = await action();
+      if (result.ok) {
+        onStateChange(result.payload);
+      } else {
+        onStateChange({
+          ...state,
+          authenticationState: "LOCKED",
+          authenticated: false,
+          shiftOperationsAuthorized: false,
+          custodyOperationsAuthorized: false,
+          cashOperationsAuthorized: false,
+          errorCode: result.error.code,
+          safeMessage: result.error.message,
+          retryable: false,
+        });
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const shiftOpen = state.activeShift?.status === "Open";
+  const custodyOpen = state.activeCashCustodySession?.status === "Open";
+  const expiry = formatDate(state.idleExpiresAt);
+
+  return (
+    <section className="human-session-panel" aria-labelledby="human-session-heading">
+      <div className="human-session-heading-row">
+        <div>
+          <p className="eyebrow">Authenticated cashier</p>
+          <h2 id="human-session-heading">{state.displayName || "Cashier"}</h2>
+          <p>{state.username ? `Signed in as ${state.username}` : "Central PMS session active"}</p>
+        </div>
+        <button type="button" className="secondary-action" disabled={busy !== null} onClick={() => void invoke("logout", () => bridge.logout(createCorrelationId()))}>
+          Sign out
+        </button>
+      </div>
+
+      <dl className="human-session-summary">
+        <div><dt>Device trust</dt><dd>{state.deviceTrusted ? "Established" : "Unavailable"}</dd></div>
+        <div><dt>Session audience</dt><dd>{state.audience === "APT" ? "Assisted Payment Terminal" : "Unavailable"}</dd></div>
+        <div><dt>Authentication</dt><dd>{state.assurance === "PASSWORD" ? "Username and password" : "Online session"}</dd></div>
+        <div><dt>Session status</dt><dd>{state.cashOperationsAuthorized ? "Current" : "Locked for new cash"}</dd></div>
+        <div><dt>Own shift</dt><dd>{shiftOpen ? "Open" : "Not open"}</dd></div>
+        <div><dt>Own custody</dt><dd>{custodyOpen ? "Open" : "Not open"}</dd></div>
+        <div><dt>Online validation due</dt><dd>{expiry}</dd></div>
+        <div><dt>Support reference</dt><dd>{state.safeSupportReference}</dd></div>
+      </dl>
+
+      <div className={`status-notice ${state.errorCode ? "danger" : state.cashOperationsAuthorized ? "success" : "danger"}`} role={state.errorCode ? "alert" : "status"}>
+        <strong>{state.errorCode === "OPEN_CUSTODY_LOGOUT_BLOCKED" ? "Sign out unavailable" : state.cashOperationsAuthorized ? "Online cashier authority current" : "Authentication locked for new cash"}</strong>
+        <p>{state.safeMessage}</p>
+        {custodyOpen && !state.cashOperationsAuthorized && <p>Physical cash custody remains open. Authentication lock did not close or erase custody.</p>}
+      </div>
+
+      <div className="human-session-actions" aria-label="Cashier session and cash accountability actions">
+        <button type="button" disabled={busy !== null || shiftOpen || !state.shiftOperationsAuthorized} onClick={() => void invoke("shift", () => bridge.openOrResumeShift(createCorrelationId()))}>
+          {shiftOpen ? "Own shift resumed" : "Open or resume own shift"}
+        </button>
+        <label htmlFor="openingCashAmount">Opening cash amount</label>
+        <input
+          id="openingCashAmount"
+          inputMode="decimal"
+          value={openingCashAmount}
+          onChange={(event) => setOpeningCashAmount(event.target.value)}
+          disabled={busy !== null || custodyOpen}
+        />
+        <button
+          type="button"
+          disabled={busy !== null || custodyOpen || !shiftOpen || !state.custodyOperationsAuthorized || !Number.isFinite(Number(openingCashAmount)) || Number(openingCashAmount) < 0}
+          onClick={() => void invoke("custody", () => bridge.openOrResumeCustody(createCorrelationId(), Number(openingCashAmount)))}
+        >
+          {custodyOpen ? "Own custody resumed" : "Open or resume own custody"}
+        </button>
+      </div>
+      <p>APT cashier and supervisor authentication uses username and password only. No MFA prompt is required in v1.3.</p>
+    </section>
+  );
 }
 
 function OperationalContextPanel({ context, health }: { context: TerminalContext; health: LocalJournalHealth | null }) {
@@ -888,9 +1178,6 @@ function OperationalContextPanel({ context, health }: { context: TerminalContext
     ["Site scope", context.siteId ? "Configured" : "Unavailable", "configured-site-id"],
     ["Site-group scope", context.siteGroupId ? "Configured" : "Unavailable", "configured-site-group-id"],
     ["POS Server", context.posServerId ? "Configured" : "Unavailable", "configured-pos-server-id"],
-    ["Cashier context", context.cashierId ? "Configured" : "Unavailable", "configured-cashier-id"],
-    ["Configured shift", context.shiftId ? "Configured" : "Unavailable", "configured-shift-id"],
-    ["Configured shift posture", context.shiftStatus, "configured-shift-posture"],
     ["Recovered shift", activeShift ? activeShift.status : "None", "recovered-shift-id"],
     ["Cash custody", activeCustody ? activeCustody.status : "None", "active-custody-id"],
     ["Central PMS", context.centralPmsConnectionMode, "configured-central-pms-mode"],

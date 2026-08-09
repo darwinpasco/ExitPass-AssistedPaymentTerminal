@@ -354,9 +354,7 @@ public sealed class TerminalCashFiscalOutboxTests
 
     private static async Task<CashCustodySessionSnapshot> CreateSessionAsync(CashJournalService service)
     {
-        var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
-        Assert.True(result.IsSuccess);
-        return result.Value!;
+        return await TestRequests.OpenShiftAndCreateSessionAsync(service);
     }
 
     private static async Task<CashTenderSnapshot> StartTenderAsync(CashJournalService service, Guid cashCustodySessionId)

@@ -40,7 +40,7 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
         var service = CreateService(databasePath);
 
         await service.InitializeAsync();
-        await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
+        await TestRequests.OpenShiftAndCreateSessionAsync(service);
 
         var envelopePath = EnvelopePath(databasePath);
         var envelope = ReadEnvelope(envelopePath);
@@ -143,7 +143,6 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
         var databasePath = DatabasePath();
         var service = CreateService(databasePath);
         await RequireSuccess(service.OpenCashierShiftAsync(TestRequests.OpenShift()));
-        await RequireSuccess(service.CreateCashCustodySessionAsync(TestRequests.CreateSession()));
         await RequireSuccess(service.CloseCashierShiftAsync(new CloseCashierShiftRequest("shift-001", DateTimeOffset.Parse("2026-07-15T08:00:00Z"))));
 
         var restarted = CreateService(databasePath);
@@ -183,8 +182,7 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
     {
         var databasePath = DatabasePath();
         var service = CreateService(databasePath);
-        var session = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
-        Assert.True(session.IsSuccess);
+        var session = await TestRequests.OpenShiftAndCreateSessionAsync(service);
         var originalEnvelope = ReadEnvelope(EnvelopePath(databasePath));
 
         var restarted = CreateService(databasePath);
@@ -192,7 +190,7 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
         var restartedEnvelope = ReadEnvelope(EnvelopePath(databasePath));
 
         Assert.True(readback.IsSuccess);
-        Assert.Equal(session.Value!.Id, readback.Value!.Id);
+        Assert.Equal(session.Id, readback.Value!.Id);
         Assert.Equal(originalEnvelope.KeyId, restartedEnvelope.KeyId);
         Assert.Equal(originalEnvelope.ProtectedKey, restartedEnvelope.ProtectedKey);
     }

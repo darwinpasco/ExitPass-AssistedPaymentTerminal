@@ -52,6 +52,8 @@ public sealed class LocalJournalBridgeHandler
     private readonly IReceiptPrinter _receiptPrinter;
     private readonly TimeZoneInfo _siteTimeZone;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly IHumanCashAuthorization? _humanCashAuthorization;
+    private readonly bool _allowDevelopmentSessionCommands;
 
     public LocalJournalBridgeHandler(
         CashJournalService journal,
@@ -70,7 +72,9 @@ public sealed class LocalJournalBridgeHandler
         TerminalCashReceiptPrintJobService? printJobService = null,
         IReceiptPrinter? receiptPrinter = null,
         string? siteTimeZoneId = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IHumanCashAuthorization? humanCashAuthorization = null,
+        bool allowDevelopmentSessionCommands = true)
     {
         _journal = journal;
         _enabled = enabled;
@@ -84,6 +88,8 @@ public sealed class LocalJournalBridgeHandler
         _receiptPrinterName = string.IsNullOrWhiteSpace(receiptPrinterName) ? null : receiptPrinterName.Trim();
         _siteTimeZone = ResolveSiteTimeZone(siteTimeZoneId);
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _humanCashAuthorization = humanCashAuthorization;
+        _allowDevelopmentSessionCommands = allowDevelopmentSessionCommands;
         var localOptions = new LocalOperationsDatabaseOptions(
             journal.DatabasePath,
             CentralPmsBaseUrl: _centralPmsBaseUrl ?? "UNCONFIGURED_CENTRAL_PMS",
@@ -267,7 +273,29 @@ public sealed class LocalJournalBridgeHandler
 
     private async Task<string> CreateOrGetDevelopmentSessionAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
     {
+        if (!_allowDevelopmentSessionCommands)
+        {
+            return SerializeFailure(
+                request.Command,
+                request.CorrelationId,
+                "DEVELOPMENT_SESSION_PROHIBITED",
+                "Production cash custody requires an authenticated Central PMS human session.");
+        }
+
         var payload = ReadPayload<CreateDevelopmentSessionPayload>(request);
+        var shift = await _journal.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            CashierShiftId: payload.CashierShiftId,
+            CashierId: payload.CashierId,
+            AuthenticatedCashierSessionReference: payload.AuthenticatedCashierSessionReference,
+            TerminalId: payload.TerminalId,
+            SiteId: payload.SiteId,
+            SiteGroupId: payload.SiteGroupId,
+            PosServerId: payload.PosServerId), cancellationToken).ConfigureAwait(false);
+        if (!shift.IsSuccess)
+        {
+            return BridgeResult(request, shift);
+        }
+
         var result = await _journal.CreateOrGetCashCustodySessionAsync(new CreateCashCustodySessionRequest(
             CashierId: payload.CashierId,
             AuthenticatedCashierSessionReference: payload.AuthenticatedCashierSessionReference,
@@ -283,6 +311,12 @@ public sealed class LocalJournalBridgeHandler
 
     private async Task<string> StartTenderAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
     {
+        var authorizationFailure = await AuthorizeNewCashAsync(request, cancellationToken).ConfigureAwait(false);
+        if (authorizationFailure is not null)
+        {
+            return authorizationFailure;
+        }
+
         var payload = ReadPayload<StartTenderPayload>(request);
         var result = await _journal.StartCashTenderAsync(new StartCashTenderRequest(
             CashCustodySessionId: payload.CashCustodySessionId,
@@ -300,6 +334,12 @@ public sealed class LocalJournalBridgeHandler
 
     private async Task<string> RecordCashReceivedAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
     {
+        var authorizationFailure = await AuthorizeNewCashAsync(request, cancellationToken).ConfigureAwait(false);
+        if (authorizationFailure is not null)
+        {
+            return authorizationFailure;
+        }
+
         var payload = ReadPayload<RecordCashReceivedPayload>(request);
         var result = await _journal.CommitCashReceivedAsync(new CommitCashReceivedRequest(
             LocalCashTenderId: payload.LocalCashTenderId,
@@ -334,6 +374,19 @@ public sealed class LocalJournalBridgeHandler
                 : "UNCONFIGURED_CENTRAL_PMS"), cancellationToken).ConfigureAwait(false);
 
         return BridgeResult(request, result);
+    }
+
+    private async Task<string?> AuthorizeNewCashAsync(LocalJournalBridgeRequest request, CancellationToken cancellationToken)
+    {
+        if (_humanCashAuthorization is null)
+        {
+            return null;
+        }
+
+        var authorization = await _humanCashAuthorization.AuthorizeCashAsync(cancellationToken).ConfigureAwait(false);
+        return authorization.Authorized
+            ? null
+            : SerializeFailure(request.Command, request.CorrelationId, authorization.Code, authorization.SafeMessage);
     }
 
 

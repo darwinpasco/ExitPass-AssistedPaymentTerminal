@@ -5,6 +5,8 @@ namespace AssistedPaymentTerminal.Desktop;
 
 public partial class App : Application
 {
+    private DesktopSingleInstanceLease? _singleInstanceLease;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -61,6 +63,18 @@ public partial class App : Application
                 return;
             }
 
+            _singleInstanceLease = DesktopSingleInstanceLease.TryAcquire(options.TerminalId);
+            if (_singleInstanceLease is null)
+            {
+                MessageBox.Show(
+                    "This terminal application is already running. Use the existing window.",
+                    "ExitPass Assisted Payment Terminal",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Shutdown(5);
+                return;
+            }
+
             MainWindow = new MainWindow(source, options);
             MainWindow.Show();
         }
@@ -73,5 +87,12 @@ public partial class App : Application
                 MessageBoxImage.Error);
             Shutdown(3);
         }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _singleInstanceLease?.Dispose();
+        _singleInstanceLease = null;
+        base.OnExit(e);
     }
 }

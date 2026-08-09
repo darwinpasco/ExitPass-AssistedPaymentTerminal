@@ -1143,3 +1143,78 @@ dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f4f6f8;
+}
+
+.login-panel {
+  width: min(440px, 100%);
+  padding: 24px;
+  border: 1px solid #c7ced6;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgb(20 32 44 / 12%);
+}
+
+.login-panel form {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.human-session-panel {
+  padding: 18px;
+  border-block: 1px solid #c7ced6;
+  background: #f8fafb;
+}
+
+.human-session-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.human-session-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.human-session-summary div {
+  min-width: 0;
+}
+
+.human-session-summary dt {
+  color: #53616f;
+  font-size: 0.82rem;
+}
+
+.human-session-summary dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.human-session-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+@media (max-width: 760px) {
+  .human-session-summary,
+  .human-session-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .human-session-heading-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
