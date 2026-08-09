@@ -104,7 +104,7 @@ describe("CashCapturePanel", () => {
 
     await recordCashReceived();
 
-    expect(bridge.createOrGetDevelopmentSession).toHaveBeenCalledTimes(1);
+    expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
     expect(bridge.startTender).toHaveBeenCalledTimes(1);
     expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
@@ -1467,6 +1467,7 @@ function renderPanel({
   onBeforeCashReceived,
   developmentFixtureLocalCashTenderId,
   autoAdvanceAfterCashReceived = false,
+  activeCashCustodySessionId = "00000000-0000-4000-8000-000000000008",
 }: {
   config: AptConfig;
   tariffExpired?: boolean;
@@ -1475,6 +1476,7 @@ function renderPanel({
   onBeforeCashReceived?: (session: ResolveVendorParkingResponse) => Promise<{ ok: true; basis: ResolveVendorParkingResponse } | { ok: false; message: string }>;
   developmentFixtureLocalCashTenderId?: string;
   autoAdvanceAfterCashReceived?: boolean;
+  activeCashCustodySessionId?: string | null;
 }) {
   return render(
     <CashCapturePanel
@@ -1483,6 +1485,7 @@ function renderPanel({
       session={session}
       tariffExpired={tariffExpired}
       onBeforeCashReceived={onBeforeCashReceived}
+      activeCashCustodySessionId={activeCashCustodySessionId}
       bridge={bridge}
       developmentFixtureLocalCashTenderId={developmentFixtureLocalCashTenderId}
       autoAdvanceAfterCashReceived={autoAdvanceAfterCashReceived}

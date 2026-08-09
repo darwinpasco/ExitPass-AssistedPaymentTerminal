@@ -5,37 +5,50 @@ import path from "node:path";
 import { installLocalJournalBridgeFixture } from "./local-journal-fixture.mjs";
 
 const root = path.resolve(process.cwd(), "src/AssistedPaymentTerminal.App/dist");
-const port = 4173;
+const requestedPort = Number.parseInt(process.env.APT_E2E_PORT ?? "4173", 10);
+const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535 ? requestedPort : 4173;
 const baseUrl = `http://127.0.0.1:${port}`;
+const fixtureUrl = `${baseUrl}/?humanSessionFixture=1`;
 
 const server = await startStaticServer();
 const browser = await chromium.launch();
 
 try {
+  await runUnauthenticatedStartup();
   await runActiveAndExpiredWorkflow();
   await runNoActiveShiftWorkflow();
   await runUnsupportedProfileRefusal();
   await runServiceUnavailableFailure();
-  console.log("Playwright E2E passed: 4 scenarios");
+  console.log("Playwright E2E passed: 5 scenarios");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
 }
 
+async function runUnauthenticatedStartup() {
+  const page = await newPage();
+  await page.goto(baseUrl);
+
+  await expect(page.getByTestId("apt-human-login-shell")).toHaveAttribute("data-app-ready", "true");
+  await expect(page.getByRole("heading", { name: "Cashier sign in" })).toBeVisible();
+  await expect(page.getByTestId("apt-terminal-shell")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Collect payment" })).toHaveCount(0);
+  await page.close();
+}
+
 async function runActiveAndExpiredWorkflow() {
   const page = await newPage({ activeShift: true, activeCustody: true });
-  await page.goto(baseUrl);
+  await page.goto(fixtureUrl);
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
-  await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("operational-cashier-summary")).toHaveText("Development Cashier");
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
   await expect(page.getByTestId("operational-pos-readiness-summary")).toHaveText("Configured");
   await page.getByText("Terminal details").click();
   await expect(page.getByTestId("recovered-shift-id")).toHaveText("Open");
   await expect(page.getByTestId("active-custody-id")).toHaveText("Open");
-  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
@@ -62,12 +75,11 @@ async function runActiveAndExpiredWorkflow() {
 
 async function runNoActiveShiftWorkflow() {
   const page = await newPage({ activeShift: false, activeCustody: false });
-  await page.goto(baseUrl);
+  await page.goto(fixtureUrl);
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("No active shift");
   await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
   await expect(page.getByTestId("recovered-shift-id")).toHaveText("None");
   await expect(page.getByTestId("active-custody-id")).toHaveText("None");
 
@@ -95,7 +107,7 @@ async function expectActivePayableBasisReady(page) {
 
 async function runUnsupportedProfileRefusal() {
   const page = await newPage();
-  await page.goto(`${baseUrl}/?aptProfile=CONTINUITY_TERMINAL`);
+  await page.goto(`${baseUrl}/?aptProfile=CONTINUITY_TERMINAL&humanSessionFixture=1`);
 
   await expect(page.getByText("Unsupported terminal profile")).toBeVisible();
   await expect(page.getByText("CONTINUITY_TERMINAL is not implemented in this slice.")).toBeVisible();
@@ -104,7 +116,7 @@ async function runUnsupportedProfileRefusal() {
 
 async function runServiceUnavailableFailure() {
   const page = await newPage();
-  await page.goto(baseUrl);
+  await page.goto(fixtureUrl);
 
   await page.getByLabel("Ticket reference").fill("APT-UNAVAILABLE-503");
   await page.getByRole("button", { name: "Resolve" }).click();

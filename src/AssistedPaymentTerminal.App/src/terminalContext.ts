@@ -1,4 +1,5 @@
 import type { AptConfig } from "./config";
+import type { HumanSessionState } from "./humanSessionBridge";
 
 export type TerminalContext = {
   terminalId: string;
@@ -14,7 +15,8 @@ export type TerminalContext = {
   centralPmsConnectionMode: string;
 };
 
-export function buildTerminalContext(config: AptConfig): TerminalContext {
+export function buildTerminalContext(config: AptConfig, humanSession?: HumanSessionState): TerminalContext {
+  const activeShift = humanSession?.activeShift;
   return {
     terminalId: config.terminalId,
     terminalDisplayName: config.terminalDisplayName,
@@ -22,10 +24,10 @@ export function buildTerminalContext(config: AptConfig): TerminalContext {
     siteName: config.siteName,
     siteGroupId: config.siteGroupId,
     posServerId: config.posServerId,
-    cashierId: config.cashierId,
-    cashierDisplayName: config.cashierDisplayName,
-    shiftId: config.shiftId,
-    shiftStatus: config.shiftStatus,
+    cashierId: humanSession?.userReference ?? "",
+    cashierDisplayName: humanSession?.displayName ?? "Not signed in",
+    shiftId: activeShift?.id ?? "",
+    shiftStatus: activeShift?.status ?? "",
     centralPmsConnectionMode: config.centralPmsConnectionMode === "mock" ? "Controlled mock" : "Live Central PMS",
   };
 }

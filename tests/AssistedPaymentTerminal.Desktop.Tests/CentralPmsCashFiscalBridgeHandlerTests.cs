@@ -386,10 +386,22 @@ internal sealed class FiscalBridgeTestDatabase : IDisposable
     public async Task<TerminalCashPaymentOutboxCommand> CreateUnconfirmedPaymentOutboxAsync()
     {
         var service = new CashJournalService(Options);
+        var cashierId = $"cashier-{Guid.NewGuid():N}";
+        var authenticationReference = $"auth-{Guid.NewGuid():N}";
+        var shiftId = $"shift-{Guid.NewGuid():N}";
+        var shift = await service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
+            shiftId,
+            cashierId,
+            authenticationReference,
+            "terminal-bridge",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "pos-bridge"));
+        Assert.True(shift.IsSuccess);
         var session = await service.CreateCashCustodySessionAsync(new CreateCashCustodySessionRequest(
-            CashierId: $"cashier-{Guid.NewGuid():N}",
-            AuthenticatedCashierSessionReference: $"auth-{Guid.NewGuid():N}",
-            CashierShiftId: $"shift-{Guid.NewGuid():N}",
+            CashierId: cashierId,
+            AuthenticatedCashierSessionReference: authenticationReference,
+            CashierShiftId: shiftId,
             TerminalId: "terminal-bridge",
             SiteId: "11111111-1111-4111-8111-111111111111",
             SiteGroupId: "22222222-2222-4222-8222-222222222222",

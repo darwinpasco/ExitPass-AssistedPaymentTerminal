@@ -102,11 +102,16 @@ public sealed class CashJournalService
 
         if (existing is not null)
         {
-            return existing.Status == CashierShiftStatus.Open
+            var sameOwner = string.Equals(existing.CashierId, request.CashierId, StringComparison.Ordinal)
+                && string.Equals(existing.TerminalId, request.TerminalId, StringComparison.Ordinal)
+                && string.Equals(existing.SiteId, request.SiteId, StringComparison.Ordinal)
+                && string.Equals(existing.SiteGroupId, request.SiteGroupId, StringComparison.Ordinal)
+                && string.Equals(existing.PosServerId, request.PosServerId, StringComparison.Ordinal);
+            return existing.Status == CashierShiftStatus.Open && sameOwner
                 ? CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(existing))
                 : CashJournalResult<CashierShiftSnapshot>.Failure(new CashJournalError(
                     CashJournalErrorCode.InvalidStateTransition,
-                    $"Cashier shift '{request.CashierShiftId}' is already closed."));
+                    "The cashier shift cannot be opened or inherited in its current state."));
         }
 
         var shift = new CashierShift
@@ -150,6 +155,17 @@ public sealed class CashJournalService
         if (shift.Status == CashierShiftStatus.Closed)
         {
             return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
+        }
+
+        var openCustodyExists = await dbContext.CashCustodySessions
+            .AsNoTracking()
+            .AnyAsync(session => session.CashierShiftId == shift.Id && session.Status == CashCustodySessionStatus.Open, cancellationToken)
+            .ConfigureAwait(false);
+        if (openCustodyExists)
+        {
+            return CashJournalResult<CashierShiftSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "A cashier shift cannot close while physical cash custody remains open."));
         }
 
         shift.Status = CashierShiftStatus.Closed;
@@ -202,6 +218,23 @@ public sealed class CashJournalService
 
         await using var dbContext = CreateDbContext();
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var shift = await dbContext.CashierShifts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == request.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+        if (shift is null
+            || shift.Status != CashierShiftStatus.Open
+            || !string.Equals(shift.CashierId, request.CashierId, StringComparison.Ordinal)
+            || !string.Equals(shift.TerminalId, request.TerminalId, StringComparison.Ordinal)
+            || !string.Equals(shift.SiteId, request.SiteId, StringComparison.Ordinal)
+            || !string.Equals(shift.SiteGroupId, request.SiteGroupId, StringComparison.Ordinal)
+            || !string.Equals(shift.PosServerId, request.PosServerId, StringComparison.Ordinal))
+        {
+            return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Cash custody requires the authenticated cashier's own active shift and terminal scope."));
+        }
 
         var session = new CashCustodySession
         {
@@ -269,6 +302,20 @@ public sealed class CashJournalService
             return CashJournalResult<CashTenderSnapshot>.Failure(new CashJournalError(
                 CashJournalErrorCode.NotFound,
                 $"Cash-custody session '{request.CashCustodySessionId}' was not found."));
+        }
+
+        var activeShift = await dbContext.CashierShifts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == session.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+        if (session.Status != CashCustodySessionStatus.Open
+            || activeShift is null
+            || activeShift.Status != CashierShiftStatus.Open
+            || !string.Equals(activeShift.CashierId, session.CashierId, StringComparison.Ordinal))
+        {
+            return CashJournalResult<CashTenderSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Cash tender requires the cashier's own active shift and cash custody."));
         }
 
         var duplicate = await FindUnresolvedTenderAsync(dbContext, request.ParkingSessionId, cancellationToken)
@@ -367,6 +414,28 @@ public sealed class CashJournalService
             return CashJournalResult<CashTenderSnapshot>.Failure(new CashJournalError(
                 CashJournalErrorCode.InvalidStateTransition,
                 $"Cash tender '{tender.Id}' cannot transition from '{tender.CurrentLocalState}' to '{CashTenderState.CashReceived}'."));
+        }
+
+        var tenderCustody = tender.CashCustodySession;
+        if (tenderCustody is null)
+        {
+            return CashJournalResult<CashTenderSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "CASH_RECEIVED requires durable cash-custody ownership."));
+        }
+
+        var activeShiftForCustody = await dbContext.CashierShifts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == tenderCustody.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+        if (tenderCustody.Status != CashCustodySessionStatus.Open
+            || activeShiftForCustody is null
+            || activeShiftForCustody.Status != CashierShiftStatus.Open
+            || !string.Equals(activeShiftForCustody.CashierId, tenderCustody.CashierId, StringComparison.Ordinal))
+        {
+            return CashJournalResult<CashTenderSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "CASH_RECEIVED requires the cashier's own active shift and cash custody."));
         }
 
         if (tender.AmountTendered < tender.AmountDue)

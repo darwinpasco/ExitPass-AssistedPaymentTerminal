@@ -1,20 +1,31 @@
 import { expect, test } from "@playwright/test";
 import { installLocalJournalBridgeFixture } from "../local-journal-fixture.mjs";
 
+test("unauthenticated startup mounts only the initialized human-login shell", async ({ page }) => {
+  await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
+  await page.goto("/");
+
+  await expect(page.getByTestId("apt-human-login-shell")).toHaveAttribute("data-app-ready", "true");
+  await expect(page.getByRole("heading", { name: "Cashier sign in" })).toBeVisible();
+  await expect(page.getByTestId("apt-terminal-shell")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Collect payment" })).toHaveCount(0);
+});
+
 test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tickets", async ({ page }) => {
   await installLocalJournalBridgeFixture(page, { includeShift: true, includeCustody: true });
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh authority" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reauthenticate" })).toHaveCount(0);
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
-  await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("operational-cashier-summary")).toHaveText("Development Cashier");
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
   await expect(page.getByTestId("operational-pos-readiness-summary")).toHaveText("Configured");
   await page.getByText("Terminal details").click();
   await expect(page.getByTestId("recovered-shift-id")).toHaveText("Open");
   await expect(page.getByTestId("active-custody-id")).toHaveText("Open");
-  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
 
   await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
@@ -38,13 +49,12 @@ test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tic
   await expect(page.getByRole("button", { name: "Collect payment" })).toBeDisabled();
 });
 
-test("configured shift posture does not create recovered operational state", async ({ page }) => {
+test("missing own shift does not create recovered operational state", async ({ page }) => {
   await installLocalJournalBridgeFixture(page, { includeShift: false, includeCustody: false });
   await page.goto("/");
 
   await expect(page.getByTestId("operational-shift-summary")).toHaveText("No active shift");
   await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("configured-shift-posture")).toHaveText("OPEN");
   await expect(page.getByTestId("recovered-shift-id")).toHaveText("None");
   await expect(page.getByTestId("active-custody-id")).toHaveText("None");
 
@@ -75,6 +85,8 @@ test("unsupported profile refuses startup", async ({ page }) => {
 
   await expect(page.getByText("Unsupported terminal profile")).toBeVisible();
   await expect(page.getByText("CONTINUITY_TERMINAL is not implemented in this slice.")).toBeVisible();
+  await expect(page.getByTestId("apt-human-login-shell")).toHaveCount(0);
+  await expect(page.getByTestId("apt-terminal-shell")).toHaveCount(0);
 });
 
 test("service unavailable scenario does not expose an internal diagnostic correlation", async ({ page }) => {

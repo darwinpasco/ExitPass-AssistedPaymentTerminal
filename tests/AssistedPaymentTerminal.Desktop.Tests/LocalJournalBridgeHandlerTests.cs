@@ -362,6 +362,76 @@ public sealed class LocalJournalBridgeHandlerTests
         Assert.Equal("central-corr-payable", payload.GetProperty("centralPmsCorrelationId").GetString());
         Assert.Contains("awaiting_review", payload.GetProperty("statutoryDiscountStateJson").GetString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task ProductionBridgeRejectsDevelopmentCashierSessionCreation()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var handler = database.CreateHandler(enabled: true, allowDevelopmentSessionCommands: false);
+
+        var response = await SendAsync(handler, LocalJournalBridgeCommand.CreateOrGetDevelopmentSession, "corr-no-dev-session", new
+        {
+            cashierId = "development-cashier",
+            authenticatedCashierSessionReference = "development-session",
+            cashierShiftId = "development-shift",
+            terminalId = "terminal-bridge",
+            siteId = SiteId,
+            siteGroupId = SiteGroupId,
+            posServerId = "pos-bridge",
+            openingCashAmount = 0m
+        });
+
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("DEVELOPMENT_SESSION_PROHIBITED", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task ProductionBridgeBlocksTenderBeforeLocalMutationWhenHumanAuthorityFails()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var fixtureHandler = database.CreateHandler(enabled: true);
+        var sessionId = await CreateSessionAsync(fixtureHandler);
+        var handler = database.CreateHandler(
+            enabled: true,
+            humanCashAuthorization: new FixedHumanCashAuthorization(false),
+            allowDevelopmentSessionCommands: false);
+
+        var response = await StartTenderAsync(handler, sessionId, ParkingSessionStartId);
+        var readback = await database.Service.GetCashTenderByParkingSessionAsync(ParkingSessionStartId);
+
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("HUMAN_SESSION_REQUIRED", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Null(readback);
+    }
+
+    [Fact]
+    public async Task ProductionBridgeDoesNotWriteCashReceivedWhenCashReceivePermissionIsDenied()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var fixtureHandler = database.CreateHandler(enabled: true);
+        var sessionId = await CreateSessionAsync(fixtureHandler);
+        var tenderId = ReadTenderId(await StartTenderAsync(fixtureHandler, sessionId, ParkingSessionCashReceivedId));
+        var handler = database.CreateHandler(
+            enabled: true,
+            humanCashAuthorization: new FixedHumanCashAuthorization(false, "CASH_RECEIVE_PERMISSION_DENIED"),
+            allowDevelopmentSessionCommands: false);
+
+        var response = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.RecordCashReceived,
+            "corr-cash-permission-denied",
+            new { localCashTenderId = tenderId, cashierAttested = true, denominations = Array.Empty<object>() });
+        var tender = await database.Service.GetCashTenderAsync(tenderId);
+        var events = await database.Service.GetCashTenderEventsAsync(tenderId);
+
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("CASH_RECEIVE_PERMISSION_DENIED", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.NotNull(tender);
+        Assert.Equal(CashTenderState.TenderStarted, tender!.CurrentLocalState);
+        Assert.Single(events);
+        Assert.Equal(CashTenderEventType.TenderStarted, events[0].EventType);
+    }
+
     private static async Task<Guid> CreateSessionAsync(LocalJournalBridgeHandler handler)
     {
         using var response = await SendAsync(
@@ -459,8 +529,15 @@ internal sealed class DesktopTestDatabase : IDisposable
         return new DesktopTestDatabase(directoryPath);
     }
 
-    public LocalJournalBridgeHandler CreateHandler(bool enabled) =>
-        new(new CashJournalService(new LocalOperationsDatabaseOptions(DatabasePath)), enabled);
+    public LocalJournalBridgeHandler CreateHandler(
+        bool enabled,
+        IHumanCashAuthorization? humanCashAuthorization = null,
+        bool allowDevelopmentSessionCommands = true) =>
+        new(
+            new CashJournalService(new LocalOperationsDatabaseOptions(DatabasePath)),
+            enabled,
+            humanCashAuthorization: humanCashAuthorization,
+            allowDevelopmentSessionCommands: allowDevelopmentSessionCommands);
 
     public void Dispose()
     {
@@ -469,4 +546,12 @@ internal sealed class DesktopTestDatabase : IDisposable
             Directory.Delete(DirectoryPath, recursive: true);
         }
     }
+}
+
+internal sealed class FixedHumanCashAuthorization(bool authorized, string deniedCode = "HUMAN_SESSION_REQUIRED") : IHumanCashAuthorization
+{
+    public Task<HumanCashAuthorizationResult> AuthorizeCashAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(authorized
+            ? new HumanCashAuthorizationResult(true, "AUTHORIZED", "Authorized.")
+            : new HumanCashAuthorizationResult(false, deniedCode, "Online cashier authorization is required."));
 }

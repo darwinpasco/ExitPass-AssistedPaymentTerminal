@@ -46,17 +46,18 @@ describe("App startup and payable-basis readiness workflow", () => {
 
     expect(screen.getByLabelText("Operational context")).toBeInTheDocument();
     expect(screen.getByTestId("operational-site-summary")).toHaveTextContent("ExitPass Demo Parking");
-    expect(screen.getByTestId("operational-cashier-summary")).toHaveTextContent("Development Cashier");
+    expect(screen.getByTestId("operational-cashier-summary")).toHaveTextContent("Not signed in");
     expect(screen.getByText("No active shift")).toBeInTheDocument();
     expect(screen.getByTestId("operational-terminal-summary")).toHaveTextContent("Development Cashier Terminal 1");
     expect(screen.getByTestId("operational-pos-readiness-summary")).toHaveTextContent("Configured");
   });
 
-  it("does not allow the development profile to fabricate Shift OPEN on a fresh local database", async () => {
+  it("does not allow configuration to fabricate cashier or shift authority on a fresh local database", async () => {
     render(<TerminalShell config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} localJournalBridge={bridgeWithLocalState()} />);
 
     expect(await screen.findByText("No active shift")).toBeInTheDocument();
-    expect(screen.getByText("Configured shift posture")).toBeInTheDocument();
+    expect(screen.getByTestId("operational-cashier-summary")).toHaveTextContent("Not signed in");
+    expect(screen.queryByText("Configured shift posture")).not.toBeInTheDocument();
   });
 
   it("resolves a ticket through the APT payable-basis facade and displays Central PMS readiness", async () => {
@@ -96,8 +97,8 @@ describe("App startup and payable-basis readiness workflow", () => {
     expect(screen.getByTestId("continue-to-cash")).toBeDisabled();
   });
 
-  it("displays durable active shift recovery without using configured shift as the bridge filter", async () => {
-    const config = { ...mode1Config(), shiftId: "CONFIGURED-SHIFT-FIXTURE", nonLiveCashCaptureEnabled: true };
+  it("displays durable active shift recovery without using a configured shift filter", async () => {
+    const config = { ...mode1Config(), nonLiveCashCaptureEnabled: true };
     let requestedContext: LocalOperationalContext | undefined;
     const postMessage = vi.fn();
     window.chrome = {
@@ -141,7 +142,6 @@ describe("App startup and payable-basis readiness workflow", () => {
       .map(([message]) => JSON.parse(message as string))
       .find((message) => message.source === "apt-manual-proof-diagnostic");
     expect(diagnostic).toMatchObject({
-      configuredCashierShiftId: "CONFIGURED-SHIFT-FIXTURE",
       shiftFilterSent: false,
       bridgeReturnedActiveShiftId: "SHIFT-DEV-20260714-A",
       bridgeReturnedActiveShiftStatus: "Open",

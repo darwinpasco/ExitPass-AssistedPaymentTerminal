@@ -4,9 +4,7 @@ ExitPass Assisted Payment Terminal is a separate cashier-facing terminal product
 
 ## Mode 1 Scope
 
-This slice lets a cashier launch the terminal, validate the operating profile, view bound terminal/site/POS/cashier/shift context, resolve a parking session by ticket reference, display authoritative payable and tariff-expiry data, block expired tariffs, and recalculate an expired mock tariff.
-
-The terminal stops before payment collection and fiscal issuance.
+The terminal requires an approved device-bound Central PMS APT human session before cashier work. After online username/password authentication, it resolves the cashier's own shift and cash-custody state and preserves the governed payment, fiscal, receipt, printing, and restart-recovery paths.
 
 ## Authority Boundaries
 
@@ -67,13 +65,11 @@ Required setting names:
 - `APT_SITE_NAME`
 - `APT_SITE_GROUP_ID`
 - `APT_POS_SERVER_ID`
-- `APT_CASHIER_ID`
-- `APT_CASHIER_DISPLAY_NAME`
-- `APT_SHIFT_ID`
-- `APT_SHIFT_STATUS`
 - `CENTRAL_PMS_BASE_URL`
 - `USE_MOCK_CENTRAL_PMS`
 - `APT_WEB_UI_URL`
+
+The Windows host additionally requires `APT_CENTRAL_PMS_SERVICE_IDENTITY_ID` and approved client-certificate/device trust for live Central PMS calls. `APT_HUMAN_SESSION_CREDENTIAL_PATH` may override the DPAPI CurrentUser-protected continuation file for bounded validation. Cashier identity, shift, and custody are not production configuration values.
 
 Development values are explicitly non-production. Do not commit real credentials, private keys, certificates, production terminal identities, or payment secrets.
 
@@ -99,6 +95,10 @@ cmd /c npm run app:dev
 
 Open `http://localhost:5173`.
 
+The browser-only development human-session fixture is disabled by default. It requires mock mode, a loopback origin, and the explicit `?humanSessionFixture=1` test flag.
+
+`USE_MOCK_CENTRAL_PMS` controls the React Central PMS client. It is not consumed by the Windows-host I-020 client. The host always uses `CENTRAL_PMS_BASE_URL`, `APT_CENTRAL_PMS_SERVICE_IDENTITY_ID`, and Windows client-certificate trust for human sessions. Live I-020 validation should still set the generated frontend runtime config to `USE_MOCK_CENTRAL_PMS=false` and must omit `humanSessionFixture=1`; see the J-008 implementation note.
+
 ## Desktop Shell Run
 
 Development URL mode:
@@ -106,6 +106,8 @@ Development URL mode:
 ```powershell
 $env:APT_PROFILE='CASHIER_ASSISTED_TERMINAL'
 $env:APT_WEB_UI_URL='http://localhost:5173'
+$env:CENTRAL_PMS_BASE_URL='https://central-pms.test.invalid'
+$env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID='00000000-0000-4000-8000-000000000001'
 dotnet run --project src\AssistedPaymentTerminal.Desktop
 ```
 
@@ -139,11 +141,10 @@ Generated-client publication remains pending. This slice does not copy Central P
 
 ## Current Limitations
 
-- Payment collection is disabled.
-- Fiscal issuance, receipt numbers, fiscal readback, and POS void behavior are disabled.
-- Printer, cash drawer, scanner, customer display, card-terminal, certificate, and payment-device integrations are not implemented.
+- Full governed supervisor custody handover remains fail closed pending the owner-policy resolution for DR-08/DR-09.
+- Physical printer and cash-drawer certification remain Controlled-UAT/hardware work; cash drawer capability remains optional and disabled by default.
+- No offline human login or cached authorization is available.
 - Mode 2 continuity behavior is refused at startup.
-- Live tariff recalculation is pending an approved backend contract; the mock provides deterministic recalculation for this slice.
 
 ## Next Recommended Slice
 

@@ -479,10 +479,9 @@ public sealed class TerminalCashReceiptRetrievalTests
 
     private static async Task<TerminalCashPaymentOutboxCommand> CreateOutboxAsync(CashJournalService service)
     {
-        var session = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
-        Assert.True(session.IsSuccess);
+        var session = await TestRequests.OpenShiftAndCreateSessionAsync(service);
         var tender = await service.StartCashTenderAsync(TestRequests.StartTender(
-            session.Value!.Id,
+            session.Id,
             parkingSessionId: Guid.NewGuid().ToString("D"),
             localIdempotencyIdentity: $"cash-{Guid.NewGuid():N}"));
         Assert.True(tender.IsSuccess);

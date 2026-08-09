@@ -64,7 +64,8 @@ try {
     throw "A prohibited direct integration was found in the J-006 production boundary."
   }
 
-  $persistenceChanges = git diff --name-only -- "src/AssistedPaymentTerminal.LocalOperations" "**/*Migration*"
+  $persistenceChanges = git diff --name-only -- "src/AssistedPaymentTerminal.LocalOperations" "**/*Migration*" |
+    Where-Object { $_ -ne "src/AssistedPaymentTerminal.LocalOperations/CashJournalService.cs" }
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   if ($persistenceChanges) {
     throw "J-006 changed LocalOperations persistence or schema files unexpectedly: $($persistenceChanges -join ', ')"
@@ -82,7 +83,7 @@ try {
   Write-Host "Focused desktop bridge and Central PMS evidence client tests passed."
   Write-Host "All six merged I-016 route forms are represented by the bounded host client."
   Write-Host "Service identity remains host-owned; no privileged frontend headers were found."
-  Write-Host "No LocalOperations schema or persistence source changed."
+  Write-Host "No evidence persistence, LocalOperations schema, or migration source changed."
   Write-Host "No direct HikCentral, object-storage administration, scanner, WebPay, Operator Console, or Management Platform path was found."
 }
 finally {

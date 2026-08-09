@@ -10,10 +10,6 @@ export type AptConfig = {
   siteName: string;
   siteGroupId: string;
   posServerId: string;
-  cashierId: string;
-  cashierDisplayName: string;
-  shiftId: string;
-  shiftStatus: string;
   centralPmsBaseUrl: string;
   centralPmsConnectionMode: "mock" | "live";
   webUiUrl?: string;
@@ -48,10 +44,6 @@ const requiredSettings = [
   "APT_SITE_NAME",
   "APT_SITE_GROUP_ID",
   "APT_POS_SERVER_ID",
-  "APT_CASHIER_ID",
-  "APT_CASHIER_DISPLAY_NAME",
-  "APT_SHIFT_ID",
-  "APT_SHIFT_STATUS",
   "CENTRAL_PMS_BASE_URL",
   "USE_MOCK_CENTRAL_PMS",
 ];
@@ -64,10 +56,6 @@ const fileSmokeConfig: RawAptConfig = {
   APT_SITE_NAME: "ExitPass Demo Parking",
   APT_SITE_GROUP_ID: "22222222-2222-2222-2222-222222222222",
   APT_POS_SERVER_ID: "POS-DEV-001",
-  APT_CASHIER_ID: "CASHIER-DEV-001",
-  APT_CASHIER_DISPLAY_NAME: "Development Cashier",
-  APT_SHIFT_ID: "SHIFT-DEV-20260714-A",
-  APT_SHIFT_STATUS: "OPEN",
   CENTRAL_PMS_BASE_URL: "https://central-pms.example.invalid",
   USE_MOCK_CENTRAL_PMS: "true",
   APT_WEB_UI_URL: "file://production-smoke",
@@ -108,10 +96,6 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       siteName: raw.APT_SITE_NAME!.trim(),
       siteGroupId: raw.APT_SITE_GROUP_ID!.trim(),
       posServerId: raw.APT_POS_SERVER_ID!.trim(),
-      cashierId: raw.APT_CASHIER_ID!.trim(),
-      cashierDisplayName: raw.APT_CASHIER_DISPLAY_NAME!.trim(),
-      shiftId: raw.APT_SHIFT_ID!.trim(),
-      shiftStatus: raw.APT_SHIFT_STATUS!.trim(),
       centralPmsBaseUrl: raw.CENTRAL_PMS_BASE_URL!.trim(),
       centralPmsConnectionMode: raw.USE_MOCK_CENTRAL_PMS!.trim().toLowerCase() === "true" ? "mock" : "live",
       webUiUrl: raw.APT_WEB_UI_URL?.trim(),

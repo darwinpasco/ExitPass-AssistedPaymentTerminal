@@ -12,12 +12,14 @@ public sealed class CashJournalServiceTests
         using var database = TestDatabase.Create();
         var service = database.CreateService();
 
-        var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
-
+        var result = await service.OpenCashierShiftAsync(TestRequests.OpenShift());
         Assert.True(result.IsSuccess);
-        Assert.NotEqual(Guid.Empty, result.Value!.Id);
-        Assert.Equal("cashier-001", result.Value.CashierId);
-        Assert.Equal(CashCustodySessionStatus.Open, result.Value.Status);
+        var session = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
+
+        Assert.True(session.IsSuccess);
+        Assert.NotEqual(Guid.Empty, session.Value!.Id);
+        Assert.Equal("cashier-001", session.Value.CashierId);
+        Assert.Equal(CashCustodySessionStatus.Open, session.Value.Status);
         Assert.True(File.Exists(database.DatabasePath));
     }
 
@@ -379,10 +381,7 @@ public sealed class CashJournalServiceTests
 
     private static async Task<CashCustodySessionSnapshot> CreateSessionAsync(CashJournalService service)
     {
-        var result = await service.CreateCashCustodySessionAsync(TestRequests.CreateSession());
-
-        Assert.True(result.IsSuccess);
-        return result.Value!;
+        return await TestRequests.OpenShiftAndCreateSessionAsync(service);
     }
 
     private static async Task<CashTenderSnapshot> StartTenderAsync(

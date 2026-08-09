@@ -4,6 +4,23 @@ namespace AssistedPaymentTerminal.LocalOperations.Tests;
 
 internal static class TestRequests
 {
+    public static async Task<CashCustodySessionSnapshot> OpenShiftAndCreateSessionAsync(CashJournalService service)
+    {
+        var shift = await service.OpenCashierShiftAsync(OpenShift());
+        if (!shift.IsSuccess)
+        {
+            throw new InvalidOperationException(shift.Error?.Message ?? "Test cashier shift setup failed.");
+        }
+
+        var session = await service.CreateCashCustodySessionAsync(CreateSession());
+        if (!session.IsSuccess)
+        {
+            throw new InvalidOperationException(session.Error?.Message ?? "Test cash-custody setup failed.");
+        }
+
+        return session.Value!;
+    }
+
     public static OpenCashierShiftRequest OpenShift() =>
         new(
             CashierShiftId: "shift-001",
