@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly LocalJournalBridgeHandler _localJournalBridge;
     private readonly StatutoryEvidenceBridgeHandler _statutoryEvidenceBridge;
     private readonly HumanSessionBridgeHandler _humanSessionBridge;
+    private readonly CentralPmsPayableBasisBridgeHandler _payableBasisBridge;
     private bool _eventsRegistered;
 
     public MainWindow(WebViewSource source, StartupOptions options)
@@ -45,6 +46,16 @@ public partial class MainWindow : Window
             humanSessionRuntime,
             new WpfHumanCredentialPrompt(this, humanAuthenticationTrace),
             trace: humanAuthenticationTrace);
+        _payableBasisBridge = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(new HttpClientHandler
+            {
+                ClientCertificateOptions = ClientCertificateOption.Automatic
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(15)
+            },
+            options.CentralPmsBaseUrl,
+            humanSessionRuntime);
         IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
         {
             "controlled" => new ControlledReceiptPrinter(),
@@ -283,6 +294,7 @@ public partial class MainWindow : Window
             }
 
             var response = await _humanSessionBridge.HandleWebMessageAsync(message)
+                ?? await _payableBasisBridge.HandleWebMessageAsync(message)
                 ?? await _statutoryEvidenceBridge.HandleWebMessageAsync(message)
                 ?? await _localJournalBridge.HandleWebMessageAsync(message);
 

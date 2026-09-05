@@ -5,6 +5,38 @@ import { mode1Config } from "../test/testConfig";
 import { maskStatutoryId } from "../statutoryIdMasking";
 
 describe("LiveCentralPmsClient", () => {
+  it("uses the host-authorized bridge for payable-basis requests inside WebView2", async () => {
+    let listener: ((event: { data: unknown }) => void) | undefined;
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    window.chrome = {
+      webview: {
+        postMessage: (message) => {
+          const request = JSON.parse(message) as { command: string; correlationId: string };
+          listener?.({
+            data: JSON.stringify({
+              ok: true,
+              command: request.command,
+              correlationId: request.correlationId,
+              payload: { statusCode: 200, body: payableBasisPayload({ correlationId: request.correlationId }) },
+            }),
+          });
+        },
+        addEventListener: (_type, callback) => { listener = callback; },
+        removeEventListener: vi.fn(),
+      },
+    };
+
+    try {
+      const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+      const result = await client.resolvePayableBasis("plate", "NO-SESSION", "11111111-2222-4333-8444-555555555555");
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      delete window.chrome;
+    }
+  });
+
   it("posts ticket resolves to the APT payable-basis facade with site and correlation headers", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

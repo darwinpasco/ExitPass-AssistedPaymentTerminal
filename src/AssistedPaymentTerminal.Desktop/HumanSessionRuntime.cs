@@ -8,7 +8,14 @@ public interface IHumanCashAuthorization
     Task<HumanCashAuthorizationResult> AuthorizeCashAsync(CancellationToken cancellationToken = default);
 }
 
+public interface ICentralPmsRequestAuthority
+{
+    Task<CentralPmsRequestCredential?> GetCurrentRequestCredentialAsync(CancellationToken cancellationToken = default);
+}
+
 public sealed record HumanCashAuthorizationResult(bool Authorized, string Code, string SafeMessage);
+
+public sealed record CentralPmsRequestCredential(Guid DeviceServiceIdentityId, Guid SiteId, string SessionToken);
 
 public sealed record HumanSessionRuntimeOptions(
     string TerminalId,
@@ -23,7 +30,7 @@ public sealed record HumanSessionRuntimeOptions(
     public const string CashReceivePermission = "terminal-cash.receive";
 }
 
-public sealed class HumanSessionRuntime : IHumanCashAuthorization
+public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRequestAuthority
 {
     private readonly ICentralPmsHumanSessionClient _client;
     private readonly IHumanSessionCredentialStore _credentialStore;
@@ -368,6 +375,32 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization
                 return new HumanCashAuthorizationResult(false, "CUSTODY_REQUIRED", "An own active cash-custody session is required before cash can be accepted.");
             }
             return new HumanCashAuthorizationResult(true, "AUTHORIZED", "Current online cashier authority, shift, and custody are valid.");
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public async Task<CentralPmsRequestCredential?> GetCurrentRequestCredentialAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_options is null ||
+                _credential is null ||
+                _session is null ||
+                !_lastState.Authenticated ||
+                _session.SessionReference != _credential.SessionReference)
+            {
+                return null;
+            }
+
+            return new CentralPmsRequestCredential(
+                _options.DeviceServiceIdentityId,
+                _options.SiteId,
+                _credential.SessionToken);
         }
         finally
         {

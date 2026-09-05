@@ -16,6 +16,7 @@ import type {
   StatutoryOrdinanceAvailabilityResponse,
   StatutoryOrdinanceAvailabilityResult,
 } from "./centralPmsTypes";
+import { sendPayableBasisRequest, type PayableBasisBridgeCommand } from "../centralPmsPayableBasisBridge";
 
 export class LiveCentralPmsClient implements CentralPmsClient {
   constructor(private readonly config: AptConfig, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -111,6 +112,37 @@ export class LiveCentralPmsClient implements CentralPmsClient {
   }
 
   private async postPayableBasis(path: string, request: unknown, correlationId: string): Promise<CentralPmsResult> {
+    const bridgeCommand: PayableBasisBridgeCommand = path.endsWith("/revalidate")
+      ? "payableBasis.revalidate"
+      : "payableBasis.resolve";
+    const bridged = await sendPayableBasisRequest(bridgeCommand, correlationId, this.config.siteId, request);
+    if (bridged) {
+      if (!bridged.ok) {
+        const kind: CentralPmsFailureKind = bridged.error.code === "CENTRAL_PMS_TIMEOUT"
+          ? "timeout"
+          : bridged.error.code === "HUMAN_SESSION_REQUIRED"
+            ? "unauthorized"
+            : "service_unavailable";
+        return failure(kind, bridged.error.code, bridged.error.message, correlationId, kind !== "unauthorized");
+      }
+
+      const payload = bridged.payload.body;
+      if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300) {
+        return {
+          ok: false,
+          kind: mapFailureKind(
+            bridged.payload.statusCode,
+            typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+          ),
+          error: normalizeError(payload, correlationId),
+        };
+      }
+      if (!isPayableBasisResponse(payload)) {
+        return malformed(correlationId);
+      }
+      return { ok: true, response: normalizePayableBasisResponse(payload) };
+    }
+
     const result = await this.send(path, "POST", correlationId, undefined, request);
     if (!result.ok) {
       return result;
