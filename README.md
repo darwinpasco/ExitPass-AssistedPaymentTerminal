@@ -88,8 +88,18 @@ With `USE_MOCK_CENTRAL_PMS=true`:
 
 ## Frontend Run
 
+For the canonical live PITX local runtime, start the Vite UI and Windows host together:
+
 ```powershell
-cmd /c npm install
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-AptPitxLocal.ps1
+```
+
+The launcher verifies Central PMS at `https://localhost:56064`, serves the APT UI at `http://localhost:5173`, supplies the approved PITX terminal context to the native host, and restores the tracked `apt-config.json` when it exits.
+
+For mock-only frontend development:
+
+```powershell
+npm.cmd ci
 cmd /c npm run app:dev
 ```
 
@@ -106,7 +116,7 @@ Development URL mode:
 ```powershell
 $env:APT_PROFILE='CASHIER_ASSISTED_TERMINAL'
 $env:APT_WEB_UI_URL='http://localhost:5173'
-$env:CENTRAL_PMS_BASE_URL='https://central-pms.test.invalid'
+$env:CENTRAL_PMS_BASE_URL='https://localhost:56064'
 $env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID='00000000-0000-4000-8000-000000000001'
 dotnet run --project src\AssistedPaymentTerminal.Desktop
 ```
