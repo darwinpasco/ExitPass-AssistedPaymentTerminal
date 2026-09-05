@@ -26,6 +26,26 @@ public sealed class HumanSessionRuntimeTests : IDisposable
     public HumanSessionRuntimeTests() => Directory.CreateDirectory(_directory);
 
     [Fact]
+    public async Task CentralPmsRequestCredentialExistsOnlyForCurrentDeviceBoundSession()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+
+        Assert.Null(await runtime.GetCurrentRequestCredentialAsync());
+
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+        var current = await runtime.GetCurrentRequestCredentialAsync();
+        Assert.NotNull(current);
+        Assert.Equal(DeviceId, current!.DeviceServiceIdentityId);
+        Assert.Equal(SiteId, current.SiteId);
+        Assert.False(string.IsNullOrWhiteSpace(current.SessionToken));
+
+        client.GetResult = Failure("SESSION_REVOKED");
+        await runtime.RefreshAsync();
+        Assert.Null(await runtime.GetCurrentRequestCredentialAsync());
+    }
+
+    [Fact]
     public async Task LoginOpensOnlyOwnShiftAndCustodyAndBlocksLogoutWhileCustodyIsOpen()
     {
         var client = new FakeHumanSessionClient(Success(CashierId));
