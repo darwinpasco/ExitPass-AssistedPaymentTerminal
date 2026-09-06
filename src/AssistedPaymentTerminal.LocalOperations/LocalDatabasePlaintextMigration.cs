@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 
 namespace AssistedPaymentTerminal.LocalOperations;
 
@@ -133,6 +134,7 @@ public sealed record LocalDatabasePlaintextMigrationResult(
 public sealed class LocalDatabasePlaintextMigrationService
 {
     private static readonly byte[] PlainSqliteHeader = Encoding.ASCII.GetBytes("SQLite format 3\0");
+    private const string LegacyReceiptRetrievalSchemaFingerprint = "02F5311FB18093C40F60B3D939409CFF459BA4EB0BE6E6535BFB0A9EBC1394BC";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -153,6 +155,20 @@ public sealed class LocalDatabasePlaintextMigrationService
         "terminal_cash_receipt_retrieval_attempts",
         "terminal_cash_receipt_print_jobs",
         "terminal_cash_payable_basis_states"
+    ];
+
+    private static readonly string[] LegacyReceiptRetrievalTables =
+    [
+        "cash_custody_sessions",
+        "cash_tenders",
+        "cash_tender_events",
+        "cash_denomination_entries",
+        "terminal_cash_payment_outbox_commands",
+        "terminal_cash_payment_submission_attempts",
+        "terminal_cash_fiscal_outbox_commands",
+        "terminal_cash_fiscal_attempts",
+        "terminal_cash_receipt_retrieval_commands",
+        "terminal_cash_receipt_retrieval_attempts"
     ];
 
     private readonly LocalDatabasePlaintextMigrationOptions _options;
@@ -234,10 +250,10 @@ public sealed class LocalDatabasePlaintextMigrationService
                 return ClassifyPlaintextEnvelopeConflict(paths);
             }
 
-            await using var connection = await OpenPlaintextConnectionAsync(paths.DatabasePath, cancellationToken).ConfigureAwait(false);
+            await using var connection = await OpenPlaintextConnectionAsync(paths.DatabasePath, cancellationToken, readOnly: true).ConfigureAwait(false);
             try
             {
-                await ValidateSourceAsync(connection, cancellationToken).ConfigureAwait(false);
+                _ = await ValidateSourceAsync(connection, cancellationToken).ConfigureAwait(false);
             }
             catch (LocalDatabasePlaintextMigrationException exception)
             {
@@ -439,11 +455,12 @@ public sealed class LocalDatabasePlaintextMigrationService
             string sourceHash;
             string backupHash;
             IReadOnlyDictionary<string, long> sourceRowCounts;
+            SourceSchemaVariant sourceSchema;
             sourceHash = ComputeSha256(paths.DatabasePath);
             await using (var sourceConnection = await OpenPlaintextConnectionAsync(paths.DatabasePath, cancellationToken).ConfigureAwait(false))
             {
                 await BeginPhaseNotificationAsync(state.OperationId, LocalDatabasePlaintextMigrationPhase.SourceValidated, cancellationToken).ConfigureAwait(false);
-                await ValidateSourceAsync(sourceConnection, cancellationToken).ConfigureAwait(false);
+                sourceSchema = await ValidateSourceAsync(sourceConnection, cancellationToken).ConfigureAwait(false);
                 sourceRowCounts = await ReadRowCountsAsync(sourceConnection, cancellationToken).ConfigureAwait(false);
                 state = state with
                 {
@@ -461,9 +478,18 @@ public sealed class LocalDatabasePlaintextMigrationService
 
             backupHash = ComputeSha256(paths.BackupPath);
             await BeginPhaseNotificationAsync(state.OperationId, LocalDatabasePlaintextMigrationPhase.BackupVerified, cancellationToken).ConfigureAwait(false);
-            await using (var backupConnection = await OpenPlaintextConnectionAsync(paths.BackupPath, cancellationToken).ConfigureAwait(false))
+            await using (var backupConnection = await OpenPlaintextConnectionAsync(paths.BackupPath, cancellationToken, readOnly: true).ConfigureAwait(false))
             {
-                await ValidateSourceAsync(backupConnection, cancellationToken).ConfigureAwait(false);
+                var backupSchema = await ValidateSourceAsync(backupConnection, cancellationToken).ConfigureAwait(false);
+                if (backupSchema != sourceSchema)
+                {
+                    throw new LocalDatabasePlaintextMigrationException(
+                        LocalDatabasePlaintextMigrationStatus.BackupFailed,
+                        LocalDatabasePlaintextMigrationPhase.Blocked,
+                        "The plaintext backup schema does not match the validated source.",
+                        "Preserve the source and backup, then contact support.");
+                }
+
                 var backupCounts = await ReadRowCountsAsync(backupConnection, cancellationToken).ConfigureAwait(false);
                 EnsureRowCountsMatch(sourceRowCounts, backupCounts);
             }
@@ -481,7 +507,14 @@ public sealed class LocalDatabasePlaintextMigrationService
             {
                 state = await TransitionPhaseAsync(paths, state, LocalDatabasePlaintextMigrationPhase.TargetCreated, cancellationToken).ConfigureAwait(false);
                 state = await BeginPhaseAsync(paths, state, LocalDatabasePlaintextMigrationPhase.ExportStarted, cancellationToken).ConfigureAwait(false);
-                await ExportBackupToEncryptedTargetAsync(paths.BackupPath, paths.TargetPath, key, cancellationToken).ConfigureAwait(false);
+                if (sourceSchema == SourceSchemaVariant.LegacyReceiptRetrieval)
+                {
+                    await CreateCurrentEncryptedTargetFromLegacyBackupAsync(paths.BackupPath, paths.TargetPath, key, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await ExportBackupToEncryptedTargetAsync(paths.BackupPath, paths.TargetPath, key, cancellationToken).ConfigureAwait(false);
+                }
                 await CompletePhaseAsync(state.OperationId, LocalDatabasePlaintextMigrationPhase.ExportStarted, cancellationToken).ConfigureAwait(false);
                 state = await TransitionPhaseAsync(paths, state, LocalDatabasePlaintextMigrationPhase.ExportCompleted, cancellationToken).ConfigureAwait(false);
 
@@ -786,7 +819,7 @@ public sealed class LocalDatabasePlaintextMigrationService
         }
     }
 
-    private static async Task ValidateSourceAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    private static async Task<SourceSchemaVariant> ValidateSourceAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         try
         {
@@ -812,14 +845,22 @@ public sealed class LocalDatabasePlaintextMigrationService
 
             var tables = await ReadTableNamesAsync(connection, cancellationToken).ConfigureAwait(false);
             var missing = RequiredTables.Where(table => !tables.Contains(table)).ToArray();
-            if (missing.Length > 0)
+            if (missing.Length == 0)
             {
-                throw new LocalDatabasePlaintextMigrationException(
-                    LocalDatabasePlaintextMigrationStatus.UnsupportedSchema,
-                    LocalDatabasePlaintextMigrationPhase.Blocked,
-                    "The plaintext source schema is not supported by this migration runtime.",
-                    "Update the migration utility or contact support.");
+                return SourceSchemaVariant.Current;
             }
+
+            var fingerprint = await ComputeStructuralSchemaFingerprintAsync(connection, tables, cancellationToken).ConfigureAwait(false);
+            if (string.Equals(fingerprint, LegacyReceiptRetrievalSchemaFingerprint, StringComparison.Ordinal))
+            {
+                return SourceSchemaVariant.LegacyReceiptRetrieval;
+            }
+
+            throw new LocalDatabasePlaintextMigrationException(
+                LocalDatabasePlaintextMigrationStatus.UnsupportedSchema,
+                LocalDatabasePlaintextMigrationPhase.Blocked,
+                "The plaintext source schema is not supported by this migration runtime.",
+                "Update the migration utility or contact support.");
         }
         catch (SqliteException exception)
         {
@@ -830,6 +871,40 @@ public sealed class LocalDatabasePlaintextMigrationService
                 "Preserve the database and contact support.",
                 exception);
         }
+    }
+
+    private static async Task<string> ComputeStructuralSchemaFingerprintAsync(
+        SqliteConnection connection,
+        IEnumerable<string> tables,
+        CancellationToken cancellationToken)
+    {
+        var lines = new List<string>();
+        foreach (var table in tables.OrderBy(value => value, StringComparer.Ordinal))
+        {
+            lines.Add($"TABLE|{table}");
+            var columns = new List<string>();
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_xinfo({QuoteIdentifier(table)});";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var defaultValue = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+                columns.Add(string.Join(
+                    '|',
+                    "COLUMN",
+                    table,
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3).ToString(CultureInfo.InvariantCulture),
+                    defaultValue,
+                    reader.GetInt64(5).ToString(CultureInfo.InvariantCulture),
+                    reader.GetInt64(6).ToString(CultureInfo.InvariantCulture)));
+            }
+
+            lines.AddRange(columns.OrderBy(value => value, StringComparer.Ordinal));
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', lines))));
     }
 
     private LocalDatabasePlaintextMigrationResult ClassifyPlaintextEnvelopeConflict(MigrationPaths paths, MigrationState? state = null)
@@ -922,6 +997,56 @@ public sealed class LocalDatabasePlaintextMigrationService
         }
     }
 
+    private static async Task CreateCurrentEncryptedTargetFromLegacyBackupAsync(
+        string backupPath,
+        string targetPath,
+        byte[] key,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            DeleteIfExists(targetPath);
+            await using var connection = await OpenEncryptedConnectionAsync(targetPath, key, cancellationToken, create: true).ConfigureAwait(false);
+            var options = new DbContextOptionsBuilder<CashJournalDbContext>()
+                .UseSqlite(connection, contextOwnsConnection: false)
+                .Options;
+            await using (var context = new CashJournalDbContext(options))
+            {
+                await context.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await ExecuteNonQueryAsync(
+                connection,
+                $"ATTACH DATABASE '{EscapeSqlPath(backupPath)}' AS legacy KEY '';",
+                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                foreach (var table in LegacyReceiptRetrievalTables)
+                {
+                    var columns = await ReadColumnNamesAsync(connection, "legacy", table, cancellationToken).ConfigureAwait(false);
+                    var columnList = string.Join(", ", columns.Select(QuoteIdentifier));
+                    await ExecuteNonQueryAsync(
+                        connection,
+                        $"INSERT INTO main.{QuoteIdentifier(table)} ({columnList}) SELECT {columnList} FROM legacy.{QuoteIdentifier(table)};",
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                await ExecuteNonQueryAsync(connection, "DETACH DATABASE legacy;", cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (SqliteException exception)
+        {
+            throw new LocalDatabasePlaintextMigrationException(
+                LocalDatabasePlaintextMigrationStatus.ExportFailed,
+                LocalDatabasePlaintextMigrationPhase.RollbackRequired,
+                "Historical plaintext database export to the current encrypted schema failed.",
+                "Preserve the source and backup, then contact support.",
+                exception);
+        }
+    }
+
     private async Task VerifyPreparedEnvelopeAsync(
         string envelopePath,
         string databaseIdentity,
@@ -983,6 +1108,15 @@ public sealed class LocalDatabasePlaintextMigrationService
                 "Rollback or support intervention is required.");
         }
 
+        if (await ReadForeignKeyFailuresAsync(connection, cancellationToken).ConfigureAwait(false) > 0)
+        {
+            throw new LocalDatabasePlaintextMigrationException(
+                LocalDatabasePlaintextMigrationStatus.TargetVerificationFailed,
+                LocalDatabasePlaintextMigrationPhase.RollbackRequired,
+                "The encrypted target failed relationship validation.",
+                "Rollback or support intervention is required.");
+        }
+
         var rowCounts = await ReadRowCountsAsync(connection, cancellationToken).ConfigureAwait(false);
         EnsureRowCountsMatch(expectedRowCounts, rowCounts);
         return rowCounts;
@@ -1006,7 +1140,7 @@ public sealed class LocalDatabasePlaintextMigrationService
         {
             result[table] = tables.Contains(table)
                 ? Convert.ToInt64(await ExecuteScalarAsync(connection, $"SELECT COUNT(*) FROM {table};", cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture)
-                : -1;
+                : 0;
         }
 
         return result;
@@ -1021,6 +1155,24 @@ public sealed class LocalDatabasePlaintextMigrationService
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadColumnNamesAsync(
+        SqliteConnection connection,
+        string schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA {QuoteIdentifier(schema)}.table_info({QuoteIdentifier(table)});";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(reader.GetString(1));
         }
 
         return result;
@@ -1092,13 +1244,17 @@ public sealed class LocalDatabasePlaintextMigrationService
         }
     }
 
-    private static async Task<SqliteConnection> OpenPlaintextConnectionAsync(string path, CancellationToken cancellationToken, bool create = false)
+    private static async Task<SqliteConnection> OpenPlaintextConnectionAsync(
+        string path,
+        CancellationToken cancellationToken,
+        bool create = false,
+        bool readOnly = false)
     {
         SQLitePCL.Batteries_V2.Init();
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
-            Mode = create ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite,
+            Mode = create ? SqliteOpenMode.ReadWriteCreate : readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
             Pooling = false
         }.ToString());
         try
@@ -1118,13 +1274,17 @@ public sealed class LocalDatabasePlaintextMigrationService
         }
     }
 
-    private static async Task<SqliteConnection> OpenEncryptedConnectionAsync(string path, byte[] key, CancellationToken cancellationToken)
+    private static async Task<SqliteConnection> OpenEncryptedConnectionAsync(
+        string path,
+        byte[] key,
+        CancellationToken cancellationToken,
+        bool create = false)
     {
         SQLitePCL.Batteries_V2.Init();
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
-            Mode = SqliteOpenMode.ReadWrite,
+            Mode = create ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite,
             Pooling = false
         }.ToString());
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -1301,6 +1461,8 @@ public sealed class LocalDatabasePlaintextMigrationService
 
     private static string EscapeSqlPath(string path) => path.Replace("'", "''", StringComparison.Ordinal);
 
+    private static string QuoteIdentifier(string value) => $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+
     private static string ToSqlCipherRawKeyLiteral(byte[] key) => $"\"x'{Convert.ToHexString(key)}'\"";
 
     private static bool IsDesktopProcessRunning()
@@ -1406,6 +1568,12 @@ public sealed class LocalDatabasePlaintextMigrationService
         string BackupPath,
         string SourceQuarantinePath,
         string RollbackEncryptedQuarantinePath);
+
+    private enum SourceSchemaVariant
+    {
+        Current,
+        LegacyReceiptRetrieval
+    }
 
     private sealed record MigrationState(
         string OperationId,

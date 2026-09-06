@@ -63,6 +63,90 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task HistoricalReceiptRetrievalSchemaClassifiesAsMigrationRequired()
+    {
+        var databasePath = DatabasePath();
+        await CreatePlaintextSourceAsync(databasePath, includeCustody: true);
+        await ConvertToHistoricalReceiptRetrievalSchemaAsync(databasePath);
+
+        var result = await CreateService(databasePath).ClassifyAsync();
+
+        Assert.Equal(LocalDatabasePlaintextMigrationStatus.MigrationRequired, result.Status);
+        Assert.Equal(1, result.SourceRowCounts["cash_custody_sessions"]);
+        Assert.Equal(1, result.SourceRowCounts["cash_tenders"]);
+        Assert.Equal(1, result.SourceRowCounts["cash_tender_events"]);
+        Assert.Equal(0, result.SourceRowCounts["cashier_shifts"]);
+        Assert.Equal(0, result.SourceRowCounts["terminal_cash_receipt_print_jobs"]);
+        Assert.Equal(0, result.SourceRowCounts["terminal_cash_payable_basis_states"]);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task HistoricalReceiptRetrievalSchemaMigratesToCurrentEncryptedSchemaAndPreservesRows()
+    {
+        var databasePath = DatabasePath();
+        await CreatePlaintextSourceAsync(databasePath, includeCustody: true);
+        await ConvertToHistoricalReceiptRetrievalSchemaAsync(databasePath);
+        var before = await CreateService(databasePath).ClassifyAsync();
+
+        var result = await CreateService(databasePath, authorized: true).MigrateAsync();
+
+        Assert.True(result.Succeeded, $"{result.Status} {result.Phase} {result.SafeMessage} {result.SafeAction}");
+        Assert.Equal(LocalDatabasePlaintextMigrationStatus.MigrationCompleted, result.Status);
+        Assert.True(before.SourceRowCounts.SequenceEqual(result.SourceRowCounts));
+        Assert.True(result.SourceRowCounts.SequenceEqual(result.TargetRowCounts));
+        Assert.False(HasPlainSqliteHeader(databasePath));
+        Assert.True(File.Exists(EnvelopePath(databasePath)));
+
+        await using var dbContext = CreateCashJournalService(databasePath).CreateDbContext();
+        Assert.Equal(1, await dbContext.CashCustodySessions.CountAsync());
+        Assert.Equal(1, await dbContext.CashTenders.CountAsync());
+        Assert.Equal(1, await dbContext.CashTenderEvents.CountAsync());
+        Assert.Equal(0, await dbContext.CashierShifts.CountAsync());
+        Assert.Equal(0, await dbContext.TerminalCashReceiptPrintJobs.CountAsync());
+        Assert.Equal(0, await dbContext.TerminalCashPayableBasisStates.CountAsync());
+
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            await connection.OpenAsync();
+        }
+
+        await using (var integrity = connection.CreateCommand())
+        {
+            integrity.CommandText = "PRAGMA integrity_check;";
+            Assert.Equal("ok", Convert.ToString(await integrity.ExecuteScalarAsync()));
+        }
+
+        await using (var foreignKeys = connection.CreateCommand())
+        {
+            foreignKeys.CommandText = "SELECT COUNT(*) FROM pragma_foreign_key_check;";
+            Assert.Equal(0L, Convert.ToInt64(await foreignKeys.ExecuteScalarAsync()));
+        }
+
+        var repeated = await CreateService(databasePath, authorized: true).MigrateAsync();
+        Assert.Equal(LocalDatabasePlaintextMigrationStatus.MigrationAlreadyCompleted, repeated.Status);
+        Assert.True(repeated.SourceRowCounts.SequenceEqual(result.SourceRowCounts));
+        Assert.True(repeated.TargetRowCounts.SequenceEqual(result.TargetRowCounts));
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task HistoricalReceiptRetrievalSchemaNearMissRemainsUnsupported()
+    {
+        var databasePath = DatabasePath();
+        await CreatePlaintextSourceAsync(databasePath, includeCustody: true);
+        await ConvertToHistoricalReceiptRetrievalSchemaAsync(databasePath);
+        await ExecutePlaintextAsync(databasePath, "ALTER TABLE cash_tenders ADD COLUMN UnexpectedLegacyColumn TEXT NULL;");
+
+        var result = await CreateService(databasePath).ClassifyAsync();
+
+        Assert.Equal(LocalDatabasePlaintextMigrationStatus.UnsupportedSchema, result.Status);
+        Assert.False(File.Exists(EnvelopePath(databasePath)));
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task MigrationPreservesCommittedWalContent()
     {
         var databasePath = DatabasePath();
@@ -647,6 +731,57 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
         }
 
         await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task ConvertToHistoricalReceiptRetrievalSchemaAsync(string databasePath)
+    {
+        await ExecutePlaintextAsync(
+            databasePath,
+            """
+            DROP TABLE terminal_cash_receipt_print_jobs;
+            DROP TABLE terminal_cash_payable_basis_states;
+            DROP TABLE cashier_shifts;
+
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountDecisionCommandId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountPayableBasisApplicationCommandId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountValidationId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryOriginalTariffSnapshotId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryAppliedTariffSnapshotId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryOriginalAmountMinorUnits;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryFinalAmountMinorUnits;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryCurrency;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryAmountAcknowledged;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryAmountAcknowledgedAt;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryImmediateRevalidationOutcome;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryImmediateRevalidatedAt;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryCorrelationId;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryReadinessStatus;
+            ALTER TABLE cash_tenders DROP COLUMN StatutoryReadinessAction;
+
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN CanonicalPaymentStatus;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN LastCentralPmsCorrelationId;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN SemanticRequestHash;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN SemanticRequestHashVersion;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN SemanticRequestHashStatus;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN LastUpdatedFromCentralPms;
+            ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN LastRetryable;
+            ALTER TABLE terminal_cash_receipt_retrieval_attempts DROP COLUMN CentralPmsCorrelationId;
+            ALTER TABLE terminal_cash_receipt_retrieval_attempts DROP COLUMN Retryable;
+            """);
+    }
+
+    private static async Task ExecutePlaintextAsync(string databasePath, string sql)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task AddCommittedWalShiftAsync(string databasePath)
