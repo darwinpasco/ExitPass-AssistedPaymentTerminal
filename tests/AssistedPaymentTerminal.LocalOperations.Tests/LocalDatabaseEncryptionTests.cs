@@ -143,7 +143,7 @@ public sealed class LocalDatabaseEncryptionTests : IDisposable
         var databasePath = DatabasePath();
         var service = CreateService(databasePath);
         await RequireSuccess(service.OpenCashierShiftAsync(TestRequests.OpenShift()));
-        await RequireSuccess(service.CloseCashierShiftAsync(new CloseCashierShiftRequest("shift-001", DateTimeOffset.Parse("2026-07-15T08:00:00Z"))));
+        await RequireSuccess(service.CloseCashierShiftAsync(TestRequests.CloseShift()));
 
         var restarted = CreateService(databasePath);
         var state = await restarted.GetLocalOperationalStateAsync(TestRequests.LocalOperationalState());

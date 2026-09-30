@@ -1,4 +1,5 @@
 using AssistedPaymentTerminal.LocalOperations;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace AssistedPaymentTerminal.LocalOperations.Tests;
@@ -93,6 +94,60 @@ public sealed class TerminalCashPaymentOutboxTests
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task NeverAttemptedUnconfiguredCommandBindsToCurrentConfiguredCentralPmsBeforeFirstSubmit()
+    {
+        using var database = TestDatabase.Create();
+        var options = database.Options with
+        {
+            CentralPmsBaseUrl = "http://127.0.0.1:56095",
+            EnableCentralPmsCashSubmission = true
+        };
+        var service = new CashJournalService(options);
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(service, session.Id);
+        var received = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(tender.Id) with
+        {
+            CentralPmsTarget = "UNCONFIGURED_CENTRAL_PMS"
+        });
+        Assert.True(received.IsSuccess);
+        var command = await service.GetTerminalCashPaymentOutboxCommandByTenderAsync(tender.Id);
+        Assert.NotNull(command);
+
+        var client = new ScriptedCentralPmsClient();
+        client.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Confirmed(Success(command), 201));
+
+        var result = await new TerminalCashPaymentSubmissionService(client, options).SubmitOrReadbackAsync(command.Id);
+
+        Assert.Equal("http://127.0.0.1:56095", result.CentralPmsTarget);
+        Assert.Equal([new Uri("http://127.0.0.1:56095")], client.SubmittedBaseUris);
+        Assert.Equal(TerminalCashPaymentCommandStatus.Confirmed, result.Status);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task UnconfiguredCommandCannotSubmitWhenCurrentCentralPmsIsNotEnabled()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(service, session.Id);
+        var received = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(tender.Id) with
+        {
+            CentralPmsTarget = "UNCONFIGURED_CENTRAL_PMS"
+        });
+        Assert.True(received.IsSuccess);
+        var command = await service.GetTerminalCashPaymentOutboxCommandByTenderAsync(tender.Id);
+        Assert.NotNull(command);
+        var client = new ScriptedCentralPmsClient();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TerminalCashPaymentSubmissionService(client, database.Options).SubmitOrReadbackAsync(command.Id));
+
+        Assert.Empty(client.Operations);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task TimeoutPersistsUncertainState()
     {
         using var database = TestDatabase.Create();
@@ -162,6 +217,116 @@ public sealed class TerminalCashPaymentOutboxTests
         var result = await new TerminalCashPaymentSubmissionService(client, database.Options).SubmitOrReadbackAsync(command.Id);
 
         Assert.Equal(TerminalCashPaymentCommandStatus.Conflict, result.Status);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task StaleTariffConflictRecoveryReadsBackThenResubmitsOriginalImmutableCommand()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var command = await CreateOutboxAsync(service);
+        var originalPayload = command.RequestPayloadJson;
+        var originalPayloadHash = command.RequestPayloadHash;
+        var firstClient = new ScriptedCentralPmsClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Conflict(409, "STALE_TARIFF"));
+        await new TerminalCashPaymentSubmissionService(firstClient, database.Options).SubmitOrReadbackAsync(command.Id);
+
+        var recoveryClient = new ScriptedCentralPmsClient();
+        recoveryClient.EnqueueReadback(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentReadbackResponse>.NotFound(404, "MISSING_TERMINAL_CASH_TENDER_RECORD"));
+        recoveryClient.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Confirmed(Success(command), 201));
+        var result = await new TerminalCashPaymentSubmissionService(recoveryClient, database.Options)
+            .RecoverStaleTariffConflictAsync(command.Id);
+
+        Assert.Equal(
+            [TerminalCashPaymentOutboxOperationType.Readback, TerminalCashPaymentOutboxOperationType.Submit],
+            recoveryClient.Operations);
+        Assert.Equal(TerminalCashPaymentCommandStatus.Confirmed, result.Status);
+        Assert.Equal(originalPayload, result.RequestPayloadJson);
+        Assert.Equal(originalPayloadHash, result.RequestPayloadHash);
+        Assert.Equal(command.IdempotencyKey, recoveryClient.SubmittedIdempotencyKeys.Single());
+        Assert.Equal(command.OriginalCorrelationId, recoveryClient.SubmittedCorrelationIds.Single());
+        Assert.Equal(originalPayload, TerminalCashPaymentPayloadFactory.Serialize(recoveryClient.SubmittedPayloads.Single()));
+
+        var attempts = await service.GetTerminalCashPaymentAttemptsAsync(command.Id);
+        Assert.Equal([1, 2, 3], attempts.Select(attempt => attempt.AttemptSequence));
+        Assert.Equal("STALE_TARIFF", attempts[0].SafeErrorCode);
+        Assert.Equal(TerminalCashPaymentAttemptOutcome.Conflict, attempts[0].OutcomeClassification);
+        Assert.Equal(TerminalCashPaymentOutboxOperationType.Readback, attempts[1].OperationType);
+        Assert.Equal(TerminalCashPaymentOutboxOperationType.Submit, attempts[2].OperationType);
+        Assert.Single(
+            await service.GetCashTenderEventsAsync(command.TerminalCashTenderId),
+            cashEvent => cashEvent.EventType == CashTenderEventType.CashReceived);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task StaleTariffConflictRecoveryUsesConfirmedReadbackWithoutResubmission()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var command = await CreateOutboxAsync(service);
+        var firstClient = new ScriptedCentralPmsClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Conflict(409, "STALE_TARIFF"));
+        await new TerminalCashPaymentSubmissionService(firstClient, database.Options).SubmitOrReadbackAsync(command.Id);
+
+        var recoveryClient = new ScriptedCentralPmsClient();
+        recoveryClient.EnqueueReadback(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentReadbackResponse>.Confirmed(Readback(command), 200));
+        var result = await new TerminalCashPaymentSubmissionService(recoveryClient, database.Options)
+            .RecoverStaleTariffConflictAsync(command.Id);
+
+        Assert.Equal([TerminalCashPaymentOutboxOperationType.Readback], recoveryClient.Operations);
+        Assert.Empty(recoveryClient.SubmittedPayloads);
+        Assert.Equal(TerminalCashPaymentCommandStatus.Confirmed, result.Status);
+        var attempts = await service.GetTerminalCashPaymentAttemptsAsync(command.Id);
+        Assert.Equal([1, 2], attempts.Select(attempt => attempt.AttemptSequence));
+        Assert.Equal("STALE_TARIFF", attempts[0].SafeErrorCode);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task NonStaleTariffConflictCannotUseRecoveryPath()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var command = await CreateOutboxAsync(service);
+        var firstClient = new ScriptedCentralPmsClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Conflict(409, "DUPLICATE_CASH_TENDER"));
+        await new TerminalCashPaymentSubmissionService(firstClient, database.Options).SubmitOrReadbackAsync(command.Id);
+        var recoveryClient = new ScriptedCentralPmsClient();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TerminalCashPaymentSubmissionService(recoveryClient, database.Options)
+                .RecoverStaleTariffConflictAsync(command.Id));
+
+        Assert.Empty(recoveryClient.Operations);
+        Assert.Single(await service.GetTerminalCashPaymentAttemptsAsync(command.Id));
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task StaleTariffConflictRecoveryRejectsChangedFrozenPayloadBeforeReadback()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var command = await CreateOutboxAsync(service);
+        var firstClient = new ScriptedCentralPmsClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Conflict(409, "STALE_TARIFF"));
+        await new TerminalCashPaymentSubmissionService(firstClient, database.Options).SubmitOrReadbackAsync(command.Id);
+        await using (var dbContext = service.CreateDbContext())
+        {
+            var persisted = await dbContext.TerminalCashPaymentOutboxCommands.SingleAsync(value => value.Id == command.Id);
+            persisted.RequestPayloadJson += " ";
+            await dbContext.SaveChangesAsync();
+        }
+
+        var recoveryClient = new ScriptedCentralPmsClient();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TerminalCashPaymentSubmissionService(recoveryClient, database.Options)
+                .RecoverStaleTariffConflictAsync(command.Id));
+
+        Assert.Empty(recoveryClient.Operations);
+        Assert.Single(await service.GetTerminalCashPaymentAttemptsAsync(command.Id));
     }
 
     [Fact]
@@ -321,6 +486,10 @@ internal sealed class ScriptedCentralPmsClient : ICentralPmsTerminalCashPaymentC
 
     public List<string> SubmittedCorrelationIds { get; } = [];
 
+    public List<Uri> SubmittedBaseUris { get; } = [];
+
+    public List<TerminalCashPaymentRequest> SubmittedPayloads { get; } = [];
+
     public void EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse> result) =>
         _submitResults.Enqueue(result);
 
@@ -336,6 +505,8 @@ internal sealed class ScriptedCentralPmsClient : ICentralPmsTerminalCashPaymentC
         CancellationToken cancellationToken = default)
     {
         Operations.Add(TerminalCashPaymentOutboxOperationType.Submit);
+        SubmittedBaseUris.Add(baseUri);
+        SubmittedPayloads.Add(payload);
         SubmittedIdempotencyKeys.Add(idempotencyKey);
         SubmittedCorrelationIds.Add(correlationId);
         return Task.FromResult((CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>)_submitResults.Dequeue());

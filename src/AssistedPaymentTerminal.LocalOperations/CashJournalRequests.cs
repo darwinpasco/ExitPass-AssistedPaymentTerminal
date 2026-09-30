@@ -12,6 +12,12 @@ public sealed record OpenCashierShiftRequest(
 
 public sealed record CloseCashierShiftRequest(
     string CashierShiftId,
+    string CashierId,
+    string AuthenticatedCashierSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
     DateTimeOffset? ClosedAt = null);
 
 public sealed record LocalOperationalStateRequest(
@@ -33,6 +39,18 @@ public sealed record CreateCashCustodySessionRequest(
     decimal OpeningCashAmount,
     Guid? CashCustodySessionId = null,
     DateTimeOffset? OpenedAt = null);
+
+public sealed record CloseCashCustodySessionRequest(
+    Guid CashCustodySessionId,
+    string CashierId,
+    string AuthenticatedCashierSessionReference,
+    string CashierShiftId,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    decimal ClosingCashAmount,
+    DateTimeOffset? ClosedAt = null);
 
 public sealed record StartCashTenderRequest(
     Guid CashCustodySessionId,

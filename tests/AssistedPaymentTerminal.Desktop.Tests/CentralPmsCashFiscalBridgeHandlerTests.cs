@@ -65,6 +65,7 @@ public sealed class CentralPmsCashFiscalBridgeHandlerTests
         Assert.Equal(Recorded(command).FiscalIssuanceReferenceId, mapped.GetProperty("fiscalIssuanceReferenceId").GetGuid());
         Assert.Equal(Recorded(command).PosFiscalDocumentId, mapped.GetProperty("posFiscalDocumentId").GetGuid());
         Assert.Equal("SI-000001", mapped.GetProperty("fiscalDocumentNumber").GetString());
+        Assert.True(mapped.GetProperty("exitAuthorizationIssued").GetBoolean());
     }
 
     [Fact]
@@ -303,7 +304,7 @@ public sealed class CentralPmsCashFiscalBridgeHandlerTests
             null,
             null,
             true,
-            false,
+            true,
             false);
 }
 
@@ -346,7 +347,6 @@ internal sealed class FiscalBridgeTestDatabase : IDisposable
         var journal = new CashJournalService(options);
         return new LocalJournalBridgeHandler(
             journal,
-            enabled: true,
             centralPmsCashSubmissionEnabled: true,
             centralPmsFiscalIssuanceEnabled: fiscalEnabled,
             centralPmsBaseUrl: centralPmsBaseUrl,

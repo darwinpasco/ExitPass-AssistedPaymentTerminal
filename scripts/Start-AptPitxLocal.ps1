@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$PreflightOnly,
-    [switch]$WebViewSmokeCheck
+    [switch]$WebViewSmokeCheck,
+    [string]$CentralPmsUrl = "http://127.0.0.1:56095"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +11,6 @@ $configPath = Join-Path $repoRoot "src\AssistedPaymentTerminal.App\public\apt-co
 $uiRoot = Join-Path $repoRoot "src\AssistedPaymentTerminal.App"
 $viteEntryPoint = Join-Path $repoRoot "node_modules\vite\bin\vite.js"
 $desktopProject = Join-Path $repoRoot "src\AssistedPaymentTerminal.Desktop\AssistedPaymentTerminal.Desktop.csproj"
-$centralPmsUrl = "https://localhost:56064"
 $webUiUrl = "http://localhost:5173"
 
 try {
@@ -32,8 +32,12 @@ $runtimeConfig = [ordered]@{
     APT_POS_SERVER_ID = "3a138565-1b88-55f8-c83d-5380db6edccc"
     CENTRAL_PMS_BASE_URL = $centralPmsUrl
     USE_MOCK_CENTRAL_PMS = "false"
+    APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = "true"
+    APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = "true"
+    APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = "true"
+    APT_ENABLE_RECEIPT_PREVIEW = "true"
     APT_WEB_UI_URL = $webUiUrl
-    CENTRAL_PMS_VENDOR_SYSTEM_ID = "HIKCENTRAL"
+    CENTRAL_PMS_VENDOR_SYSTEM_ID = "afdefaab-6be4-6b25-8f3f-3ad8309662e8"
 }
 
 $env:APT_PROFILE = $runtimeConfig.APT_PROFILE
@@ -45,6 +49,10 @@ $env:APT_SITE_GROUP_ID = $runtimeConfig.APT_SITE_GROUP_ID
 $env:APT_POS_SERVER_ID = $runtimeConfig.APT_POS_SERVER_ID
 $env:CENTRAL_PMS_BASE_URL = $runtimeConfig.CENTRAL_PMS_BASE_URL
 $env:USE_MOCK_CENTRAL_PMS = $runtimeConfig.USE_MOCK_CENTRAL_PMS
+$env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION
+$env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE
+$env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL
+$env:APT_ENABLE_RECEIPT_PREVIEW = $runtimeConfig.APT_ENABLE_RECEIPT_PREVIEW
 $env:APT_WEB_UI_URL = $runtimeConfig.APT_WEB_UI_URL
 $env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID = "be31c0c2-7fdb-4029-a61e-50fd5bbf87ce"
 

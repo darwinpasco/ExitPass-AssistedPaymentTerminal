@@ -18,7 +18,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task UnsupportedBridgeCommandIsRejected()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(handler, "localJournal.deleteEverything", "corr-unsupported", new { });
 
@@ -30,13 +30,12 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task HealthReadinessCommandSucceeds()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health", new { });
 
         Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
         Assert.True(response.RootElement.GetProperty("payload").GetProperty("healthy").GetBoolean());
-        Assert.True(response.RootElement.GetProperty("payload").GetProperty("enabled").GetBoolean());
         Assert.False(response.RootElement.GetProperty("payload").GetProperty("cashDrawerEnabled").GetBoolean());
     }
 
@@ -44,7 +43,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task HealthReportsFreshDatabaseWithoutActiveShiftOrCashCustody()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-fresh", ScopedHealthPayload());
 
@@ -79,7 +78,7 @@ public sealed class LocalJournalBridgeHandlerTests
             "pos-bridge",
             0m,
             OpenedAt: DateTimeOffset.Parse("2026-07-15T00:01:00Z")));
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-active", ScopedHealthPayload());
 
@@ -104,7 +103,7 @@ public sealed class LocalJournalBridgeHandlerTests
             SiteGroupId,
             "pos-bridge",
             DateTimeOffset.Parse("2026-07-15T00:00:00Z")));
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(
             handler,
@@ -130,37 +129,10 @@ public sealed class LocalJournalBridgeHandlerTests
     }
 
     [Fact]
-    public async Task HealthReportsDurableActiveShiftWhenCashMutationBridgeIsDisabled()
-    {
-        using var database = DesktopTestDatabase.Create();
-        await database.Service.OpenCashierShiftAsync(new OpenCashierShiftRequest(
-            "shift-bridge",
-            "cashier-bridge",
-            "auth-bridge",
-            "terminal-bridge",
-            SiteId,
-            SiteGroupId,
-            "pos-bridge",
-            DateTimeOffset.Parse("2026-07-15T00:00:00Z")));
-        var handler = database.CreateHandler(enabled: false);
-
-        var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-health-disabled", ScopedHealthPayload());
-
-        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
-        var payload = response.RootElement.GetProperty("payload");
-        Assert.False(payload.GetProperty("enabled").GetBoolean());
-        var operationalState = payload.GetProperty("operationalState");
-        Assert.Equal(1, operationalState.GetProperty("activeShiftRecordCount").GetInt32());
-        Assert.Equal("shift-bridge", operationalState.GetProperty("activeShift").GetProperty("id").GetString());
-        Assert.Equal("Open", operationalState.GetProperty("activeShift").GetProperty("status").GetString());
-        Assert.Equal(0, operationalState.GetProperty("activeCashCustodySessionRecordCount").GetInt32());
-    }
-
-    [Fact]
     public async Task StartTenderCommandMapsToLocalJournal()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(handler);
 
         var response = await StartTenderAsync(handler, sessionId, ParkingSessionStartId);
@@ -175,7 +147,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task StartTenderCommandAcceptsOptionalDevelopmentFixtureTenderId()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(handler);
         var fixtureTenderId = Guid.Parse("eeeeeeee-eeee-4eee-8eee-eeeeeeee2001");
 
@@ -205,7 +177,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task CashReceivedCommandMapsToLocalJournalAndReturnsPersistedState()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(handler);
         var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, ParkingSessionCashReceivedId));
 
@@ -253,7 +225,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task ReadbackReturnsPersistedTenderAndEventHistory()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(handler);
         var tenderId = ReadTenderId(await StartTenderAsync(handler, sessionId, ParkingSessionReadbackId));
 
@@ -278,7 +250,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task CorrelationIdIsPreserved()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var response = await SendAsync(handler, LocalJournalBridgeCommand.Health, "corr-preserved", new { });
 
@@ -289,7 +261,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task MalformedBridgeRequestsFailSafely()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var responseText = await handler.HandleWebMessageAsync("{ not-json");
 
@@ -304,7 +276,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task PayableBasisStateBridgeCommandsPersistAndRestorePreCashEvidence()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true);
+        var handler = database.CreateHandler();
 
         var saved = await SendAsync(
             handler,
@@ -367,7 +339,7 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task ProductionBridgeRejectsDevelopmentCashierSessionCreation()
     {
         using var database = DesktopTestDatabase.Create();
-        var handler = database.CreateHandler(enabled: true, allowDevelopmentSessionCommands: false);
+        var handler = database.CreateHandler(allowDevelopmentSessionCommands: false);
 
         var response = await SendAsync(handler, LocalJournalBridgeCommand.CreateOrGetDevelopmentSession, "corr-no-dev-session", new
         {
@@ -389,10 +361,9 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task ProductionBridgeBlocksTenderBeforeLocalMutationWhenHumanAuthorityFails()
     {
         using var database = DesktopTestDatabase.Create();
-        var fixtureHandler = database.CreateHandler(enabled: true);
+        var fixtureHandler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(fixtureHandler);
         var handler = database.CreateHandler(
-            enabled: true,
             humanCashAuthorization: new FixedHumanCashAuthorization(false),
             allowDevelopmentSessionCommands: false);
 
@@ -408,11 +379,10 @@ public sealed class LocalJournalBridgeHandlerTests
     public async Task ProductionBridgeDoesNotWriteCashReceivedWhenCashReceivePermissionIsDenied()
     {
         using var database = DesktopTestDatabase.Create();
-        var fixtureHandler = database.CreateHandler(enabled: true);
+        var fixtureHandler = database.CreateHandler();
         var sessionId = await CreateSessionAsync(fixtureHandler);
         var tenderId = ReadTenderId(await StartTenderAsync(fixtureHandler, sessionId, ParkingSessionCashReceivedId));
         var handler = database.CreateHandler(
-            enabled: true,
             humanCashAuthorization: new FixedHumanCashAuthorization(false, "CASH_RECEIVE_PERMISSION_DENIED"),
             allowDevelopmentSessionCommands: false);
 
@@ -530,12 +500,10 @@ internal sealed class DesktopTestDatabase : IDisposable
     }
 
     public LocalJournalBridgeHandler CreateHandler(
-        bool enabled,
         IHumanCashAuthorization? humanCashAuthorization = null,
         bool allowDevelopmentSessionCommands = true) =>
         new(
             new CashJournalService(new LocalOperationsDatabaseOptions(DatabasePath)),
-            enabled,
             humanCashAuthorization: humanCashAuthorization,
             allowDevelopmentSessionCommands: allowDevelopmentSessionCommands);
 

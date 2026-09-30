@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App, TerminalShell } from "./App";
@@ -14,7 +14,6 @@ import { mode1Config, rawMode1Config } from "./test/testConfig";
 function enabledConfig(): AptConfig {
   return {
     ...mode1Config(),
-    nonLiveCashCaptureEnabled: true,
     centralPmsConnectionMode: "mock",
   };
 }
@@ -43,7 +42,7 @@ function renderSmoke() {
 
 async function resolveSelectedReference() {
   await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
-  await screen.findByText("Authoritative payable basis");
+  await screen.findByRole("heading", { name: "Parking session details" });
 }
 
 describe("PayableBasisVisualSmokeShell", () => {
@@ -77,49 +76,42 @@ describe("PayableBasisVisualSmokeShell", () => {
     renderSmoke();
 
     expect(screen.getByText(/Pre-cash fixture state: no local cash-custody record/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Ticket reference")).toHaveValue("APT-ACTIVE-1001");
-    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Ticket number")).toHaveValue("APT-ACTIVE-1001");
+    expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Cash received locally");
   });
 
-  it("uses the real terminal lookup and readiness components for ticket and plate ready states", async () => {
+  it("uses the real terminal lookup and direct payment components for ticket and plate ready states", async () => {
     renderSmoke();
 
     await resolveSelectedReference();
-    expect(screen.getByText("Ready for cash acceptance")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
 
     await userEvent.click(screen.getByRole("button", { name: "Plate ready for cash" }));
     expect(screen.getByLabelText("Plate number")).toHaveValue("PLATE-READY-1002");
     await resolveSelectedReference();
     expect(screen.getByText("PLATE-READY-1002")).toBeInTheDocument();
-    expect(screen.getByText("Ready for cash acceptance")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
   });
 
-  it("keeps blocked readiness pre-cash and disables Continue to Cash", async () => {
+  it("keeps blocked readiness pre-cash and disables cash recording", async () => {
     renderSmoke();
 
     await userEvent.click(screen.getByRole("button", { name: "Fiscal readiness blocked" }));
     await resolveSelectedReference();
 
-    expect(screen.getByText("Cash acceptance blocked")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to Cash" })).toBeDisabled();
-    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.getByText(/Sales Invoice configuration is incomplete|Cash acceptance is blocked/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
   });
 
-  it("runs PASSED_UNCHANGED revalidation before exposing the local cash workflow", async () => {
+  it("exposes direct payment while preserving unchecked attestation before cash", async () => {
     renderSmoke();
 
     await userEvent.click(screen.getByRole("button", { name: "Revalidation passed unchanged" }));
     await resolveSelectedReference();
-    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
-
-    expect(await screen.findByLabelText("Non-live cash custody capture")).toBeInTheDocument();
-    expect(screen.getAllByText("Revalidation passed unchanged").length).toBeGreaterThan(1);
-    expect(screen.getByText("Cash has not yet been recorded at this terminal.")).toBeInTheDocument();
-    expect(screen.getByText(/Complete denomination entry and attest physical receipt before recording CASH_RECEIVED/)).toBeInTheDocument();
-    expect(screen.queryByText(/State at local cash capture:/)).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("Cash custody capture")).toBeInTheDocument();
     expect(screen.getByLabelText(/I attest/)).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Local state: CashReceived");
   });
 
@@ -128,13 +120,14 @@ describe("PayableBasisVisualSmokeShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Revalidation amount changed" }));
     await resolveSelectedReference();
-    await userEvent.click(screen.getByRole("button", { name: "Continue to Cash" }));
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
 
     expect(await screen.findByText("Parking fee changed before cash acceptance")).toBeInTheDocument();
     expect(screen.getByText("Previous amount")).toBeInTheDocument();
     expect(screen.getByText("New amount")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Acknowledge new amount" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.queryByText("Payment recorded")).not.toBeInTheDocument();
   });
 
   it("restores the persisted payable basis before cash acceptance after simulated restart", async () => {
@@ -144,8 +137,7 @@ describe("PayableBasisVisualSmokeShell", () => {
     await resolveSelectedReference();
     await userEvent.click(screen.getByRole("button", { name: "Simulate restart" }));
 
-    await waitFor(() => expect(screen.getByText("Previously resolved")).toBeInTheDocument());
-    expect(screen.getByText(/revalidation before local cash custody/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Parking session details" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Cash custody capture")).toBeInTheDocument();
   });
 });

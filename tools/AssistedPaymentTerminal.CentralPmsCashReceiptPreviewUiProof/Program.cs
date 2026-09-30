@@ -12,7 +12,6 @@ if (fullDatabasePath.StartsWith(repositoryRoot, StringComparison.OrdinalIgnoreCa
 {
     throw new InvalidOperationException("Proof database path must be outside the Git repository.");
 }
-
 if (proofOptions.Interactive)
 {
     var tenderId = await SeedScenarioAsync(fullDatabasePath, proofOptions.Scenario, useResolvedTicketReference: true).ConfigureAwait(false);
@@ -22,7 +21,6 @@ if (proofOptions.Interactive)
     Console.WriteLine($"Temporary database: {fullDatabasePath}");
     Console.WriteLine("Set the following environment for WPF/WebView2 manual validation:");
     Console.WriteLine($"$env:APT_LOCAL_DB_PATH = \"{fullDatabasePath}\"");
-    Console.WriteLine("$env:APT_ENABLE_NON_LIVE_CASH_CAPTURE = \"true\"");
     Console.WriteLine("$env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = \"true\"");
     Console.WriteLine("$env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = \"true\"");
     Console.WriteLine("$env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = \"true\"");
@@ -268,7 +266,6 @@ static async Task<JsonElement> PreviewAsync(string databasePath, Guid terminalCa
     var options = Options(databasePath);
     var handler = new LocalJournalBridgeHandler(
         new CashJournalService(options),
-        enabled: true,
         centralPmsCashSubmissionEnabled: true,
         centralPmsFiscalIssuanceEnabled: true,
         centralPmsReceiptRetrievalEnabled: true,
@@ -479,66 +476,8 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
         CancellationToken cancellationToken = default)
     {
         var voided = scenario == ReceiptPreviewProofScenario.Voided;
-        var payload = scenario is ReceiptPreviewProofScenario.Complete or ReceiptPreviewProofScenario.Voided
-            ? """
-              {
-                "presentation": {
-                  "registeredBusinessName": "GOVERNED REGISTERED BUSINESS NAME",
-                  "registeredBusinessAddress": "GOVERNED REGISTERED BUSINESS ADDRESS",
-                  "tin": "GOVERNED TIN",
-                  "posSerialNumber": "GOVERNED POS SERIAL NUMBER",
-                  "machineIdentificationNumber": "GOVERNED MACHINE IDENTIFICATION NUMBER",
-                  "parkingLocation": "GOVERNED PARKING LOCATION",
-                  "terminalId": "GOVERNED TERMINAL ID",
-                  "fiscalDocumentNumber": "SI-000001",
-                  "issuedAt": "GOVERNED ISSUED DATE",
-                  "plateNumber": "GOVERNED PLATE NUMBER",
-                  "entryTime": "GOVERNED ENTRY TIME",
-                  "exitTime": "GOVERNED EXIT TIME",
-                  "durationDisplay": "GOVERNED DURATION",
-                  "lines": [
-                    { "description": "Parking fee - cash", "quantity": "1", "unitPriceDisplay": "PHP 125.00", "displayAmount": "PHP 125.00" }
-                  ],
-                  "subtotalDisplay": "PHP 125.00",
-                  "discounts": [
-                    { "description": "None", "displayAmount": "PHP 0.00" }
-                  ],
-                  "vatableSalesDisplay": "PHP 125.00",
-                  "outputVatDisplay": "PHP 0.00",
-                  "vatExemptSalesDisplay": "PHP 0.00",
-                  "zeroRatedSalesDisplay": "PHP 0.00",
-                  "tenders": [
-                    { "tenderType": "CASH", "provider": "not_applicable", "displayAmount": "PHP 150.00", "changeDisplay": "PHP 25.00" }
-                  ],
-                  "salesInvoiceStatement": "THIS SERVES AS YOUR SALES INVOICE",
-                  "footer": { "message": "THANK YOU FOR CHOOSING OUR SERVICE" },
-                  "birAccreditationNumber": "GOVERNED BIR ACCREDITATION NO.",
-                  "birAccreditationIssuedDateDisplay": "GOVERNED BIR ACCREDITATION DATE ISSUED",
-                  "birAccreditationValidUntilDisplay": "GOVERNED BIR ACCREDITATION VALID UNTIL",
-                  "ptuNumber": "GOVERNED PTU NO.",
-                  "ptuIssuedDateDisplay": "GOVERNED PTU DATE ISSUED"
-                }
-              }
-              """
-            : """
-              {
-                "presentation": {
-                  "fiscalDocumentNumber": "SI-000001",
-                  "lines": [
-                    { "description": "Parking fee - cash", "quantity": "1", "displayAmount": "PHP 125.00" }
-                  ],
-                  "taxes": [
-                    { "taxType": "VAT", "displayAmount": "PHP 0.00" }
-                  ],
-                  "totals": [
-                    { "totalType": "grand_total", "displayAmount": "PHP 125.00" }
-                  ],
-                  "tenders": [
-                    { "tenderType": "CASH", "displayAmount": "PHP 150.00", "changeDisplay": "PHP 25.00" }
-                  ]
-                }
-              }
-              """;
+        var payload = PreviewCanonicalFixture.Json(
+            scenario is ReceiptPreviewProofScenario.Complete or ReceiptPreviewProofScenario.Voided);
 
         using var document = JsonDocument.Parse(payload);
 
@@ -570,6 +509,79 @@ internal sealed class PreviewReceiptClient(ReceiptPreviewProofScenario scenario)
             200,
             Guid.Parse(correlationId)));
     }
+}
+
+internal static class PreviewCanonicalFixture
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public static string Json(bool complete) => JsonSerializer.Serialize(
+        new
+        {
+            canonicalText = CanonicalPrintableText,
+            presentation = new
+            {
+                sections = complete ? CompleteSections() :
+                [Section("fiscalNumbering", "Fiscal Numbering", 50,
+                    Row("fiscalNumbering.fiscalDocumentNumber", "Fiscal Document Number", "SI-000001"))]
+            }
+        },
+        JsonOptions);
+
+    private const string CanonicalPrintableText = "SALES INVOICE\r\nORIGINAL\r\nSI No                           SI-000001\r\n";
+
+    private static object[] CompleteSections() =>
+    [
+        Section("header", "Header", 10,
+            Row("header.documentTitle", "Document Title", "SALES INVOICE")),
+        Section("salesInvoiceHeaderSnapshot", "Sales Invoice Header Snapshot", 20,
+            Row("salesInvoiceHeaderSnapshot.registeredBusinessName", "Registered Business Name", "GOVERNED REGISTERED BUSINESS NAME"),
+            Row("salesInvoiceHeaderSnapshot.registeredBusinessAddress", "Registered Business Address", "GOVERNED REGISTERED BUSINESS ADDRESS"),
+            Row("salesInvoiceHeaderSnapshot.tin", "TIN", "GOVERNED TIN"),
+            Row("salesInvoiceHeaderSnapshot.posSerialNumber", "POS Serial Number", "GOVERNED POS SERIAL NUMBER"),
+            Row("salesInvoiceHeaderSnapshot.machineIdentificationNumber", "MIN", "GOVERNED MACHINE IDENTIFICATION NUMBER"),
+            Row("salesInvoiceHeaderSnapshot.parkingLocationDisplay", "Parking Location", "GOVERNED PARKING LOCATION"),
+            Row("salesInvoiceHeaderSnapshot.supplierDeveloperRegisteredName", "Supplier / Developer Registered Name", "GOVERNED SUPPLIER"),
+            Row("salesInvoiceHeaderSnapshot.supplierDeveloperAddress", "Supplier / Developer Address", "GOVERNED SUPPLIER ADDRESS"),
+            Row("salesInvoiceHeaderSnapshot.supplierDeveloperTin", "Supplier / Developer TIN", "GOVERNED SUPPLIER TIN"),
+            Row("salesInvoiceHeaderSnapshot.birAccreditationNumber", "BIR Accreditation Number", "GOVERNED BIR ACCREDITATION NO."),
+            Row("salesInvoiceHeaderSnapshot.birAccreditationIssuedDate", "BIR Accreditation Issued Date", "GOVERNED BIR ACCREDITATION DATE ISSUED"),
+            Row("salesInvoiceHeaderSnapshot.birAccreditationValidUntil", "BIR Accreditation Valid Until", "GOVERNED BIR ACCREDITATION VALID UNTIL"),
+            Row("salesInvoiceHeaderSnapshot.ptuNumber", "PTU Number", "GOVERNED PTU NO."),
+            Row("salesInvoiceHeaderSnapshot.ptuIssuedDate", "PTU Issued Date", "GOVERNED PTU DATE ISSUED"),
+            Row("salesInvoiceHeaderSnapshot.salesInvoiceLegalStatement", "Sales Invoice Legal Statement", "THIS SERVES AS YOUR SALES INVOICE")),
+        Section("fiscalNumbering", "Fiscal Numbering", 50,
+            Row("fiscalNumbering.fiscalDocumentNumber", "Fiscal Document Number", "SI-000001")),
+        Section("parkingPaymentReferences", "Parking / Payment", 60,
+            Row("parkingPaymentReferences.branchOrSite", "Branch / Site", "GOVERNED SITE"),
+            Row("parkingPaymentReferences.ticketNumber", "Ticket Number", "GOVERNED TICKET"),
+            Row("parkingPaymentReferences.plateNumber", "Plate Number", "GOVERNED PLATE NUMBER"),
+            Row("parkingPaymentReferences.entryTime", "Entry Time", "GOVERNED ENTRY TIME"),
+            Row("parkingPaymentReferences.paymentTime", "Payment Time", "GOVERNED PAYMENT TIME"),
+            Row("parkingPaymentReferences.parkingDuration", "Parking Duration", "GOVERNED DURATION"),
+            Row("parkingPaymentReferences.paymentMethod", "Payment Method", "CASH")),
+        Section("lineItems", "Line Items", 70,
+            Row("lineItems[0000].description", "Description", "Parking fee - cash"),
+            Row("lineItems[0000].quantity", "Quantity", "1"),
+            Row("lineItems[0000].netAmount", "Net Amount", "PHP 125.00")),
+        Section("vatBreakdown", "VAT Breakdown", 95,
+            Row("totals.vatableSales", "VATable Sales", "PHP 125.00"),
+            Row("totals.vatAmount", "VAT Amount", "PHP 0.00"),
+            Row("totals.vatExemptSales", "VAT Exempt Sales", "PHP 0.00"),
+            Row("totals.zeroRatedSales", "Zero Rated Sales", "PHP 0.00")),
+        Section("tenders", "Tenders", 100,
+            Row("tenders[0000].tenderTypeCodeKey", "Tender Type", "CASH"),
+            Row("tenders[0000].amount", "Tender Amount", "PHP 150.00")),
+        Section("totals", "Totals", 110,
+            Row("totals.summary.subtotal", "Subtotal", "PHP 125.00"),
+            Row("totals.summary.totalAmount", "Total Amount", "PHP 125.00"))
+    ];
+
+    private static object Section(string name, string label, int sortOrder, params object[] rows) =>
+        new { name, label, sortOrder, posture = "required", rows };
+
+    private static object Row(string key, string label, string displayValue) =>
+        new { key, label, valueKind = "text", posture = "required", displayValue, rawValue = displayValue };
 }
 
 internal sealed class NoNetworkCashClient : ICentralPmsTerminalCashPaymentClient

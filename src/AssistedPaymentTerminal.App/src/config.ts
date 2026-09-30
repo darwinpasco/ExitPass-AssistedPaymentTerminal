@@ -14,7 +14,6 @@ export type AptConfig = {
   centralPmsConnectionMode: "mock" | "live";
   webUiUrl?: string;
   vendorSystemId: string;
-  nonLiveCashCaptureEnabled: boolean;
   centralPmsCashSubmissionEnabled: boolean;
   centralPmsFiscalIssuanceEnabled: boolean;
   centralPmsReceiptRetrievalEnabled: boolean;
@@ -100,7 +99,6 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
       centralPmsConnectionMode: raw.USE_MOCK_CENTRAL_PMS!.trim().toLowerCase() === "true" ? "mock" : "live",
       webUiUrl: raw.APT_WEB_UI_URL?.trim(),
       vendorSystemId: raw.CENTRAL_PMS_VENDOR_SYSTEM_ID?.trim() || "VENDOR-PMS-DEV",
-      nonLiveCashCaptureEnabled: raw.APT_ENABLE_NON_LIVE_CASH_CAPTURE?.trim().toLowerCase() === "true",
       centralPmsCashSubmissionEnabled: raw.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION?.trim().toLowerCase() === "true",
       centralPmsFiscalIssuanceEnabled: raw.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE?.trim().toLowerCase() === "true",
       centralPmsReceiptRetrievalEnabled: raw.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL?.trim().toLowerCase() === "true",
@@ -162,10 +160,6 @@ function applyQueryOverrides(raw: RawAptConfig): void {
 function applyDesktopFlags(raw: RawAptConfig): void {
   if (!window.__APT_DESKTOP_FLAGS__) {
     return;
-  }
-
-  if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_NON_LIVE_CASH_CAPTURE) {
-    raw.APT_ENABLE_NON_LIVE_CASH_CAPTURE = window.__APT_DESKTOP_FLAGS__.APT_ENABLE_NON_LIVE_CASH_CAPTURE;
   }
 
   if (window.__APT_DESKTOP_FLAGS__.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION) {

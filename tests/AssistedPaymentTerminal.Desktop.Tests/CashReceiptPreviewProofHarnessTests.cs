@@ -104,12 +104,13 @@ public sealed class CashReceiptPreviewProofHarnessTests
                 {
                     Assert.False(preview.Document!.HasPlaceholders);
                     Assert.Equal("Complete", preview.Document.ConfigurationCompleteness);
-                    var text = JsonSerializer.Serialize(preview.Document.Sections);
-                    Assert.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", text, StringComparison.Ordinal);
-                    Assert.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", text, StringComparison.Ordinal);
-                    Assert.Contains("GOVERNED PTU DATE ISSUED", text, StringComparison.Ordinal);
-                    Assert.Contains("birAccreditationIssuedDateDisplay", text, StringComparison.Ordinal);
-                    Assert.Contains("ptuIssuedDateDisplay", text, StringComparison.Ordinal);
+                    var displayValues = preview.Document.Sections
+                        .SelectMany(section => section.Rows)
+                        .Select(row => row.DisplayValue)
+                        .ToArray();
+                    Assert.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", displayValues);
+                    Assert.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", displayValues);
+                    Assert.Contains("GOVERNED PTU DATE ISSUED", displayValues);
                 }
 
                 if (scenario == "Voided")

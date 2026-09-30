@@ -6,13 +6,10 @@ import type {
   CentralPmsClient,
   PayableBasisResponse,
   StatutoryDiscountDecisionSubmitRequest,
-  StatutoryOrdinanceAvailabilityResponse,
-  StatutoryOrdinanceAvailabilityViewState,
 } from "./api/centralPmsTypes";
 import { containsManualStatutoryIdMask, maskStatutoryId } from "./statutoryIdMasking";
 import { buildTerminalContext } from "./terminalContext";
 import { mode1Config } from "./test/testConfig";
-
 describe("statutory ID presentation masking", () => {
   it.each([
     ["AB1234567890", "AB******7890"],
@@ -111,8 +108,7 @@ function renderPanel(
       client={client}
       context={buildTerminalContext(mode1Config())}
       state={state}
-      ordinanceAvailability={availability}
-      onRetryAvailability={vi.fn()}
+      availableEntitlements={["SENIOR_CITIZEN", "PWD"]}
       onStateChange={onStateChange}
       onAppliedBasisReady={vi.fn(async () => undefined)}
     />,
@@ -124,31 +120,6 @@ function cashierAccessibilityText(): string {
     .flatMap((element) => [element.getAttribute("aria-label"), element.getAttribute("aria-description"), element.getAttribute("title")])
     .filter((value): value is string => Boolean(value))
     .join("\n");
-}
-
-function coverage(entitlementType: "SENIOR_CITIZEN" | "PWD"): StatutoryOrdinanceAvailabilityResponse {
-  return {
-    operation: "RESOLVE",
-    revalidationOutcome: null,
-    classification: "AVAILABLE",
-    entitlementType,
-    ordinanceCoverageAvailable: true,
-    statutoryRequestAllowed: true,
-    preCashRevalidationPassed: false,
-    readyForStatutoryCashFlow: true,
-    ordinaryPaymentPreserved: true,
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    siteGroupId: basis.siteGroupId,
-    resolvedScopeType: "SITE",
-    coverageClassification: "AVAILABLE",
-    policyStatusClassification: "ACTIVE",
-    supportReference: "safe-test-reference",
-    correlationId: "safe-test-correlation",
-    evaluatedAt: "2026-08-07T00:00:00Z",
-    retryable: false,
-    safeMessage: "Coverage is available.",
-  };
 }
 
 const basis: PayableBasisResponse = {
@@ -168,13 +139,4 @@ const basis: PayableBasisResponse = {
   retryable: false,
   safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
   correlationId: "safe-basis-correlation",
-};
-
-const availability: StatutoryOrdinanceAvailabilityViewState = {
-  status: "ready",
-  parkingSessionId: basis.parkingSessionId,
-  siteId: basis.siteId,
-  restoredRefresh: false,
-  seniorCitizen: coverage("SENIOR_CITIZEN"),
-  pwd: coverage("PWD"),
 };

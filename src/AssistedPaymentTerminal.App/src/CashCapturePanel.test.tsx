@@ -26,22 +26,24 @@ import { mode1Config } from "./test/testConfig";
 import { buildTerminalContext } from "./terminalContext";
 
 describe("CashCapturePanel", () => {
-  it("is hidden when non-live capture is disabled", () => {
+  it("is available without a cash-capability feature flag", async () => {
     renderPanel({ config: mode1Config(), bridge: new FakeBridge() });
 
-    expect(screen.queryByLabelText("Non-live cash custody capture")).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("Cash custody capture")).toBeInTheDocument();
   });
 
-  it("is unavailable for expired tariff", () => {
+  it("refreshes an expired tariff at the irreversible boundary instead of hiding payment entry", async () => {
     renderPanel({ config: enabledConfig(), tariffExpired: true, bridge: new FakeBridge() });
 
-    expect(screen.getByLabelText("Non-live cash capture unavailable")).toBeInTheDocument();
-    expect(screen.getByText("Cash capture unavailable")).toBeInTheDocument();
+    expect(screen.getByLabelText("Cash custody capture")).toBeInTheDocument();
+    expect(screen.getByText(/Parking fee has expired/)).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    expect(await screen.findByRole("button", { name: "Record Cash Received" })).toBeEnabled();
   });
 
   it("rejects amount tendered below amount due", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     await userEvent.clear(screen.getByLabelText("Amount tendered"));
     await userEvent.type(screen.getByLabelText("Amount tendered"), "100");
@@ -53,7 +55,7 @@ describe("CashCapturePanel", () => {
 
   it("requires cashier attestation", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
 
@@ -62,22 +64,20 @@ describe("CashCapturePanel", () => {
 
   it("calculates and displays change due", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     await userEvent.clear(screen.getByLabelText("Amount tendered"));
     await userEvent.type(screen.getByLabelText("Amount tendered"), "150");
 
     expect(screen.getByLabelText("Change due")).toHaveValue("25.00");
   });
-  it("shows pre-cash wording and creates no local custody record before the command", async () => {
+  it("creates no local custody record before the explicit command", async () => {
     const bridge = new FakeBridge();
     renderPanel({ config: enabledConfig(), bridge });
 
-    await screen.findByText("Local cash custody capture");
-    expect(await screen.findByText("Cash has not yet been recorded at this terminal.")).toBeInTheDocument();
-    expect(screen.getByText(/Complete denomination entry and attest physical receipt before recording CASH_RECEIVED/)).toBeInTheDocument();
-    expect(screen.queryByText(/State at local cash capture:/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    await screen.findByLabelText("Cash custody capture");
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeInTheDocument();
+    expect(screen.queryByText("Payment recorded")).not.toBeInTheDocument();
     expect(screen.getByLabelText(/I attest/)).not.toBeChecked();
     expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
     expect(bridge.startTender).not.toHaveBeenCalled();
@@ -87,7 +87,7 @@ describe("CashCapturePanel", () => {
   it("checking attestation alone does not create CASH_RECEIVED", async () => {
     const bridge = new FakeBridge();
     renderPanel({ config: enabledConfig(), bridge });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     await userEvent.click(screen.getByLabelText(/I attest/));
 
@@ -95,7 +95,7 @@ describe("CashCapturePanel", () => {
     expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
     expect(bridge.startTender).not.toHaveBeenCalled();
     expect(bridge.recordCashReceived).not.toHaveBeenCalled();
-    expect(screen.queryByText("Cash received locally")).not.toBeInTheDocument();
+    expect(screen.queryByText("Payment recorded")).not.toBeInTheDocument();
   });
 
   it("records CASH_RECEIVED exactly once through the irreversible command", async () => {
@@ -107,8 +107,7 @@ describe("CashCapturePanel", () => {
     expect(bridge.createOrGetDevelopmentSession).not.toHaveBeenCalled();
     expect(bridge.startTender).toHaveBeenCalledTimes(1);
     expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
-    expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Payment recorded" })).toBeInTheDocument();
   });
 
   it("runs immediate revalidation before CASH_RECEIVED and persists statutory tender evidence", async () => {
@@ -133,7 +132,6 @@ describe("CashCapturePanel", () => {
       centralPmsCorrelationId: "corr-second-revalidation",
       readinessStatus: "APPLIED",
     });
-    expect(await screen.findByTestId("statutory-tender-evidence")).toHaveTextContent("Authoritative version retained");
     expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
   });
 
@@ -153,7 +151,7 @@ describe("CashCapturePanel", () => {
 
   it("renders all supported Philippine denomination inputs in descending order", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     const labels = ["PHP-1000", "PHP-500", "PHP-100", "PHP-50", "PHP-20", "PHP-10", "PHP-5", "PHP-1"];
     for (const label of labels) {
@@ -164,7 +162,7 @@ describe("CashCapturePanel", () => {
   it("submits only non-zero denomination counts, including new and existing denominations", async () => {
     const bridge = new FakeBridge();
     renderPanel({ config: enabledConfig(), bridge });
-    await screen.findByText("Local cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     await userEvent.clear(screen.getByLabelText("PHP-100"));
     await userEvent.type(screen.getByLabelText("PHP-100"), "1");
@@ -192,16 +190,14 @@ describe("CashCapturePanel", () => {
     expect(payload.denominations.map((denomination) => denomination.denominationCode)).not.toContain("PHP-50");
   });
 
-  it("displays the historical local-custody checkpoint without exposing the local tender identity", async () => {
+  it("displays concise payment-recorded state without exposing the local tender identity", async () => {
     renderPanel({ config: enabledConfig(), bridge: new FakeBridge() });
 
     await recordCashReceived();
 
-    expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Payment recorded" })).toBeInTheDocument();
     expect(screen.queryByText("Local tender ID: tender-001")).not.toBeInTheDocument();
-    expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
-    expect(screen.getByText(/At this checkpoint, canonical payment had not yet been submitted/)).toBeInTheDocument();
-    expect(screen.getByText(/fiscal issuance had not yet started/)).toBeInTheDocument();
+    expect(screen.queryByText(/State at CASH_RECEIVED:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Local cash only\./)).not.toBeInTheDocument();
   });
 
@@ -259,7 +255,7 @@ describe("CashCapturePanel", () => {
     await recordCashReceived();
 
     expect(bridge.health).toHaveBeenCalled();
-    expect(await screen.findByText("Cash received locally")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Payment recorded" })).toBeInTheDocument();
   });
 
   it("hides Central PMS section when submission is disabled", async () => {
@@ -364,7 +360,7 @@ describe("CashCapturePanel", () => {
 
     expect(await screen.findByText("Rejected - reconciliation required")).toBeInTheDocument();
     expect(screen.getByText("Safe error code: INVALID_CASH_AMOUNTS")).toBeInTheDocument();
-    expect(screen.getByText("Cash received locally")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Payment recorded" })).toBeInTheDocument();
   });
 
   it("never displays confirmed wording for retry-pending Central PMS status", async () => {
@@ -898,48 +894,16 @@ describe("CashCapturePanel", () => {
     expect(document.body).toHaveTextContent("Paper width: 57 mm");
     expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
     expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
-    expect(screen.getAllByText("SALES INVOICE").length).toBeGreaterThan(0);
-    expect(screen.getByText("GOVERNED REGISTERED BUSINESS NAME")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED REGISTERED BUSINESS ADDRESS")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED TIN")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED POS SERIAL NUMBER")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED MACHINE IDENTIFICATION NUMBER")).toBeInTheDocument();
-    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
-    expect(screen.getByText("Qty")).toBeInTheDocument();
-    expect(screen.getByText("Unit price")).toBeInTheDocument();
-    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
-    expect(screen.queryByText("SALES INVOICE DETAILS")).not.toBeInTheDocument();
-    expect(screen.getAllByText("SALES INVOICE").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Sales Invoice No.").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Fiscal Identity")).not.toBeInTheDocument();
-    expect(screen.queryByText("Fiscal document no.")).not.toBeInTheDocument();
-    expect(screen.getByText("PARKING DETAILS")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED PLATE NUMBER")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED ENTRY TIME")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED EXIT TIME")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED DURATION")).toBeInTheDocument();
-    expect(screen.getByText("VAT BREAKDOWN")).toBeInTheDocument();
-    expect(screen.getAllByText("PHP 0.00").length).toBeGreaterThan(0);
-    expect(screen.getByText("Output VAT")).toBeInTheDocument();
-    expect(screen.getAllByText("Subtotal").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("PHP 125.00").length).toBeGreaterThan(0);
-    expect(screen.queryByText("grand_total")).not.toBeInTheDocument();
-    expect(screen.getByText("Payment method")).toBeInTheDocument();
-    expect(screen.getByText("CASH")).toBeInTheDocument();
-    expect(screen.getByText("Total Paid")).toBeInTheDocument();
-    expect(screen.getByText("Change")).toBeInTheDocument();
-    expect(screen.getByText("THIS SERVES AS YOUR SALES INVOICE")).toBeInTheDocument();
-    expect(screen.getByText("THANK YOU FOR CHOOSING OUR SERVICE")).toBeInTheDocument();
-    expect(screen.getByText("BIR ACCREDITATION AND PTU INFORMATION")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED BIR ACCREDITATION NO.")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED BIR ACCREDITATION DATE ISSUED")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED BIR ACCREDITATION VALID UNTIL")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED PTU NO.")).toBeInTheDocument();
-    expect(screen.getByText("GOVERNED PTU DATE ISSUED")).toBeInTheDocument();
-    expect(document.body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
-    expect(document.body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
-    expect(document.body.textContent ?? "").not.toMatch(/merchant Name|site Name|display Amount|total Type|tender Type|change Display|message|VAT REG TIN|Demo Corporation|Sample TIN/i);
+    const body = screen.getByLabelText("Read-only receipt body");
+    expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body).toHaveTextContent("SALES INVOICE");
+    expect(body).toHaveTextContent("Parking fee - cash");
+    expect(body).toHaveTextContent("VAT BREAKDOWN");
+    expect(body).toHaveTextContent("THIS SERVES AS YOUR SALES INVOICE");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
+    expect(body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
     expect(screen.queryByRole("button", { name: /^(Print Sales Invoice|Reprint Sales Invoice|Export|PDF|Email|SMS|Share)$/i })).not.toBeInTheDocument();
   });
 
@@ -1161,33 +1125,32 @@ describe("CashCapturePanel", () => {
     await recordCashReceived();
     await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
 
-    await screen.findByText("GOVERNED REGISTERED BUSINESS NAME");
-    const body = screen.getByLabelText("Read-only receipt body");
+    const body = await screen.findByLabelText("Read-only receipt body");
     expect(document.body).toHaveTextContent("Configuration completeness: Complete");
     expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
-    expect(body.textContent ?? "").not.toMatch(/merchant Name|site Name|Fiscal Identity|fiscal Document Number|Fiscal document no\.|display Amount|total Type|tender Type|change Display|message/i);
-    expect(within(body).getAllByText("GOVERNED REGISTERED BUSINESS NAME")).toHaveLength(1);
-    expect(within(body).getAllByText("GOVERNED PARKING LOCATION")).toHaveLength(1);
-    expect(within(body).getAllByText("SI-000001")).toHaveLength(1);
-    expect(within(body).getByText("Sales Invoice No.")).toBeInTheDocument();
+    expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body.textContent ?? "").not.toMatch(/merchant Name|site Name|Fiscal Identity|Fiscal document no\.|display Amount|total Type|change Display|authoritativePresentation|rawValue/i);
+    expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
+    expect(body).toHaveTextContent("GOVERNED PARKING LOCATION");
+    expect(body).toHaveTextContent("SI-000001");
+    expect(body).toHaveTextContent("Fiscal Document Number");
     expect(screen.queryByText("[REGISTERED BUSINESS NAME]")).not.toBeInTheDocument();
     expect(screen.queryByText("[TIN]")).not.toBeInTheDocument();
     expect(screen.queryByText("[PLATE NUMBER]")).not.toBeInTheDocument();
     expect(screen.queryByText("[SALES INVOICE FOOTER]")).not.toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED TIN")).toBeInTheDocument();
-    expect(within(body).getByText("BIR Accr. No.")).toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED BIR ACCREDITATION NO.")).toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED BIR ACCREDITATION DATE ISSUED")).toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED BIR ACCREDITATION VALID UNTIL")).toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED PTU NO.")).toBeInTheDocument();
-    expect(within(body).getByText("GOVERNED PTU DATE ISSUED")).toBeInTheDocument();
-    expect(within(body).getAllByText("Date Issued")).toHaveLength(2);
+    expect(body).toHaveTextContent("GOVERNED TIN");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION DATE ISSUED");
+    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION VALID UNTIL");
+    expect(body).toHaveTextContent("GOVERNED PTU NO.");
+    expect(body).toHaveTextContent("GOVERNED PTU DATE ISSUED");
     expect(screen.queryByText("[BIR ACCREDITATION NO.]")).not.toBeInTheDocument();
     expect(screen.queryByText("[BIR ACCREDITATION DATE ISSUED]")).not.toBeInTheDocument();
     expect(screen.queryByText("[BIR ACCREDITATION VALID UNTIL]")).not.toBeInTheDocument();
     expect(screen.queryByText("[PTU DATE ISSUED]")).not.toBeInTheDocument();
-    expect(within(body).getByText("THIS SERVES AS YOUR SALES INVOICE")).toBeInTheDocument();
-    expect(within(body).getByText("THANK YOU FOR CHOOSING OUR SERVICE")).toBeInTheDocument();
+    expect(body).toHaveTextContent("THIS SERVES AS YOUR SALES INVOICE");
+    expect(body).toHaveTextContent("THANK YOU FOR CHOOSING OUR SERVICE");
     expect(body.textContent ?? "").not.toMatch(/Demo Corporation|Sample TIN|ABC 1234|ACC-001|PTU-001/i);
   });
 
@@ -1209,9 +1172,27 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText("Paper width: 57 mm")).toBeInTheDocument();
     expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
     expect(screen.getByText("Not printed")).toBeInTheDocument();
-    expect(screen.getByText("Exit authorization unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Exit Authorization: ISSUED")).toBeInTheDocument();
     const details = screen.getByText("Receipt technical details").closest("details");
     expect(details).not.toHaveAttribute("open");
+  });
+
+  it("keeps receipt Exit Authorization presentation fail closed when authoritative readback is false", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig(),
+      bridge: new FakeBridge({
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded", { exitAuthorizationIssued: false }),
+        receiptStatus: receiptStatus("Available"),
+        receiptPreview: receiptPreview({ complete: true }),
+      }),
+    });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    expect(await screen.findByText("Exit authorization unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Exit Authorization: ISSUED")).not.toBeInTheDocument();
   });
 
   it("closes receipt preview and returns to the cashier workflow", async () => {
@@ -1230,7 +1211,7 @@ describe("CashCapturePanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Close preview" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reload local tender" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Complete transaction" })).toBeInTheDocument();
   });
 
   it("shows unsupported version guidance without rendering receipt body", async () => {
@@ -1323,7 +1304,7 @@ describe("CashCapturePanel", () => {
 
     await screen.findByText("Receipt preview");
     expect(document.body).toHaveTextContent(`Paper width: ${expectedText}`);
-    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
+    expect(screen.getByLabelText("Read-only receipt body")).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
     expect(screen.getByText("Receipt technical details")).toBeInTheDocument();
   });
 
@@ -1352,7 +1333,7 @@ describe("CashCapturePanel", () => {
     expect(document.body).toHaveTextContent("Paper width: 57 mm");
     expect(screen.getByText(/Falling back to 57 mm/)).toBeInTheDocument();
     expect(screen.getAllByText("SI-000001").length).toBeGreaterThan(0);
-    expect(screen.getByText("Parking fee - cash")).toBeInTheDocument();
+    expect(screen.getByLabelText("Read-only receipt body")).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
   });
 
   it("preserves identical receipt facts across 57 58 and 80 mm profiles", async () => {
@@ -1414,7 +1395,7 @@ describe("CashCapturePanel", () => {
     expect(screen.queryByLabelText("Receipt preview")).not.toBeInTheDocument();
   });
 
-  it("auto-advances from CASH_RECEIVED through bounded payment fiscal and receipt readback without duplicating local custody", async () => {
+  it("requires the explicit completion action and then advances payment fiscal ExitAuthorization and receipt without duplicating local custody", async () => {
     const bridge = new FakeBridge({
       centralStatus: centralStatus("Pending"),
       submitStatus: centralStatus("Confirmed"),
@@ -1423,9 +1404,15 @@ describe("CashCapturePanel", () => {
       receiptStatus: receiptStatus("RetryPending"),
       receiptRetrieveStatus: receiptStatus("Available"),
     });
-    renderPanel({ config: receiptEnabledConfig(), bridge, autoAdvanceAfterCashReceived: true });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
 
     await recordCashReceived();
+
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
 
     await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalledTimes(1));
@@ -1438,14 +1425,66 @@ describe("CashCapturePanel", () => {
     expect(screen.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available");
   });
 
-  it("does not mark the transaction complete when ExitAuthorization readback is not available", async () => {
+  it("stops the explicit completion sequence before fiscal issuance when payment is not final", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Pending"),
+      submitStatus: centralStatus("ReadbackRequired"),
+      fiscalSubmitStatus: fiscalStatus("Recorded"),
+      receiptRetrieveStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
+
+    expect(await screen.findByText("Payment confirmation is pending. Try again.")).toBeInTheDocument();
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1);
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("stops receipt retrieval when authoritative fiscal readback has not issued ExitAuthorization", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Pending"),
+      submitStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Pending"),
+      fiscalSubmitStatus: fiscalStatus("Recorded", { exitAuthorizationIssued: false }),
+      receiptRetrieveStatus: receiptStatus("Available"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
+
+    expect(await screen.findByText("Exit authorization has not been issued. Try again or contact support.")).toBeInTheDocument();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalledTimes(1);
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("offers explicit completion after restart without automatically submitting the recovered CASH_RECEIVED tender", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Pending"),
+    });
+    renderPanel({ config: receiptEnabledConfig(), bridge });
+
+    expect(await screen.findByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" })).toBeEnabled();
+    expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
+    expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
+    expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+  });
+
+  it("does not mark the transaction complete when authoritative fiscal readback says ExitAuthorization was not issued", async () => {
     const bridge = new FakeBridge({
       initialReadback: {
         tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
         events: [],
       },
       centralStatus: centralStatus("Confirmed"),
-      fiscalStatus: fiscalStatus("Recorded"),
+      fiscalStatus: fiscalStatus("Recorded", { exitAuthorizationIssued: false }),
       receiptStatus: receiptStatus("Available"),
     });
     renderPanel({ config: receiptEnabledConfig(), bridge });
@@ -1453,7 +1492,7 @@ describe("CashCapturePanel", () => {
     const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
     await waitFor(() => expect(statePanel.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available"));
     expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Requires Support");
-    expect(statePanel.getByText("Exit Authorization Readback Contract Missing")).toBeInTheDocument();
+    expect(statePanel.getByText("Exit Authorization Not Issued")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Transaction complete");
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
   });
@@ -1466,7 +1505,6 @@ function renderPanel({
   session = activeSession(),
   onBeforeCashReceived,
   developmentFixtureLocalCashTenderId,
-  autoAdvanceAfterCashReceived = false,
   activeCashCustodySessionId = "00000000-0000-4000-8000-000000000008",
 }: {
   config: AptConfig;
@@ -1475,7 +1513,6 @@ function renderPanel({
   session?: ResolveVendorParkingResponse;
   onBeforeCashReceived?: (session: ResolveVendorParkingResponse) => Promise<{ ok: true; basis: ResolveVendorParkingResponse } | { ok: false; message: string }>;
   developmentFixtureLocalCashTenderId?: string;
-  autoAdvanceAfterCashReceived?: boolean;
   activeCashCustodySessionId?: string | null;
 }) {
   return render(
@@ -1484,15 +1521,14 @@ function renderPanel({
       context={buildTerminalContext(config)}
       session={session}
       tariffExpired={tariffExpired}
+      cashAcceptanceReady
       onBeforeCashReceived={onBeforeCashReceived}
       activeCashCustodySessionId={activeCashCustodySessionId}
       bridge={bridge}
       developmentFixtureLocalCashTenderId={developmentFixtureLocalCashTenderId}
-      autoAdvanceAfterCashReceived={autoAdvanceAfterCashReceived}
     />,
   );
 }
-
 async function recordCashReceived() {
   await waitFor(() => expect(screen.queryByText("Checking local journal readiness...")).not.toBeInTheDocument());
   await userEvent.clear(screen.getByLabelText("Amount tendered"));
@@ -1502,7 +1538,7 @@ async function recordCashReceived() {
 }
 
 function enabledConfig(overrides: Partial<AptConfig> = {}): AptConfig {
-  return { ...mode1Config(), nonLiveCashCaptureEnabled: true, ...overrides };
+  return { ...mode1Config(), ...overrides };
 }
 
 function centralEnabledConfig(): AptConfig {
@@ -1538,7 +1574,6 @@ function receiptPreviewEnabledConfig(overrides: Partial<AptConfig> = {}): AptCon
     ...overrides,
   };
 }
-
 function activeSession(): ResolveVendorParkingResponse {
   const now = Date.now();
   return {
@@ -1648,7 +1683,6 @@ class FakeBridge implements LocalJournalBridge {
     correlationId,
     payload: {
       healthy: true,
-      enabled: true,
       databasePath: "C:\\Temp\\cash-ui-test.db",
       cashDrawerEnabled: false,
       authorityWarning: "Local only",
@@ -2005,6 +2039,7 @@ function fiscalStatus(
       fiscalDocumentNumber: recorded ? "SI-000001" : null,
       fiscalNumberAssignedAt: recorded ? new Date().toISOString() : null,
       semanticHashSourceVersion: recorded ? "pos-server-semantic-hash:sha256:v1" : null,
+      exitAuthorizationIssued: recorded,
       recordedAt: recorded ? new Date().toISOString() : null,
       nextRetryAt: status === "RetryPending" ? new Date().toISOString() : null,
       lastSafeHttpStatus: conflict ? 409 : rejected ? 400 : null,
@@ -2264,158 +2299,44 @@ function receiptPreview({
       paperProfile: profile,
       hasPlaceholders: !complete,
       configurationCompleteness: complete ? "Complete" : "Incomplete",
-      sections: [
+      sections: complete ? [
         {
-          title: "Sales Invoice Title",
-          fields: [field("Title", "SALES INVOICE")],
-          rows: [],
+          name: "header",
+          label: "Header",
+          rows: [{ key: "header.documentTitle", label: "Document Title", displayValue: "SALES INVOICE", posture: "required" }],
         },
         {
-          title: "Registered business and statutory header",
-          fields: complete
-            ? [
-                field("Registered business name", "GOVERNED REGISTERED BUSINESS NAME"),
-                field("Registered business address", "GOVERNED REGISTERED BUSINESS ADDRESS"),
-                field("TIN", "GOVERNED TIN", false, "tin"),
-                field("S/N", "GOVERNED POS SERIAL NUMBER"),
-                field("MIN", "GOVERNED MACHINE IDENTIFICATION NUMBER"),
-              ]
-            : [
-                field("Registered business name", "[REGISTERED BUSINESS NAME]", true),
-                field("Registered business address", "[REGISTERED BUSINESS ADDRESS]", true),
-                field("TIN", "[TIN]", true, "tin"),
-                field("S/N", "[POS SERIAL NUMBER]", true),
-                field("MIN", "[MACHINE IDENTIFICATION NUMBER]", true),
-              ],
-          rows: [],
-        },
-        {
-          title: "SITE AND TERMINAL INFORMATION",
-          fields: complete
-            ? [field("PARKING LOCATION", "GOVERNED PARKING LOCATION"), field("TERMINAL ID", "GOVERNED TERMINAL ID")]
-            : [field("PARKING LOCATION", "[PARKING LOCATION]", true), field("TERMINAL ID", "[TERMINAL ID]", true)],
-          rows: [],
-        },
-        {
-          title: "SALES INVOICE",
-          fields: [
-            field("Sales Invoice No.", "SI-000001"),
-            complete ? field("Issued Date", "GOVERNED ISSUED DATE", false, "issuedDate") : field("Issued Date", "[ISSUED DATE]", true, "issuedDate"),
-          ],
-          rows: [],
-        },
-        {
-          title: "PARKING DETAILS",
-          fields: complete
-            ? [
-                field("Plate Number", "GOVERNED PLATE NUMBER"),
-                field("Entry Time", "GOVERNED ENTRY TIME"),
-                field("Exit Time", "GOVERNED EXIT TIME"),
-                field("Duration", "GOVERNED DURATION"),
-              ]
-            : [
-                field("Plate Number", "[PLATE NUMBER]", true),
-                field("Entry Time", "[ENTRY TIME]", true),
-                field("Exit Time", "[EXIT TIME]", true),
-                field("Duration", "[DURATION]", true),
-              ],
-          rows: [],
-        },
-        {
-          title: "ITEMS",
-          fields: [],
+          name: "salesInvoiceHeaderSnapshot",
+          label: "Sales Invoice Header Snapshot",
           rows: [
-            {
-              fields: [
-                field("Description", "Parking fee - cash"),
-                field("Qty", "1"),
-                complete ? field("Unit price", "PHP 125.00") : field("Unit price", "[UNIT PRICE]", true),
-                field("Amount", "PHP 125.00"),
-              ],
-            },
+            { key: "salesInvoiceHeaderSnapshot.registeredBusinessName", label: "Registered Business Name", displayValue: "GOVERNED REGISTERED BUSINESS NAME", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.tin", label: "TIN", displayValue: "GOVERNED TIN", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.parkingLocationDisplay", label: "Parking Location", displayValue: "GOVERNED PARKING LOCATION", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.birAccreditationNumber", label: "BIR Accreditation Number", displayValue: "GOVERNED BIR ACCREDITATION NO.", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.birAccreditationIssuedDate", label: "BIR Accreditation Issued Date", displayValue: "GOVERNED BIR ACCREDITATION DATE ISSUED", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.birAccreditationValidUntil", label: "BIR Accreditation Valid Until", displayValue: "GOVERNED BIR ACCREDITATION VALID UNTIL", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.ptuNumber", label: "PTU Number", displayValue: "GOVERNED PTU NO.", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.ptuIssuedDate", label: "PTU Issued Date", displayValue: "GOVERNED PTU DATE ISSUED", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.salesInvoiceLegalStatement", label: "Sales Invoice Legal Statement", displayValue: "THIS SERVES AS YOUR SALES INVOICE", posture: "required" },
+            { key: "salesInvoiceHeaderSnapshot.customerServiceFooter", label: "Customer Service Footer", displayValue: "THANK YOU FOR CHOOSING OUR SERVICE", posture: "required" },
           ],
         },
         {
-          title: "SUBTOTAL",
-          fields: [complete ? field("Subtotal", "PHP 125.00") : field("Subtotal", "[SUBTOTAL]", true)],
-          rows: [],
+          name: "fiscalNumbering",
+          label: "Fiscal Numbering",
+          rows: [{ key: "fiscalNumbering.fiscalDocumentNumber", label: "Fiscal Document Number", displayValue: "SI-000001", posture: "required" }],
         },
         {
-          title: "DISCOUNTS",
-          fields: [],
-          rows: [
-            {
-              fields: complete
-                ? [field("Discount Reason", "None"), field("Discount Amount", "PHP 0.00")]
-                : [field("Discount Reason", "[DISCOUNT REASON]", true), field("Discount Amount", "[DISCOUNT AMOUNT]", true)],
-            },
-          ],
+          name: "lineItems",
+          label: "Line Items",
+          rows: [{ key: "lineItems[0000].description", label: "Description", displayValue: "Parking fee - cash", posture: "required" }],
         },
         {
-          title: "VAT BREAKDOWN",
-          fields: complete
-            ? [
-                field("VATable Sales", "PHP 125.00"),
-                field("Output VAT", "PHP 0.00"),
-                field("VAT Exempt", "PHP 0.00"),
-                field("Zero Rated", "PHP 0.00"),
-              ]
-            : [
-                field("VATable Sales", "[VATABLE SALES]", true),
-                field("Output VAT", "PHP 0.00"),
-                field("VAT Exempt", "[VAT EXEMPT SALES]", true),
-                field("Zero Rated", "[ZERO-RATED SALES]", true),
-              ],
-          rows: [],
+          name: "vatBreakdown",
+          label: "VAT BREAKDOWN",
+          rows: [{ key: "totals.vatAmount", label: "VAT Amount", displayValue: "PHP 0.00", posture: "required" }],
         },
-        {
-          title: "PAYMENT DETAILS",
-          fields: [
-            field("Payment method", "CASH"),
-            complete ? field("Provider", "Not applicable") : field("Provider", "[PAYMENT PROVIDER]", true),
-            field("Amount", "PHP 150.00"),
-          ],
-          rows: [],
-        },
-        {
-          title: "TOTAL PAID AND CHANGE",
-          fields: [field("Total Paid", "PHP 150.00"), field("Change", "PHP 25.00")],
-          rows: [],
-        },
-        {
-          title: "Sales Invoice legal statement",
-          fields: [complete ? field("Statement", "THIS SERVES AS YOUR SALES INVOICE") : field("Statement", "[SALES INVOICE LEGAL STATEMENT]", true)],
-          rows: [],
-        },
-        {
-          title: "Customer-service footer",
-          fields: [complete ? field("Footer", "THANK YOU FOR CHOOSING OUR SERVICE") : field("Footer", "[SALES INVOICE FOOTER]", true)],
-          rows: [],
-        },
-        {
-          title: "BIR ACCREDITATION AND PTU INFORMATION",
-          fields: complete
-            ? [
-                field("BIR Accr. No.", "GOVERNED BIR ACCREDITATION NO.", false, "birAccreditationNumber"),
-                field("Date Issued", "GOVERNED BIR ACCREDITATION DATE ISSUED", false, "birAccreditationIssuedDateDisplay"),
-                field("Valid Until", "GOVERNED BIR ACCREDITATION VALID UNTIL", false, "birAccreditationValidUntilDisplay"),
-                field("PTU No.", "GOVERNED PTU NO.", false, "ptuNumber"),
-                field("Date Issued", "GOVERNED PTU DATE ISSUED", false, "ptuIssuedDateDisplay"),
-              ]
-            : [
-                field("BIR Accr. No.", "[BIR ACCREDITATION NO.]", true, "birAccreditationNumber"),
-                field("Date Issued", "[BIR ACCREDITATION DATE ISSUED]", true, "birAccreditationIssuedDateDisplay"),
-                field("Valid Until", "[BIR ACCREDITATION VALID UNTIL]", true, "birAccreditationValidUntilDisplay"),
-                field("PTU No.", "[PTU NO.]", true, "ptuNumber"),
-                field("Date Issued", "[PTU DATE ISSUED]", true, "ptuIssuedDateDisplay"),
-              ],
-          rows: [],
-        },
-      ],
+      ] : [],
     },
   };
-}
-
-function field(label: string, value: string, isPlaceholder = false, key = label) {
-  return { key, label, value, isPlaceholder };
 }

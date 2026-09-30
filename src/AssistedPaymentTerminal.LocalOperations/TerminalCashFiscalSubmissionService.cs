@@ -263,10 +263,7 @@ public sealed class TerminalCashFiscalSubmissionService
             throw _configurationError;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
-
-        await using var dbContext = CreateDbContext();
-        await dbContext.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
+        await new CashJournalService(_options).InitializeAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private CashJournalDbContext CreateDbContext()
@@ -378,6 +375,7 @@ public sealed class TerminalCashFiscalSubmissionService
         command.FiscalDocumentNumber = payload.FiscalDocumentNumber;
         command.FiscalNumberAssignedAt = payload.FiscalNumberAssignedAt;
         command.SemanticHashSourceVersion = payload.SemanticHashSourceVersion;
+        command.ExitAuthorizationIssued = payload.ExitAuthorizationIssued;
         command.LastSafeErrorCode = payload.SafeErrorCode;
         command.UpdatedAt = payload.UpdatedAt;
 

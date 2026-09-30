@@ -33,9 +33,26 @@ if (args.Any(value => string.Equals(value, "--seed-closed-shift", StringComparis
 {
     await RequireSuccess(service.OpenCashierShiftAsync(DevelopmentShift()));
     var seededSession = await RequireSuccess(service.CreateOrGetCashCustodySessionAsync(DevelopmentCustody()));
+    await RequireSuccess(service.CloseCashCustodySessionAsync(new CloseCashCustodySessionRequest(
+        CashCustodySessionId: seededSession.Id,
+        CashierId: "CASHIER-DEV-001",
+        AuthenticatedCashierSessionReference: "manual-validation-close-session",
+        CashierShiftId: "SHIFT-DEV-20260714-A",
+        TerminalId: "APT-DEV-001",
+        SiteId: "11111111-1111-1111-1111-111111111111",
+        SiteGroupId: "22222222-2222-2222-2222-222222222222",
+        PosServerId: "POS-DEV-001",
+        ClosingCashAmount: 500m,
+        ClosedAt: DateTimeOffset.Parse("2026-07-29T08:29:00Z"))));
     await RequireSuccess(service.CloseCashierShiftAsync(new CloseCashierShiftRequest(
-        "SHIFT-DEV-20260714-A",
-        DateTimeOffset.Parse("2026-07-29T08:30:00Z"))));
+        CashierShiftId: "SHIFT-DEV-20260714-A",
+        CashierId: "CASHIER-DEV-001",
+        AuthenticatedCashierSessionReference: "manual-validation-close-session",
+        TerminalId: "APT-DEV-001",
+        SiteId: "11111111-1111-1111-1111-111111111111",
+        SiteGroupId: "22222222-2222-2222-2222-222222222222",
+        PosServerId: "POS-DEV-001",
+        ClosedAt: DateTimeOffset.Parse("2026-07-29T08:30:00Z"))));
     Console.WriteLine("closed shift seeded: SHIFT-DEV-20260714-A");
     Console.WriteLine($"cash-custody session linked to closed shift: {seededSession.Id}");
     await PrintStateAsync(service);

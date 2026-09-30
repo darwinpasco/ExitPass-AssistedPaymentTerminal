@@ -40,6 +40,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private HumanSessionCredential? _credential;
     private AptHumanSessionDto? _session;
+    private PendingCredentialMutation? _pendingCredentialMutation;
     private HumanSessionSafeState _lastState;
     private long _authorityVersion;
 
@@ -114,7 +115,73 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             _trace.Record("runtime.password-authentication-starting", "LOGIN", nameof(LoginAsync), "EXPLICIT_NATIVE_CREDENTIAL", true, credentialSubmission.AttemptReference, credentialSubmission.HostCorrelationId, correlationId);
             var result = await _client.LoginAsync(username.Trim(), password, _options.SiteId, correlationId, cancellationToken).ConfigureAwait(false);
             _trace.Record("runtime.password-authentication-completed", "LOGIN", nameof(LoginAsync), "EXPLICIT_NATIVE_CREDENTIAL", true, credentialSubmission.AttemptReference, credentialSubmission.HostCorrelationId, correlationId, result.Ok ? "SUCCESS" : result.ErrorCode);
+            if (result.Ok && result.Response?.Session is { PasswordChangeRequired: true } restrictedSession)
+            {
+                return BeginPasswordChange(result.Response, restrictedSession);
+            }
             return await ApplyAuthoritativeResultAsync(result, "Cashier authenticated by Central PMS.", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            credentialSubmission.Dispose();
+            _mutex.Release();
+        }
+    }
+
+    public async Task<HumanSessionSafeState> ChangePasswordAndLoginAsync(
+        string username,
+        ExplicitHumanCredentialSubmission credentialSubmission,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_options is null
+                || _pendingCredentialMutation is null
+                || !string.Equals(_pendingCredentialMutation.Session.Username, username.Trim(), StringComparison.OrdinalIgnoreCase)
+                || !credentialSubmission.TryConsumePasswordChange(AuthorityVersion, out var credentials)
+                || credentials is null)
+            {
+                return _lastState = PasswordChangeRequiredState(
+                    _pendingCredentialMutation?.Session,
+                    "Fresh current, new, confirmed, and authenticator credentials are required.",
+                    "INVALID_PASSWORD_CHANGE_REQUEST");
+            }
+
+            var pending = _pendingCredentialMutation;
+            var changeCorrelationId = Guid.NewGuid();
+            _trace.Record("runtime.password-change-starting", "CHANGE_PASSWORD", nameof(ChangePasswordAndLoginAsync), "EXPLICIT_NATIVE_CREDENTIAL", true, credentialSubmission.AttemptReference, credentialSubmission.HostCorrelationId, changeCorrelationId);
+            var changed = await _client.ChangePasswordAsync(
+                pending.Credential.SessionReference,
+                pending.Credential.SessionToken,
+                credentials.CurrentPassword,
+                credentials.NewPassword,
+                credentials.TotpCode,
+                changeCorrelationId,
+                cancellationToken).ConfigureAwait(false);
+            _trace.Record("runtime.password-change-completed", "CHANGE_PASSWORD", nameof(ChangePasswordAndLoginAsync), "EXPLICIT_NATIVE_CREDENTIAL", true, credentialSubmission.AttemptReference, credentialSubmission.HostCorrelationId, changeCorrelationId, changed.Ok ? "SUCCESS" : changed.ErrorCode);
+            if (!changed.Ok || !string.Equals(changed.Response?.Outcome, "PASSWORD_CHANGED", StringComparison.Ordinal))
+            {
+                return _lastState = PasswordChangeRequiredState(
+                    pending.Session,
+                    changed.SafeMessage ?? "Central PMS did not accept the password change.",
+                    changed.ErrorCode ?? "PASSWORD_CHANGE_FAILED",
+                    changed.Retryable);
+            }
+
+            _pendingCredentialMutation = null;
+            Interlocked.Increment(ref _authorityVersion);
+            var loginCorrelationId = Guid.NewGuid();
+            var login = await _client.LoginAsync(
+                username.Trim(),
+                credentials.NewPassword,
+                _options.SiteId,
+                loginCorrelationId,
+                cancellationToken).ConfigureAwait(false);
+            return await ApplyAuthoritativeResultAsync(
+                login,
+                "Temporary password changed. Cashier authenticated by Central PMS.",
+                cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -185,7 +252,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             {
                 return refreshed;
             }
-            if (!HasPermission(_session, HumanSessionRuntimeOptions.ShiftOperatePermission))
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.ShiftOperatePermission))
             {
                 return _lastState = refreshed with
                 {
@@ -243,7 +310,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             {
                 return refreshed;
             }
-            if (!HasPermission(_session, HumanSessionRuntimeOptions.CustodyOperatePermission))
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.CustodyOperatePermission))
             {
                 return _lastState = refreshed with
                 {
@@ -293,6 +360,146 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             }
 
             return _lastState = await BuildSafeStateAsync(_session, "Cash custody opened.", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public async Task<HumanSessionSafeState> CloseOwnCustodyAsync(
+        decimal closingCashAmount,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var refreshed = await RefreshLockedAsync(cancellationToken).ConfigureAwait(false);
+            if (!refreshed.Authenticated || _session is null || _options is null)
+            {
+                return refreshed;
+            }
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.CustodyOperatePermission)
+                || !refreshed.CustodyOperationsAuthorized)
+            {
+                return _lastState = refreshed with
+                {
+                    CustodyOperationsAuthorized = false,
+                    CashOperationsAuthorized = false,
+                    ErrorCode = "CUSTODY_PERMISSION_DENIED",
+                    SafeMessage = "This cashier is not currently authorized to close cash custody."
+                };
+            }
+            if (closingCashAmount < 0)
+            {
+                return _lastState = refreshed with
+                {
+                    ErrorCode = "INVALID_CLOSING_CASH_AMOUNT",
+                    SafeMessage = "Closing cash amount cannot be negative."
+                };
+            }
+
+            var ownState = await LoadOwnOperationalStateAsync(_session.UserReference, cancellationToken).ConfigureAwait(false);
+            if (ownState.ActiveShift is null || ownState.ActiveCashCustodySession is null)
+            {
+                return _lastState = refreshed with
+                {
+                    ErrorCode = "OWN_CUSTODY_REQUIRED",
+                    SafeMessage = "Only your own open cash custody can be closed."
+                };
+            }
+
+            var closed = await _journal.CloseCashCustodySessionAsync(new CloseCashCustodySessionRequest(
+                CashCustodySessionId: ownState.ActiveCashCustodySession.Id,
+                CashierId: _session.UserReference.ToString("D"),
+                AuthenticatedCashierSessionReference: _session.SessionReference.ToString("D"),
+                CashierShiftId: ownState.ActiveShift.Id,
+                TerminalId: _options.TerminalId,
+                SiteId: _options.SiteId.ToString("D"),
+                SiteGroupId: _options.SiteGroupId.ToString("D"),
+                PosServerId: _options.PosServerId,
+                ClosingCashAmount: closingCashAmount), cancellationToken).ConfigureAwait(false);
+            if (!closed.IsSuccess)
+            {
+                return _lastState = await BuildSafeStateAsync(
+                    _session,
+                    "Cash custody could not be closed safely.",
+                    cancellationToken,
+                    "CUSTODY_CLOSE_FAILED").ConfigureAwait(false);
+            }
+
+            return _lastState = await BuildSafeStateAsync(
+                _session,
+                "Cash custody closed. Closing cash and variance evidence were recorded.",
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public async Task<HumanSessionSafeState> CloseOwnShiftAsync(CancellationToken cancellationToken = default)
+    {
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var refreshed = await RefreshLockedAsync(cancellationToken).ConfigureAwait(false);
+            if (!refreshed.Authenticated || _session is null || _options is null)
+            {
+                return refreshed;
+            }
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.ShiftOperatePermission)
+                || !refreshed.ShiftOperationsAuthorized)
+            {
+                return _lastState = refreshed with
+                {
+                    ShiftOperationsAuthorized = false,
+                    CashOperationsAuthorized = false,
+                    ErrorCode = "SHIFT_PERMISSION_DENIED",
+                    SafeMessage = "This cashier is not currently authorized to close a cashier shift."
+                };
+            }
+
+            var ownState = await LoadOwnOperationalStateAsync(_session.UserReference, cancellationToken).ConfigureAwait(false);
+            if (ownState.ActiveShift is null)
+            {
+                return _lastState = refreshed with
+                {
+                    ErrorCode = "OWN_SHIFT_REQUIRED",
+                    SafeMessage = "Only your own open cashier shift can be closed."
+                };
+            }
+            if (ownState.ActiveCashCustodySession is not null)
+            {
+                return _lastState = refreshed with
+                {
+                    ErrorCode = "OPEN_CUSTODY_SHIFT_CLOSE_BLOCKED",
+                    SafeMessage = "Close your cash custody before closing the cashier shift."
+                };
+            }
+
+            var closed = await _journal.CloseCashierShiftAsync(new CloseCashierShiftRequest(
+                CashierShiftId: ownState.ActiveShift.Id,
+                CashierId: _session.UserReference.ToString("D"),
+                AuthenticatedCashierSessionReference: _session.SessionReference.ToString("D"),
+                TerminalId: _options.TerminalId,
+                SiteId: _options.SiteId.ToString("D"),
+                SiteGroupId: _options.SiteGroupId.ToString("D"),
+                PosServerId: _options.PosServerId), cancellationToken).ConfigureAwait(false);
+            if (!closed.IsSuccess)
+            {
+                return _lastState = await BuildSafeStateAsync(
+                    _session,
+                    "The cashier shift could not be closed safely.",
+                    cancellationToken,
+                    "SHIFT_CLOSE_FAILED").ConfigureAwait(false);
+            }
+
+            return _lastState = await BuildSafeStateAsync(
+                _session,
+                "Cashier shift closed.",
+                cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -354,15 +561,15 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             {
                 return new HumanCashAuthorizationResult(false, state.ErrorCode, state.SafeMessage);
             }
-            if (!HasPermission(_session, HumanSessionRuntimeOptions.ShiftOperatePermission))
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.ShiftOperatePermission))
             {
                 return new HumanCashAuthorizationResult(false, "SHIFT_PERMISSION_DENIED", "Current cashier-shift authority is required before cash can be accepted.");
             }
-            if (!HasPermission(_session, HumanSessionRuntimeOptions.CustodyOperatePermission))
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.CustodyOperatePermission))
             {
                 return new HumanCashAuthorizationResult(false, "CUSTODY_PERMISSION_DENIED", "Current cash-custody authority is required before cash can be accepted.");
             }
-            if (!HasPermission(_session, HumanSessionRuntimeOptions.CashReceivePermission))
+            if (!HasOperationalPermission(_session, HumanSessionRuntimeOptions.CashReceivePermission))
             {
                 return new HumanCashAuthorizationResult(false, "CASH_RECEIVE_PERMISSION_DENIED", "This cashier is not currently authorized to receive cash at this terminal.");
             }
@@ -489,6 +696,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         }
 
         _session = session;
+        _pendingCredentialMutation = null;
         _credential = new HumanSessionCredential(session.SessionReference, token);
         _credentialStore.Save(_credential);
         Interlocked.Increment(ref _authorityVersion);
@@ -509,7 +717,11 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         {
             return (false, "WRONG_DEVICE_SESSION", "The cashier session is not bound to this terminal device identity.");
         }
-        if (session.PasswordChangeRequired || session.MfaRequired)
+        if (session.PasswordChangeRequired)
+        {
+            return (false, "PASSWORD_CHANGE_REQUIRED", "The temporary password must be changed before cashier authority is available.");
+        }
+        if (session.MfaRequired)
         {
             return (false, "SESSION_ASSURANCE_UNAVAILABLE", "This account requires an action that the APT cashier channel cannot perform.");
         }
@@ -524,7 +736,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         {
             return (false, "SITE_SCOPE_DENIED", "This cashier is not authorized for the terminal Site or Site Group.");
         }
-        if (!HasPermission(session, HumanSessionRuntimeOptions.AccessPermission))
+        if (!HasOperationalPermission(session, HumanSessionRuntimeOptions.AccessPermission))
         {
             return (false, "APT_ACCESS_PERMISSION_DENIED", "This cashier is not currently authorized to use the Assisted Payment Terminal.");
         }
@@ -587,11 +799,11 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             && !string.Equals(terminalState.ActiveShift.CashierId, session.UserReference.ToString("D"), StringComparison.OrdinalIgnoreCase);
         var crossCashierCustody = terminalState.ActiveCashCustodySession is not null
             && !string.Equals(terminalState.ActiveCashCustodySession.CashierId, session.UserReference.ToString("D"), StringComparison.OrdinalIgnoreCase);
-        var shiftAuthorized = HasPermission(session, HumanSessionRuntimeOptions.ShiftOperatePermission) && !crossCashierShift && !crossCashierCustody;
-        var custodyAuthorized = HasPermission(session, HumanSessionRuntimeOptions.CustodyOperatePermission) && !crossCashierShift && !crossCashierCustody;
+        var shiftAuthorized = HasOperationalPermission(session, HumanSessionRuntimeOptions.ShiftOperatePermission) && !crossCashierShift && !crossCashierCustody;
+        var custodyAuthorized = HasOperationalPermission(session, HumanSessionRuntimeOptions.CustodyOperatePermission) && !crossCashierShift && !crossCashierCustody;
         var cashAuthorized = shiftAuthorized
             && custodyAuthorized
-            && HasPermission(session, HumanSessionRuntimeOptions.CashReceivePermission);
+            && HasOperationalPermission(session, HumanSessionRuntimeOptions.CashReceivePermission);
         var permissionErrorCode = !shiftAuthorized
             ? "SHIFT_PERMISSION_DENIED"
             : !custodyAuthorized
@@ -657,8 +869,68 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
     private void ClearCredential()
     {
         _credential = null;
+        _pendingCredentialMutation = null;
         _credentialStore.Delete();
     }
+
+    private HumanSessionSafeState BeginPasswordChange(
+        AptHumanAuthenticationResponse response,
+        AptHumanSessionDto session)
+    {
+        if (_options is null
+            || !string.Equals(session.Audience, "APT", StringComparison.Ordinal)
+            || session.DeviceServiceIdentityReference != _options.DeviceServiceIdentityId
+            || session.IdleExpiresAt <= DateTimeOffset.UtcNow
+            || session.AbsoluteExpiresAt <= DateTimeOffset.UtcNow
+            || string.IsNullOrWhiteSpace(response.AptSessionToken))
+        {
+            ClearCredential();
+            return _lastState = HumanSessionSafeState.Unavailable(
+                "INVALID_PASSWORD_CHANGE_SESSION",
+                "Central PMS did not provide a usable device-bound password-change session.",
+                false);
+        }
+
+        _credential = null;
+        _session = null;
+        _credentialStore.Delete();
+        _pendingCredentialMutation = new PendingCredentialMutation(
+            session,
+            new HumanSessionCredential(session.SessionReference, response.AptSessionToken));
+        Interlocked.Increment(ref _authorityVersion);
+        return _lastState = PasswordChangeRequiredState(
+            session,
+            "Change the temporary password before cashier authority can be established.",
+            "PASSWORD_CHANGE_REQUIRED");
+    }
+
+    private static HumanSessionSafeState PasswordChangeRequiredState(
+        AptHumanSessionDto? session,
+        string message,
+        string errorCode,
+        bool retryable = false) =>
+        new(
+            AuthenticationState: "PASSWORD_CHANGE_REQUIRED",
+            Authenticated: false,
+            DeviceTrusted: true,
+            ShiftOperationsAuthorized: false,
+            CustodyOperationsAuthorized: false,
+            CashOperationsAuthorized: false,
+            UserReference: session?.UserReference.ToString("D"),
+            Username: session?.Username,
+            DisplayName: session?.DisplayName,
+            Audience: session?.Audience,
+            Assurance: session?.Assurance,
+            PrivilegedAccount: session?.PrivilegedAccount ?? false,
+            MfaRequired: false,
+            IdleExpiresAt: session?.IdleExpiresAt,
+            AbsoluteExpiresAt: session?.AbsoluteExpiresAt,
+            SafeSupportReference: session is null ? "Unavailable" : SafeSupportReference(session.CorrelationId),
+            SafeMessage: message,
+            ErrorCode: errorCode,
+            Retryable: retryable,
+            ActiveShift: null,
+            ActiveCashCustodySession: null);
 
     private static string SafeSupportReference(Guid correlationId) =>
         correlationId == Guid.Empty ? "Unavailable" : $"APT-{correlationId:N}"[..12].ToUpperInvariant();
@@ -668,6 +940,14 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
 
     private static bool HasPermission(AptHumanSessionDto session, string permission) =>
         session.Permissions.Contains(permission, StringComparer.OrdinalIgnoreCase);
+
+    private static bool HasOperationalPermission(AptHumanSessionDto session, string permission) =>
+        HasPermission(session, permission)
+        || HasPermission(session, "apt.cashier.operate");
+
+    private sealed record PendingCredentialMutation(
+        AptHumanSessionDto Session,
+        HumanSessionCredential Credential);
 }
 
 public sealed record HumanSessionSafeState(

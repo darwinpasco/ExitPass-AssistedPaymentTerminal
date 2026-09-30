@@ -25,6 +25,91 @@ public sealed class CashJournalServiceTests
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task OwningCashierClosesCustodyWithDurableExpectedActualAndVarianceEvidence()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(service, session.Id, amountDue: 125m, amountTendered: 150m);
+        Assert.True((await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(tender.Id))).IsSuccess);
+
+        var result = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id, 1_120m));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(CashCustodySessionStatus.Closed, result.Value!.Status);
+        Assert.Equal(1_125m, result.Value.ExpectedClosingCashAmount);
+        Assert.Equal(1_120m, result.Value.ClosingCashAmount);
+        Assert.Equal(-5m, result.Value.VarianceAmount);
+        Assert.Equal("auth-session-close-001", result.Value.ClosedByAuthenticatedCashierSessionReference);
+        var reopenedState = await database.CreateService().GetLocalOperationalStateAsync(TestRequests.LocalOperationalState());
+        Assert.Null(reopenedState.ActiveCashCustodySession);
+        Assert.NotNull(reopenedState.ActiveShift);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task CustodyCloseIsIdempotentForExactAmountAndRejectsChangedEvidence()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+
+        var first = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id));
+        var replay = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id));
+        var conflict = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id, 999m));
+
+        Assert.True(first.IsSuccess);
+        Assert.True(replay.IsSuccess);
+        Assert.False(conflict.IsSuccess);
+        Assert.Equal(CashJournalErrorCode.InvalidStateTransition, conflict.Error!.Code);
+        Assert.Equal(1_000m, replay.Value!.ClosingCashAmount);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task OtherCashierOrScopeCannotCloseCustody()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+
+        var wrongCashier = await service.CloseCashCustodySessionAsync(
+            TestRequests.CloseSession(session.Id) with { CashierId = "cashier-002" });
+        var wrongSite = await service.CloseCashCustodySessionAsync(
+            TestRequests.CloseSession(session.Id) with { SiteId = "99999999-9999-4999-8999-999999999999" });
+
+        Assert.False(wrongCashier.IsSuccess);
+        Assert.False(wrongSite.IsSuccess);
+        var state = await service.GetLocalOperationalStateAsync(TestRequests.LocalOperationalState());
+        Assert.Equal(session.Id, state.ActiveCashCustodySession!.Id);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task ShiftCloseRequiresCustodyCloseAndOwningCashierScope()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+
+        var blocked = await service.CloseCashierShiftAsync(TestRequests.CloseShift());
+        Assert.False(blocked.IsSuccess);
+        Assert.True((await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id))).IsSuccess);
+
+        var wrongOwner = await service.CloseCashierShiftAsync(TestRequests.CloseShift() with { CashierId = "cashier-002" });
+        var closed = await service.CloseCashierShiftAsync(TestRequests.CloseShift());
+
+        Assert.False(wrongOwner.IsSuccess);
+        Assert.True(closed.IsSuccess);
+        Assert.Equal(CashierShiftStatus.Closed, closed.Value!.Status);
+        Assert.Equal("auth-session-close-001", closed.Value.ClosedByAuthenticatedCashierSessionReference);
+        var state = await database.CreateService().GetLocalOperationalStateAsync(TestRequests.LocalOperationalState());
+        Assert.Null(state.ActiveShift);
+        Assert.Null(state.ActiveCashCustodySession);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task CreatesTenderStarted()
     {
         using var database = TestDatabase.Create();

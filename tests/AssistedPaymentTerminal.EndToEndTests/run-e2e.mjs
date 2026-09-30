@@ -9,6 +9,19 @@ const requestedPort = Number.parseInt(process.env.APT_E2E_PORT ?? "4173", 10);
 const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535 ? requestedPort : 4173;
 const baseUrl = `http://127.0.0.1:${port}`;
 const fixtureUrl = `${baseUrl}/?humanSessionFixture=1`;
+const e2eConfig = {
+  APT_PROFILE: "CASHIER_ASSISTED_TERMINAL",
+  APT_TERMINAL_ID: "APT-DEV-001",
+  APT_TERMINAL_DISPLAY_NAME: "Development Cashier Terminal 1",
+  APT_SITE_ID: "11111111-1111-1111-1111-111111111111",
+  APT_SITE_NAME: "ExitPass Demo Parking",
+  APT_SITE_GROUP_ID: "22222222-2222-2222-2222-222222222222",
+  APT_POS_SERVER_ID: "POS-DEV-001",
+  CENTRAL_PMS_BASE_URL: "https://central-pms.example.invalid",
+  USE_MOCK_CENTRAL_PMS: "true",
+  APT_WEB_UI_URL: baseUrl,
+  CENTRAL_PMS_VENDOR_SYSTEM_ID: "VENDOR-PMS-DEV",
+};
 
 const server = await startStaticServer();
 const browser = await chromium.launch();
@@ -42,34 +55,35 @@ async function runActiveAndExpiredWorkflow() {
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
   await expect(page.getByText("ExitPass Demo Parking")).toBeVisible();
-  await expect(page.getByTestId("operational-cashier-summary")).toHaveText("Development Cashier");
-  await expect(page.getByTestId("operational-shift-summary")).toHaveText("OPEN");
+  await expect(page.getByText("Development Cashier", { exact: true })).toBeVisible();
   await expect(page.getByText("Development Cashier Terminal 1")).toBeVisible();
-  await expect(page.getByTestId("operational-pos-readiness-summary")).toHaveText("Configured");
-  await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("recovered-shift-id")).toHaveText("Open");
-  await expect(page.getByTestId("active-custody-id")).toHaveText("Open");
+  await expect(page.getByTestId("cashier-header-shift")).toHaveText("CLOSED");
+  await expect(page.getByTestId("cashier-header-custody")).toHaveText("CLOSED");
+  await page.getByRole("button", { name: "Open Shift" }).click();
+  await page.getByRole("button", { name: "Open Cash Custody" }).click();
+  await expect(page.getByTestId("cashier-header-shift")).toHaveText("OPEN");
+  await expect(page.getByTestId("cashier-header-custody")).toHaveText("OPEN");
+  await expect(page.getByRole("button", { name: "Cashier Session" })).toHaveAttribute("aria-expanded", "false");
 
-  await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
+  await page.getByLabel("Ticket number").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
 
-  await expect(page.getByTestId("payable-basis-summary")).toContainText("Authoritative payable basis");
+  await expect(page.getByRole("heading", { name: "Parking session details" })).toBeVisible();
   await expect(page.getByText("APT-ACTIVE-1001")).toBeVisible();
   await expectActivePayableBasisReady(page);
-  await expect(page.getByTestId("local-cash-prerequisites-notice")).toContainText("Local cash prerequisites unavailable");
-  await expect(page.getByTestId("local-cash-prerequisites-value")).toHaveText("Blocked");
-  await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Collect payment" })).toBeDisabled();
+  await expect(page.getByTestId("local-cash-prerequisites-notice")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue to Cash" })).toHaveCount(0);
+  await expect(page.getByText("Local cash capture is disabled in this terminal profile.")).toHaveCount(0);
+  await expect(page.getByText("Site ordinance availability")).toHaveCount(0);
+  await expect(page.getByText("Source Unavailable")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry ordinance availability" })).toHaveCount(0);
 
-  await page.getByLabel("Ticket reference").fill("APT-EXPIRED-2001");
+  await page.getByLabel("Ticket number").fill("APT-EXPIRED-2001");
   await page.getByRole("button", { name: "Resolve" }).click();
 
-  await expect(page.getByRole("heading", { name: "Cash acceptance blocked" })).toBeVisible();
-  await expect(page.getByTestId("tariff-readiness-value")).toHaveText("Expired");
-  await expect(page.getByTestId("central-cash-ready-value")).toHaveText("false");
-  await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
-  await expect(page.getByText("Parking fee has expired and must be resolved again.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Collect payment" })).toBeDisabled();
+  await expect(page.getByText("Parking fee has expired. The current amount will be refreshed before cash is recorded.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
   await page.close();
 }
 
@@ -78,31 +92,23 @@ async function runNoActiveShiftWorkflow() {
   await page.goto(fixtureUrl);
 
   await expect(page.getByRole("heading", { name: "Cashier-Assisted Terminal", exact: true })).toBeVisible();
-  await expect(page.getByTestId("operational-shift-summary")).toHaveText("No active shift");
-  await page.getByText("Terminal details").click();
-  await expect(page.getByTestId("recovered-shift-id")).toHaveText("None");
-  await expect(page.getByTestId("active-custody-id")).toHaveText("None");
+  await expect(page.getByTestId("cashier-header-shift")).toHaveText("CLOSED");
+  await expect(page.getByTestId("cashier-header-custody")).toHaveText("CLOSED");
+  await expect(page.getByRole("button", { name: "Cashier Session" })).toHaveAttribute("aria-expanded", "true");
 
-  await page.getByLabel("Ticket reference").fill("APT-ACTIVE-1001");
+  await page.getByLabel("Ticket number").fill("APT-ACTIVE-1001");
   await page.getByRole("button", { name: "Resolve" }).click();
 
   await expectActivePayableBasisReady(page);
-  await expect(page.getByTestId("local-cash-prerequisites-value")).toHaveText("Blocked");
-  await expect(page.getByTestId("continue-to-cash")).toBeDisabled();
+  await expect(page.getByTestId("local-cash-prerequisites-notice")).toContainText("Open or resume your cashier shift.");
+  await expect(page.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
   await page.close();
 }
 
 async function expectActivePayableBasisReady(page) {
-  await expect(page.getByTestId("payable-basis-summary")).toContainText("Authoritative payable basis");
   await expect(page.getByTestId("payable-basis-amount")).toHaveText("₱125.00");
-  await expect(page.getByRole("heading", { name: "Ready for cash acceptance" })).toBeVisible();
-  await expect(page.getByTestId("session-readiness-value")).toHaveText("Resolved Payable");
-  await expect(page.getByTestId("tariff-readiness-value")).toHaveText("Current");
-  await expect(page.getByTestId("payment-eligibility-value")).toHaveText("Eligible");
-  await expect(page.getByTestId("terminal-cash-readiness-value")).toHaveText("Available");
-  await expect(page.getByTestId("sales-invoice-readiness-value")).toHaveText("Ready");
-  await expect(page.getByTestId("fiscal-readiness-value")).toHaveText("Ready");
-  await expect(page.getByTestId("central-cash-ready-value")).toHaveText("true");
+  await expect(page.getByText("Total Amount")).toBeVisible();
+  await expect(page.getByTestId("session-readiness-value")).toHaveCount(0);
 }
 
 async function runUnsupportedProfileRefusal() {
@@ -118,7 +124,7 @@ async function runServiceUnavailableFailure() {
   const page = await newPage();
   await page.goto(fixtureUrl);
 
-  await page.getByLabel("Ticket reference").fill("APT-UNAVAILABLE-503");
+  await page.getByLabel("Ticket number").fill("APT-UNAVAILABLE-503");
   await page.getByRole("button", { name: "Resolve" }).click();
 
   await expect(page.getByText("Central PMS temporarily unavailable")).toBeVisible();
@@ -146,6 +152,12 @@ async function startStaticServer() {
     if (!filePath.startsWith(root)) {
       response.writeHead(403);
       response.end("Forbidden");
+      return;
+    }
+
+    if (relativePath === "apt-config.json") {
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify(e2eConfig));
       return;
     }
 

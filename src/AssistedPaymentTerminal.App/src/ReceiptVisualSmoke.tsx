@@ -212,7 +212,6 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
   const smokeConfig = useMemo<AptConfig>(
     () => ({
       ...config,
-      nonLiveCashCaptureEnabled: true,
       centralPmsCashSubmissionEnabled: true,
       centralPmsFiscalIssuanceEnabled: true,
       centralPmsReceiptRetrievalEnabled: true,
@@ -302,7 +301,6 @@ export function ReceiptVisualSmokeShell({ config, bridge }: { config: AptConfig;
           tariffExpired={false}
           bridge={bridge}
           developmentFixtureLocalCashTenderId={scenario.terminalCashTenderId}
-          autoAdvanceAfterCashReceived={false}
         />
       </div>
     </main>

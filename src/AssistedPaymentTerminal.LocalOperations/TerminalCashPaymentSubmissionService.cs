@@ -38,6 +38,27 @@ public sealed class TerminalCashPaymentSubmissionService
         Guid localCommandId,
         CancellationToken cancellationToken = default)
     {
+        return await SubmitOrReadbackCoreAsync(
+            localCommandId,
+            allowStaleTariffRecovery: false,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<TerminalCashPaymentOutboxCommand> RecoverStaleTariffConflictAsync(
+        Guid localCommandId,
+        CancellationToken cancellationToken = default)
+    {
+        return await SubmitOrReadbackCoreAsync(
+            localCommandId,
+            allowStaleTariffRecovery: true,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<TerminalCashPaymentOutboxCommand> SubmitOrReadbackCoreAsync(
+        Guid localCommandId,
+        bool allowStaleTariffRecovery,
+        CancellationToken cancellationToken)
+    {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
 
         await using var dbContext = CreateDbContext();
@@ -45,6 +66,14 @@ public sealed class TerminalCashPaymentSubmissionService
             .Include(value => value.Attempts)
             .SingleAsync(value => value.Id == localCommandId, cancellationToken)
             .ConfigureAwait(false);
+
+        RebindNeverAttemptedPlaceholder(command);
+
+        if (allowStaleTariffRecovery)
+        {
+            EnsureStaleTariffRecoveryCommand(command);
+            await EnsureImmutableCashReceivedLinkageAsync(dbContext, command, cancellationToken).ConfigureAwait(false);
+        }
 
         if (command.Status == TerminalCashPaymentCommandStatus.Confirmed)
         {
@@ -58,8 +87,8 @@ public sealed class TerminalCashPaymentSubmissionService
             return command;
         }
 
-        if (command.Status is TerminalCashPaymentCommandStatus.Conflict
-            or TerminalCashPaymentCommandStatus.Rejected)
+        if (!allowStaleTariffRecovery
+            && command.Status is (TerminalCashPaymentCommandStatus.Conflict or TerminalCashPaymentCommandStatus.Rejected))
         {
             return command;
         }
@@ -113,6 +142,129 @@ public sealed class TerminalCashPaymentSubmissionService
         return command;
     }
 
+    private static void EnsureStaleTariffRecoveryCommand(TerminalCashPaymentOutboxCommand command)
+    {
+        var latestAttempt = command.Attempts
+            .OrderByDescending(attempt => attempt.AttemptSequence)
+            .FirstOrDefault();
+        if (command.Status != TerminalCashPaymentCommandStatus.Conflict
+            || !string.Equals(command.LastSafeErrorCode, "STALE_TARIFF", StringComparison.Ordinal)
+            || latestAttempt is null
+            || latestAttempt.OutcomeClassification != TerminalCashPaymentAttemptOutcome.Conflict
+            || !string.Equals(latestAttempt.SafeErrorCode, "STALE_TARIFF", StringComparison.Ordinal)
+            || command.AttemptCount != command.Attempts.Count
+            || command.CanonicalPaymentAttemptId is not null
+            || command.CanonicalPaymentConfirmationId is not null)
+        {
+            throw new InvalidOperationException("Only an unchanged STALE_TARIFF conflict without canonical payment references is eligible for recovery.");
+        }
+    }
+
+    private static async Task EnsureImmutableCashReceivedLinkageAsync(
+        CashJournalDbContext dbContext,
+        TerminalCashPaymentOutboxCommand command,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(
+                TerminalCashPaymentPayloadFactory.ComputeHash(command.RequestPayloadJson),
+                command.RequestPayloadHash,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The frozen terminal-cash payload does not match its persisted hash.");
+        }
+
+        var payload = JsonSerializer.Deserialize<TerminalCashPaymentRequest>(
+            command.RequestPayloadJson,
+            TerminalCashPaymentPayloadFactory.JsonOptions)
+            ?? throw new InvalidOperationException("The frozen terminal-cash payload is unavailable.");
+        var tender = await dbContext.CashTenders
+            .AsNoTracking()
+            .Include(value => value.CashCustodySession)
+            .Include(value => value.Events)
+                .ThenInclude(value => value.DenominationEntries)
+            .SingleOrDefaultAsync(value => value.Id == command.TerminalCashTenderId, cancellationToken)
+            .ConfigureAwait(false);
+        if (tender is null || tender.CashCustodySession is null)
+        {
+            throw new InvalidOperationException("The durable cash tender or its custody ownership is unavailable.");
+        }
+
+        var cashReceivedEvents = tender.Events
+            .Where(value => value.EventType == CashTenderEventType.CashReceived)
+            .ToArray();
+        if (cashReceivedEvents.Length != 1)
+        {
+            throw new InvalidOperationException("STALE_TARIFF recovery requires exactly one durable CASH_RECEIVED event.");
+        }
+
+        var receivedEvent = cashReceivedEvents[0];
+        var custody = tender.CashCustodySession;
+        var tenderParkingSessionId = ParseGuid(tender.ParkingSessionId, nameof(tender.ParkingSessionId));
+        var tenderTariffSnapshotId = ParseGuid(tender.TariffSnapshotId, nameof(tender.TariffSnapshotId));
+        var custodySiteId = ParseGuid(custody.SiteId, nameof(custody.SiteId));
+        var custodySiteGroupId = ParseGuid(custody.SiteGroupId, nameof(custody.SiteGroupId));
+        var linkageMatches =
+            tender.CurrentLocalState == CashTenderState.CashReceived
+            && receivedEvent.CashierAttested
+            && payload.TerminalCashTenderId == tender.Id
+            && payload.TerminalCashTenderId == command.TerminalCashTenderId
+            && payload.CashCustodySessionId == tender.CashCustodySessionId
+            && payload.CashCustodySessionId == command.CashCustodySessionId
+            && payload.ParkingSessionId == tenderParkingSessionId
+            && payload.TariffSnapshotId == tenderTariffSnapshotId
+            && string.Equals(payload.Currency, tender.Currency, StringComparison.Ordinal)
+            && payload.AmountDueMinorUnits == ToMinorUnits(tender.AmountDue)
+            && payload.AmountTenderedMinorUnits == ToMinorUnits(tender.AmountTendered)
+            && payload.ChangeDueMinorUnits == ToMinorUnits(tender.ChangeDue)
+            && payload.CashReceivedAt == receivedEvent.OccurredAt
+            && string.Equals(payload.LocalEventReference, receivedEvent.Id.ToString("N"), StringComparison.OrdinalIgnoreCase)
+            && payload.AmountTenderedMinorUnits == ToMinorUnits(receivedEvent.AmountTendered)
+            && payload.ChangeDueMinorUnits == ToMinorUnits(receivedEvent.ChangeDue)
+            && string.Equals(payload.CashierId, receivedEvent.ActorCashierId, StringComparison.Ordinal)
+            && string.Equals(receivedEvent.CorrelationId, tender.CorrelationId, StringComparison.Ordinal)
+            && string.Equals(command.IdempotencyKey, tender.LocalIdempotencyIdentity, StringComparison.Ordinal)
+            && string.Equals(command.OriginalCorrelationId, tender.CorrelationId, StringComparison.Ordinal)
+            && payload.CashierId == custody.CashierId
+            && payload.CashierSessionReference == custody.AuthenticatedCashierSessionReference
+            && payload.CashierShiftId == custody.CashierShiftId
+            && payload.TerminalId == custody.TerminalId
+            && payload.SiteId == custodySiteId
+            && payload.SiteGroupId == custodySiteGroupId
+            && payload.PosServerId == custody.PosServerId;
+        if (!linkageMatches)
+        {
+            throw new InvalidOperationException("The frozen terminal-cash payload does not match the durable CASH_RECEIVED evidence.");
+        }
+
+        var persistedDenominations = receivedEvent.DenominationEntries
+            .Where(value => value.Quantity > 0)
+            .Select(value => new TerminalCashDenominationEntry(
+                value.DenominationCode,
+                ToMinorUnits(value.DenominationValue),
+                value.Quantity))
+            .OrderBy(value => value.DenominationCode, StringComparer.Ordinal)
+            .ThenBy(value => value.DenominationValueMinorUnits)
+            .ThenBy(value => value.Quantity)
+            .ToArray();
+        var payloadDenominations = (payload.DenominationEntries ?? [])
+            .OrderBy(value => value.DenominationCode, StringComparer.Ordinal)
+            .ThenBy(value => value.DenominationValueMinorUnits)
+            .ThenBy(value => value.Quantity)
+            .ToArray();
+        if (!persistedDenominations.SequenceEqual(payloadDenominations))
+        {
+            throw new InvalidOperationException("The frozen terminal-cash denominations do not match the durable CASH_RECEIVED evidence.");
+        }
+    }
+
+    private static Guid ParseGuid(string value, string fieldName) =>
+        Guid.TryParse(value, out var parsed)
+            ? parsed
+            : throw new InvalidOperationException($"{fieldName} is not a valid recovery identifier.");
+
+    private static long ToMinorUnits(decimal amount) =>
+        decimal.ToInt64(decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero));
+
     private async Task InitializeAsync(CancellationToken cancellationToken)
     {
         if (_configurationError is not null)
@@ -130,6 +282,31 @@ public sealed class TerminalCashPaymentSubmissionService
     {
         var service = new CashJournalService(_options);
         return service.CreateDbContext();
+    }
+
+    private void RebindNeverAttemptedPlaceholder(TerminalCashPaymentOutboxCommand command)
+    {
+        if (!string.Equals(command.CentralPmsTarget, "UNCONFIGURED_CENTRAL_PMS", StringComparison.Ordinal)
+            || command.Status != TerminalCashPaymentCommandStatus.Pending
+            || command.AttemptCount != 0
+            || command.Attempts.Count != 0
+            || command.FirstAttemptedAt is not null
+            || command.LastAttemptedAt is not null)
+        {
+            return;
+        }
+
+        if (!_options.EnableCentralPmsCashSubmission
+            || !Uri.TryCreate(_options.CentralPmsBaseUrl, UriKind.Absolute, out var configuredTarget)
+            || configuredTarget.Scheme is not ("http" or "https")
+            || string.IsNullOrWhiteSpace(configuredTarget.Host)
+            || configuredTarget.Host.EndsWith(".example.invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Central PMS cash submission is not configured for this pending local command.");
+        }
+
+        command.CentralPmsTarget = configuredTarget.ToString().TrimEnd('/');
+        command.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
     private static async Task RecordAttemptAndApplyResultAsync<T>(

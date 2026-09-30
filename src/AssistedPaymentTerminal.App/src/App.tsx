@@ -6,19 +6,12 @@ import { cashierSafeSupportReference } from "./cashierSafeReferences";
 import { createCentralPmsClient } from "./api/clientFactory";
 import type {
   CentralPmsClient,
-  CentralPmsFailureKind,
   CentralPmsResult,
   PayableBasisReferenceType,
   PayableBasisResponse,
-  StatutoryDiscountDecisionResponse,
   StatutoryDiscountWorkflowState,
-  StatutoryEntitlementType,
-  StatutoryOrdinanceAvailabilityResponse,
-  StatutoryOrdinanceAvailabilitySnapshot,
-  StatutoryOrdinanceAvailabilityViewState,
 } from "./api/centralPmsTypes";
 import { CashCapturePanel } from "./CashCapturePanel";
-import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import {
   PayableBasisVisualSmokeShell,
@@ -315,19 +308,15 @@ export function TerminalShell({
   onHumanSessionStateChange?: (state: HumanSessionState) => void;
 }) {
   const context = useMemo(() => buildTerminalContext(config, humanSessionState), [config, humanSessionState]);
-  const [referenceType, setReferenceType] = useState<PayableBasisReferenceType>(initialReferenceType);
   const [referenceValue, setReferenceValue] = useState(initialReferenceValue);
+  const [ticketNumber, setTicketNumber] = useState(initialReferenceType === "ticket" ? initialReferenceValue : "");
+  const [plateNumber, setPlateNumber] = useState(initialReferenceType === "plate" ? initialReferenceValue : "");
   const [lookupState, setLookupState] = useState<LookupState>(() => initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
   const [statutoryWorkflowState, setStatutoryWorkflowState] = useState<StatutoryDiscountWorkflowState>(initialStatutoryState);
-  const [ordinanceAvailability, setOrdinanceAvailability] = useState<StatutoryOrdinanceAvailabilityViewState>({ status: "idle" });
-  const [ordinanceRefreshToken, setOrdinanceRefreshToken] = useState(0);
   const [localPrerequisiteMessage, setLocalPrerequisiteMessage] = useState<string | null>(null);
-  const [cashEntryRequested, setCashEntryRequested] = useState(initialCashEntryRequested);
-  const [preCashStatus, setPreCashStatus] = useState<"idle" | "revalidating" | "passed" | "blocked">("idle");
   const [localJournalHealth, setLocalJournalHealth] = useState<LocalJournalHealth | null>(null);
   const [localJournalHealthMessage, setLocalJournalHealthMessage] = useState<string | null>(null);
   const latestRequestId = useRef(0);
-  const latestOrdinanceRequestId = useRef(0);
   const statutoryWorkflowStateRef = useRef(statutoryWorkflowState);
 
   useEffect(() => {
@@ -336,15 +325,12 @@ export function TerminalShell({
 
   useEffect(() => {
     latestRequestId.current += 1;
-    setReferenceType(initialReferenceType);
     setReferenceValue(initialReferenceValue);
+    setTicketNumber(initialReferenceType === "ticket" ? initialReferenceValue : "");
+    setPlateNumber(initialReferenceType === "plate" ? initialReferenceValue : "");
     setLookupState(initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
     setStatutoryWorkflowState(initialStatutoryState);
-    setOrdinanceAvailability({ status: "idle" });
-    setOrdinanceRefreshToken((current) => current + 1);
     setLocalPrerequisiteMessage(null);
-    setCashEntryRequested(initialCashEntryRequested);
-    setPreCashStatus("idle");
   }, [initialReferenceType, initialReferenceValue, initialResolvedBasis, initialStatutoryState, initialCashEntryRequested]);
 
   useEffect(() => {
@@ -361,15 +347,13 @@ export function TerminalShell({
         return;
       }
 
-      setReferenceType(result.payload.lookupReferenceType);
       setReferenceValue(result.payload.lookupReferenceValue);
-      setCashEntryRequested(false);
-      setPreCashStatus("idle");
+      setTicketNumber(result.payload.lookupReferenceType === "ticket" ? result.payload.lookupReferenceValue : "");
+      setPlateNumber(result.payload.lookupReferenceType === "plate" ? result.payload.lookupReferenceValue : "");
       const restoredStatutoryState = parseStatutoryState(result.payload.statutoryDiscountStateJson, true);
       const restoredBasis = basisFromState(result.payload);
       setStatutoryWorkflowState(restoredStatutoryState);
       setLookupState(initialLookupState(restoredBasis, restoredStatutoryState, "restored"));
-      setOrdinanceRefreshToken((current) => current + 1);
     }
 
     void restore();
@@ -413,60 +397,6 @@ export function TerminalShell({
   }, [context.cashierId, context.posServerId, context.siteGroupId, context.siteId, context.terminalId, localJournalBridge]);
   const displayedBasis = lookupState.status === "resolved" ? lookupState.basis : lookupState.status === "amount_changed" && lookupState.acknowledged ? lookupState.current : undefined;
 
-  useEffect(() => {
-    if (!displayedBasis) {
-      latestOrdinanceRequestId.current += 1;
-      setOrdinanceAvailability({ status: "idle" });
-      return;
-    }
-
-    const basis = displayedBasis;
-    const requestId = latestOrdinanceRequestId.current + 1;
-    latestOrdinanceRequestId.current = requestId;
-    let cancelled = false;
-    const restoredRefresh = lookupState.status === "resolved" && lookupState.source === "restored";
-    setOrdinanceAvailability({ status: "loading", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh });
-
-    async function resolveAvailability() {
-      const [seniorCitizen, pwd] = await Promise.all([
-        resolveOrdinanceForEntitlement(client, basis, "SENIOR_CITIZEN"),
-        resolveOrdinanceForEntitlement(client, basis, "PWD"),
-      ]);
-      if (cancelled || latestOrdinanceRequestId.current !== requestId) {
-        return;
-      }
-      if (!ordinanceResponseMatchesBasis(seniorCitizen, basis) || !ordinanceResponseMatchesBasis(pwd, basis)) {
-        const malformedSenior = malformedOrdinanceResponse(basis, "SENIOR_CITIZEN", seniorCitizen.correlationId);
-        const malformedPwd = malformedOrdinanceResponse(basis, "PWD", pwd.correlationId);
-        setOrdinanceAvailability({ status: "ready", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh, seniorCitizen: malformedSenior, pwd: malformedPwd });
-        return;
-      }
-
-      setOrdinanceAvailability({ status: "ready", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh, seniorCitizen, pwd });
-      const snapshot = ordinanceSnapshot(basis, seniorCitizen, pwd);
-      const nextState = { ...statutoryWorkflowStateRef.current, ordinanceAvailability: snapshot };
-      statutoryWorkflowStateRef.current = nextState;
-      setStatutoryWorkflowState(nextState);
-      await persistPayableBasis(
-        basis,
-        basis.ticketReference ? "ticket" : "plate",
-        basis.ticketReference ?? basis.plateNumber ?? referenceValue,
-        false,
-        false,
-        null,
-        nextState,
-      );
-    }
-
-    void resolveAvailability();
-    return () => {
-      cancelled = true;
-      if (latestOrdinanceRequestId.current === requestId) {
-        latestOrdinanceRequestId.current += 1;
-      }
-    };
-  }, [client, displayedBasis?.parkingSessionId, displayedBasis?.siteGroupId, displayedBasis?.siteId, ordinanceRefreshToken]);
-
   const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
   const statutoryWorkflowActive = statutoryWorkflowState.status !== "none";
   const centralReady = Boolean(displayedBasis?.readyForCashAcceptance) && !tariffExpired && lookupState.status !== "amount_changed";
@@ -476,8 +406,9 @@ export function TerminalShell({
   const cashBoundaryReady = centralReady && (!statutoryWorkflowActive || statutoryCashGate.ready);
 
   async function resolveReference() {
-    const trimmed = referenceValue.trim();
-    if (!trimmed) {
+    const ticket = ticketNumber.trim();
+    const plate = plateNumber.trim();
+    if (!ticket && !plate) {
       setLookupState({
         status: "failed",
         result: {
@@ -497,23 +428,42 @@ export function TerminalShell({
     const correlationId = createCorrelationId();
     const requestId = latestRequestId.current + 1;
     latestRequestId.current = requestId;
-    setCashEntryRequested(false);
-    setPreCashStatus("idle");
     setStatutoryWorkflowState(noStatutoryWorkflow);
-    setOrdinanceAvailability({ status: "idle" });
-    setLookupState({ status: "loading", correlationId, requestId, referenceType, referenceValue: trimmed });
+    const primaryType: PayableBasisReferenceType = ticket ? "ticket" : "plate";
+    const primaryValue = ticket || plate;
+    setReferenceValue(primaryValue);
+    setLookupState({ status: "loading", correlationId, requestId, referenceType: primaryType, referenceValue: primaryValue });
 
-    const result = await client.resolvePayableBasis(referenceType, trimmed, correlationId);
+    const startedAt = performance.now();
+    const [ticketResult, plateResult] = await Promise.all([
+      ticket ? client.resolvePayableBasis("ticket", ticket, correlationId) : Promise.resolve(null),
+      plate ? client.resolvePayableBasis("plate", plate, ticket ? createCorrelationId() : correlationId) : Promise.resolve(null),
+    ]);
+    recordPerformanceTiming("apt.resolve-payable-basis", startedAt);
     if (latestRequestId.current !== requestId) {
       return;
     }
 
+    if (ticketResult && plateResult) {
+      if (!ticketResult.ok) {
+        setLookupState({ status: "failed", result: ticketResult });
+        return;
+      }
+      if (!plateResult.ok) {
+        setLookupState({ status: "failed", result: plateResult });
+        return;
+      }
+      if (ticketResult.response.parkingSessionId !== plateResult.response.parkingSessionId) {
+        setLookupState({ status: "failed", result: lookupMismatchFailure() });
+        return;
+      }
+    }
+
+    const result = ticketResult ?? plateResult;
+    if (!result) return;
     if (result.ok) {
-      await persistPayableBasis(result.response, referenceType, trimmed, false, false, null, noStatutoryWorkflow);
-      setCashEntryRequested(false);
-      setPreCashStatus("idle");
+      await persistPayableBasis(result.response, primaryType, primaryValue, false, false, null, noStatutoryWorkflow);
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
-      setOrdinanceRefreshToken((current) => current + 1);
       return;
     }
 
@@ -524,11 +474,23 @@ export function TerminalShell({
     latestRequestId.current += 1;
     setLookupState({ status: "idle" });
     setReferenceValue("");
-    setOrdinanceAvailability({ status: "idle" });
+    setTicketNumber("");
+    setPlateNumber("");
     setLocalPrerequisiteMessage(null);
   }
 
-  async function preCashRevalidate(currentBasis: PayableBasisResponse, preserveCashEntry = false): Promise<PreCashResult> {
+  function updateLookupInput(type: PayableBasisReferenceType, value: string) {
+    latestRequestId.current += 1;
+    if (type === "ticket") {
+      setTicketNumber(value);
+    } else {
+      setPlateNumber(value);
+    }
+    setLookupState({ status: "idle" });
+    setLocalPrerequisiteMessage(null);
+  }
+
+  async function preCashRevalidate(currentBasis: PayableBasisResponse): Promise<PreCashResult> {
     if (!currentBasis.readyForCashAcceptance) {
       return { ok: false, message: "Central PMS has not marked this payable basis ready for cash acceptance." };
     }
@@ -536,7 +498,9 @@ export function TerminalShell({
     const correlationId = createCorrelationId();
     const requestId = latestRequestId.current + 1;
     latestRequestId.current = requestId;
+    const startedAt = performance.now();
     const result = await client.revalidatePayableBasis(currentBasis, correlationId);
+    recordPerformanceTiming("apt.pre-cash-revalidation", startedAt);
 
     if (latestRequestId.current !== requestId) {
       return { ok: false, message: "The payable basis changed while revalidation was pending. Resolve the current reference again." };
@@ -564,31 +528,6 @@ export function TerminalShell({
 
     if (outcome === "PASSED_UNCHANGED" && result.response.readyForCashAcceptance && revalidatedBasisMatchesCurrentStatutoryAuthority(result.response, nextStatutoryState)) {
       if (nextStatutoryState.status !== "none") {
-        const entitlementType = asStatutoryEntitlementType(nextStatutoryState.entitlementType);
-        if (!entitlementType) {
-          return { ok: false, message: "The active statutory workflow has no supported entitlement type. Cash acceptance remains blocked." };
-        }
-        const ordinanceResult = await revalidateOrdinanceForEntitlement(client, result.response, entitlementType);
-        if (!ordinanceRevalidationPassed(ordinanceResult, result.response, entitlementType)) {
-          const updatedAvailability = replaceOrdinanceAvailability(ordinanceAvailability, result.response, ordinanceResult);
-          setOrdinanceAvailability(updatedAvailability);
-          const nextSnapshot = snapshotFromViewState(updatedAvailability);
-          const blockedState = { ...nextStatutoryState, ordinanceAvailability: nextSnapshot, amountAcknowledged: false, updatedAt: new Date().toISOString() };
-          statutoryWorkflowStateRef.current = blockedState;
-          setStatutoryWorkflowState(blockedState);
-          await persistPayableBasis(
-            result.response,
-            result.response.ticketReference ? "ticket" : "plate",
-            result.response.ticketReference ?? result.response.plateNumber ?? referenceValue,
-            false,
-            false,
-            currentBasis.authoritativeAmountMinorUnits,
-            blockedState,
-          );
-          return { ok: false, message: ordinanceResult.safeMessage };
-        }
-        setOrdinanceAvailability(replaceOrdinanceAvailability(ordinanceAvailability, result.response, ordinanceResult));
-
         const evidenceResult = await statutoryEvidenceBridge.revalidate(
           createCorrelationId(),
           nextStatutoryState.statutoryDiscountDecisionCommandId ?? "",
@@ -617,24 +556,41 @@ export function TerminalShell({
           return { ok: false, message: evidenceResult.payload.safeMessage };
         }
       }
-      setCashEntryRequested(preserveCashEntry);
-      setPreCashStatus("idle");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
       return { ok: true, basis: result.response };
     }
 
     if (outcome === "PASSED_UNCHANGED" && result.response.readyForCashAcceptance) {
-      setCashEntryRequested(false);
-      setPreCashStatus("blocked");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
       return { ok: false, message: "Central PMS revalidation did not return the same applied statutory payable basis. Resolve or check statutory status again before accepting cash." };
     }
 
     if (outcome === "AMOUNT_CHANGED") {
-      setCashEntryRequested(false);
-      setPreCashStatus("blocked");
       setLookupState({ status: "amount_changed", previous: currentBasis, current: result.response, correlationId, acknowledged: false });
-      return { ok: false, message: "The parking fee changed before cash acceptance. Review and acknowledge the new amount before continuing." };
+      return { ok: false, message: "Parking fee was updated. Review the new amount before recording cash." };
+    }
+
+    if (outcome === "TARIFF_EXPIRED") {
+      const refreshType: PayableBasisReferenceType = currentBasis.ticketReference ? "ticket" : "plate";
+      const refreshValue = currentBasis.ticketReference ?? currentBasis.plateNumber ?? referenceValue;
+      const refreshStartedAt = performance.now();
+      const refreshed = await client.resolvePayableBasis(refreshType, refreshValue, createCorrelationId());
+      recordPerformanceTiming("apt.expired-fee-refresh", refreshStartedAt);
+      if (!refreshed.ok) {
+        setLookupState({ status: "failed", result: refreshed });
+        return { ok: false, message: refreshed.error.message };
+      }
+      await persistPayableBasis(
+        refreshed.response,
+        refreshType,
+        refreshValue,
+        true,
+        true,
+        currentBasis.authoritativeAmountMinorUnits,
+        statutoryStateFromPayableBasis(refreshed.response, nextStatutoryState),
+      );
+      setLookupState({ status: "amount_changed", previous: currentBasis, current: refreshed.response, correlationId, acknowledged: false });
+      return { ok: false, message: "Parking fee was updated. Review the current amount before recording cash." };
     }
 
     setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
@@ -675,8 +631,6 @@ export function TerminalShell({
         lookupState.previous.authoritativeAmountMinorUnits,
         acknowledgedStatutoryState,
       );
-      setCashEntryRequested(false);
-      setPreCashStatus("blocked");
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
       return;
     }
@@ -730,73 +684,6 @@ export function TerminalShell({
     });
   }
 
-  async function handleContinueToCash(currentBasis: PayableBasisResponse) {
-    if (!cashBoundaryReady || !localPrerequisitesReady) {
-      setPreCashStatus("blocked");
-      if (statutoryWorkflowActive && !statutoryCashGate.ready) {
-        setLocalPrerequisiteMessage(statutoryCashGate.message);
-      }
-      return;
-    }
-
-    setPreCashStatus("revalidating");
-    const result = await preCashRevalidate(currentBasis);
-    if (result.ok) {
-      setCashEntryRequested(true);
-      setPreCashStatus("passed");
-    } else {
-      setCashEntryRequested(false);
-      setPreCashStatus("blocked");
-      setLocalPrerequisiteMessage(result.message);
-    }
-  }
-  function handleReferenceTypeChange(nextType: PayableBasisReferenceType) {
-    latestRequestId.current += 1;
-    setReferenceType(nextType);
-    setReferenceValue("");
-    setStatutoryWorkflowState(noStatutoryWorkflow);
-    setOrdinanceAvailability({ status: "idle" });
-    setLookupState({ status: "idle" });
-  }
-
-
-  async function handleStatutoryStateChange(next: StatutoryDiscountWorkflowState) {
-    statutoryWorkflowStateRef.current = next;
-    setStatutoryWorkflowState(next);
-    if (displayedBasis) {
-      await persistPayableBasis(
-        displayedBasis,
-        displayedBasis.ticketReference ? "ticket" : "plate",
-        displayedBasis.ticketReference ?? displayedBasis.plateNumber ?? referenceValue,
-        lookupState.status === "amount_changed",
-        lookupState.status === "amount_changed" && !lookupState.acknowledged,
-        lookupState.status === "amount_changed" ? lookupState.previous.authoritativeAmountMinorUnits : null,
-        next,
-      );
-    }
-  }
-
-  async function handleAppliedStatutoryBasis(decisionCommandId: string, _response: StatutoryDiscountDecisionResponse, nextState: StatutoryDiscountWorkflowState) {
-    if (!displayedBasis) return;
-    const correlationId = createCorrelationId();
-    const referenceTypeForBasis: PayableBasisReferenceType = displayedBasis.ticketReference ? "ticket" : "plate";
-    const referenceValueForBasis = displayedBasis.ticketReference ?? displayedBasis.plateNumber ?? referenceValue;
-    const result = await client.resolvePayableBasis(referenceTypeForBasis, referenceValueForBasis, correlationId, decisionCommandId);
-    if (!result.ok) {
-      setLookupState({ status: "failed", result });
-      return;
-    }
-
-    const changed = result.response.authoritativeAmountMinorUnits !== displayedBasis.authoritativeAmountMinorUnits || result.response.tariffSnapshotId !== displayedBasis.tariffSnapshotId;
-    await persistPayableBasis(result.response, referenceTypeForBasis, referenceValueForBasis, changed, changed, displayedBasis.authoritativeAmountMinorUnits, nextState);
-    setStatutoryWorkflowState(nextState);
-    setCashEntryRequested(false);
-    setPreCashStatus("blocked");
-    setLookupState(changed
-      ? { status: "amount_changed", previous: displayedBasis, current: result.response, correlationId, acknowledged: false }
-      : { status: "resolved", basis: result.response, source: "fresh" });
-  }
-
   async function authorizeHumanAndRevalidate(basis: PayableBasisResponse): Promise<PreCashResult> {
     if (humanSessionBridge) {
       const authorization = await humanSessionBridge.authorizeCash(createCorrelationId());
@@ -810,7 +697,7 @@ export function TerminalShell({
         return { ok: false, message: authorization.payload.safeMessage || "Current online cashier authority is required before cash can be accepted." };
       }
     }
-    return preCashRevalidate(basis, true);
+    return preCashRevalidate(basis);
   }
 
   const activeShift = humanSessionState?.activeShift ?? localJournalHealth?.operationalState?.activeShift ?? null;
@@ -819,15 +706,15 @@ export function TerminalShell({
   const durableShiftActive = activeShift?.status === "Open";
   const durableCashCustodyActive = activeCashCustodySession?.status === "Open";
   const humanCashAuthorized = humanSessionState?.cashOperationsAuthorized ?? true;
-  const localPrerequisitesReady = config.nonLiveCashCaptureEnabled
-    && localPersistenceCashReady
+  const localPrerequisitesReady = localPersistenceCashReady
     && durableShiftActive
     && durableCashCustodyActive
     && humanCashAuthorized;
   const localPrerequisiteBlockers = localCashPrerequisiteBlockers(
-    config.nonLiveCashCaptureEnabled,
     localJournalHealth,
     localJournalHealthMessage,
+    activeShift,
+    activeCashCustodySession,
   );
   if (!humanCashAuthorized) {
     localPrerequisiteBlockers.unshift(humanSessionState?.safeMessage ?? "Current online cashier authority is required.");
@@ -844,13 +731,13 @@ export function TerminalShell({
 
       <section className="workflow-stack">
         {humanSessionBridge && humanSessionState && onHumanSessionStateChange && (
-          <HumanSessionPanel state={humanSessionState} bridge={humanSessionBridge} onStateChange={onHumanSessionStateChange} />
+          <HumanSessionPanel state={humanSessionState} bridge={humanSessionBridge} context={context} onStateChange={onHumanSessionStateChange} />
         )}
-        <OperationalContextPanel context={context} health={localJournalHealth} />
+        {(!humanSessionBridge || !humanSessionState) && <OperationalContextPanel context={context} health={localJournalHealth} />}
         <section className="lookup-panel" aria-labelledby="lookup-heading">
           <div className="section-heading">
-            <p className="eyebrow">Session resolution</p>
-            <h2 id="lookup-heading">Ticket or plate lookup</h2>
+            <p className="eyebrow">1. Find Ticket</p>
+            <h2 id="lookup-heading">Find parking session</h2>
           </div>
           <form
             className="lookup-form"
@@ -859,31 +746,31 @@ export function TerminalShell({
               void resolveReference();
             }}
           >
-            <fieldset className="reference-type-toggle" aria-label="Reference type">
-              <label>
-                <input type="radio" checked={referenceType === "ticket"} onChange={() => handleReferenceTypeChange("ticket")} />
-                Ticket
+            <div className="lookup-fields">
+              <label htmlFor="ticketNumber">
+                Ticket number
+                <input
+                  id="ticketNumber"
+                  value={ticketNumber}
+                  onChange={(event) => updateLookupInput("ticket", event.target.value)}
+                  placeholder="Scan or type ticket number"
+                  autoFocus
+                  autoComplete="off"
+                />
               </label>
-              <label>
-                <input type="radio" checked={referenceType === "plate"} onChange={() => handleReferenceTypeChange("plate")} />
-                Plate
+              <label htmlFor="plateNumber">
+                Plate number
+                <input
+                  id="plateNumber"
+                  value={plateNumber}
+                  onChange={(event) => updateLookupInput("plate", event.target.value)}
+                  placeholder="Type plate number"
+                  autoComplete="off"
+                />
               </label>
-            </fieldset>
-            <label htmlFor="referenceValue">{referenceType === "ticket" ? "Ticket reference" : "Plate number"}</label>
-            <div className="lookup-row">
-              <input
-                id="referenceValue"
-                value={referenceValue}
-                onChange={(event) => {
-                  latestRequestId.current += 1;
-                  setReferenceValue(event.target.value);
-                  setLookupState({ status: "idle" });
-                }}
-                placeholder={referenceType === "ticket" ? "Scan or type ticket reference" : "Type plate number"}
-                autoFocus
-                autoComplete="off"
-              />
-              <button type="submit" disabled={!referenceValue.trim() || lookupState.status === "loading"}>
+            </div>
+            <div className="lookup-actions">
+              <button type="submit" disabled={(!ticketNumber.trim() && !plateNumber.trim()) || lookupState.status === "loading"}>
                 Resolve
               </button>
             </div>
@@ -891,7 +778,7 @@ export function TerminalShell({
 
           {lookupState.status === "loading" && (
             <StatusNotice tone="info" title="Resolving parking session">
-              Request sent to {context.centralPmsConnectionMode}. The terminal retains an internal diagnostic reference for support.
+              Finding the current parking fee and payment status.
             </StatusNotice>
           )}
 
@@ -901,100 +788,42 @@ export function TerminalShell({
           )}
 
           {displayedBasis && (
-            <>
-              <div className="resolved-workflow">
-                <div className="session-column">
-                  <SessionSummary basis={displayedBasis} restored={lookupState.status === "resolved" && lookupState.source === "restored"} statutoryWorkflowActive={statutoryWorkflowActive} statutoryCashReady={statutoryCashGate.ready} />
-                  <ReadinessPanel basis={displayedBasis} tariffExpired={tariffExpired} statutoryWorkflowActive={statutoryWorkflowActive} statutoryCashReady={statutoryCashGate.ready} />
-                  <StatutoryDiscountPanel
-                    basis={displayedBasis}
-                    client={client}
-                    context={context}
-                    state={statutoryWorkflowState}
-                    ordinanceAvailability={ordinanceAvailability}
-                    onRetryAvailability={() => setOrdinanceRefreshToken((current) => current + 1)}
-                    onStateChange={(next) => void handleStatutoryStateChange(next)}
-                    onAppliedBasisReady={handleAppliedStatutoryBasis}
-                    evidenceBridge={statutoryEvidenceBridge}
-                  />
-                  {!localPrerequisitesReady && (
-                    <StatusNotice tone="danger" title="Local cash prerequisites unavailable" dataTestId="local-cash-prerequisites-notice">
-                      {localPrerequisiteBlockers[0] ?? "Local prerequisites can only restrict Central PMS readiness."}
-                    </StatusNotice>
-                  )}
-                  {localPrerequisiteBlockers.slice(1).map((blocker) => <p className="cash-error" key={blocker}>{blocker}</p>)}
-                  {localPrerequisiteMessage && <p className="cash-error">{localPrerequisiteMessage}</p>}
+            <div className="cashier-workflow">
+              <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} />
+              <section className="payment-section" aria-labelledby="receive-payment-heading">
+                <div className="section-heading">
+                  <p className="eyebrow">3. Receive Payment</p>
+                  <h2 id="receive-payment-heading">Receive payment</h2>
                 </div>
-                <div className="cash-column">
-                  <PreCashBoundaryPanel
-                    basis={displayedBasis}
-                    centralReady={cashBoundaryReady}
-                    localPrerequisitesReady={localPrerequisitesReady}
-                    status={preCashStatus}
-                    onContinue={() => void handleContinueToCash(displayedBasis)}
-                  />
-                  {cashEntryRequested && (
-                    <CashCapturePanel
-                      config={config}
-                      context={context}
-                      session={displayedBasis}
-                      tariffExpired={!centralReady}
-                      cashAcceptanceReady={cashBoundaryReady && localPrerequisitesReady}
-                      cashAcceptanceBlockedMessage={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryCashGate.message : blockerMessage(displayedBasis)}
-                      activeCashCustodySessionId={activeCashCustodySession?.id ?? null}
-                      onBeforeCashReceived={authorizeHumanAndRevalidate}
-                      onLocalPrerequisiteFailure={setLocalPrerequisiteMessage}
-                      bridge={localJournalBridge}
-                    />
-                  )}
-                </div>
-              </div>
-              {!config.nonLiveCashCaptureEnabled && <PaymentStage />}
-            </>
+                {!localPrerequisitesReady && (
+                  <StatusNotice tone="danger" title={localPrerequisiteBlockers[0] ?? "Cashier session is not ready"} dataTestId="local-cash-prerequisites-notice">
+                    Open or resume your own shift and cash custody in Cashier Session.
+                  </StatusNotice>
+                )}
+                {!cashBoundaryReady && (
+                  <StatusNotice tone="danger" title={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryStatusSummary(statutoryWorkflowState).message : blockerMessage(displayedBasis)}>
+                    Resolve the blocker before recording cash.
+                  </StatusNotice>
+                )}
+                {localPrerequisiteMessage && <p className="cash-error" role="alert">{localPrerequisiteMessage}</p>}
+                <CashCapturePanel
+                  config={config}
+                  context={context}
+                  session={displayedBasis}
+                  tariffExpired={tariffExpired}
+                  cashAcceptanceReady={localPrerequisitesReady && (cashBoundaryReady || tariffExpired)}
+                  cashAcceptanceBlockedMessage={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryCashGate.message : blockerMessage(displayedBasis)}
+                  activeCashCustodySessionId={activeCashCustodySession?.id ?? null}
+                  onBeforeCashReceived={authorizeHumanAndRevalidate}
+                  onLocalPrerequisiteFailure={setLocalPrerequisiteMessage}
+                  bridge={localJournalBridge}
+                />
+              </section>
+            </div>
           )}
         </section>
       </section>
     </main>
-  );
-}
-
-
-function PreCashBoundaryPanel({
-  basis,
-  centralReady,
-  localPrerequisitesReady,
-  status,
-  onContinue,
-}: {
-  basis: PayableBasisResponse;
-  centralReady: boolean;
-  localPrerequisitesReady: boolean;
-  status: "idle" | "revalidating" | "passed" | "blocked";
-  onContinue: () => void;
-}) {
-  const disabled = !centralReady || !localPrerequisitesReady || status === "revalidating";
-  const statusText = status === "revalidating"
-    ? "Revalidation in progress"
-    : status === "passed"
-      ? "Revalidation passed unchanged"
-      : centralReady && localPrerequisitesReady
-        ? "Ready for immediate pre-cash revalidation"
-        : "Cash acceptance remains blocked";
-
-  return (
-    <section className="status-notice info" aria-label="Pre-cash acceptance boundary" data-testid="pre-cash-boundary">
-      <h3>Pre-cash acceptance</h3>
-      <p>{statusText}</p>
-      <p>CASH_RECEIVED has not occurred. Continue to Cash runs Central PMS revalidation before local cash custody can be recorded.</p>
-      <dl className="central-pms-details">
-        <div><dt>readyForCashAcceptance</dt><dd data-testid="central-cash-ready-value">{basis.readyForCashAcceptance ? "true" : "false"}</dd></div>
-        <div><dt>Local prerequisites</dt><dd data-testid="local-cash-prerequisites-value">{localPrerequisitesReady ? "Satisfied" : "Blocked"}</dd></div>
-        <div><dt>Authoritative tariff</dt><dd>Current version confirmed</dd></div>
-      </dl>
-      <button type="button" className="primary-action" disabled={disabled} onClick={onContinue} data-testid="continue-to-cash">
-        Continue to Cash
-      </button>
-    </section>
   );
 }
 
@@ -1065,14 +894,20 @@ function postManualProofDiagnostic(
 export function HumanSessionPanel({
   state,
   bridge,
+  context,
   onStateChange,
 }: {
   state: HumanSessionState;
   bridge: HumanSessionBridge;
+  context?: TerminalContext;
   onStateChange: (state: HumanSessionState) => void;
 }) {
   const [openingCashAmount, setOpeningCashAmount] = useState("0.00");
+  const [closingCashAmount, setClosingCashAmount] = useState("0.00");
   const [busy, setBusy] = useState<string | null>(null);
+  const shiftOpen = state.activeShift?.status === "Open";
+  const custodyOpen = state.activeCashCustodySession?.status === "Open";
+  const [expanded, setExpanded] = useState(!shiftOpen || !custodyOpen);
 
   async function invoke(name: string, action: () => Promise<HumanSessionBridgeResult>) {
     setBusy(name);
@@ -1080,6 +915,9 @@ export function HumanSessionPanel({
       const result = await action();
       if (result.ok) {
         onStateChange(result.payload);
+        const nextShiftOpen = result.payload.activeShift?.status === "Open";
+        const nextCustodyOpen = result.payload.activeCashCustodySession?.status === "Open";
+        setExpanded(!nextShiftOpen || !nextCustodyOpen);
       } else {
         onStateChange({
           ...state,
@@ -1098,61 +936,90 @@ export function HumanSessionPanel({
     }
   }
 
-  const shiftOpen = state.activeShift?.status === "Open";
-  const custodyOpen = state.activeCashCustodySession?.status === "Open";
-  const expiry = formatDate(state.idleExpiresAt);
+  const expectedCash = state.activeCashCustodySession?.expectedClosingCashAmount;
+  const closingAmount = Number(closingCashAmount);
+  const variance = expectedCash != null && Number.isFinite(closingAmount) ? closingAmount - expectedCash : null;
 
   return (
     <section className="human-session-panel" aria-labelledby="human-session-heading">
-      <div className="human-session-heading-row">
-        <div>
-          <p className="eyebrow">Authenticated cashier</p>
-          <h2 id="human-session-heading">{state.displayName || "Cashier"}</h2>
-          <p>{state.username ? `Signed in as ${state.username}` : "Central PMS session active"}</p>
+      <div className="cashier-header">
+        <h2 id="human-session-heading" className="visually-hidden">Cashier session</h2>
+        <dl className="cashier-header-summary">
+          <div><dt>Cashier</dt><dd>{state.displayName || state.username || "Cashier"}</dd></div>
+          <div><dt>Site</dt><dd>{context?.siteName ?? "Unavailable"}</dd></div>
+          <div><dt>Terminal</dt><dd>{context?.terminalDisplayName ?? "Unavailable"}</dd></div>
+          <div><dt>Shift</dt><dd data-testid="cashier-header-shift">{shiftOpen ? "OPEN" : "CLOSED"}</dd></div>
+          <div><dt>Cash Custody</dt><dd data-testid="cashier-header-custody">{custodyOpen ? "OPEN" : "CLOSED"}</dd></div>
+        </dl>
+        <div className="cashier-header-actions">
+          <button type="button" className="secondary-action" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+            Cashier Session
+          </button>
+          <button type="button" className="secondary-action" disabled={busy !== null} onClick={() => void invoke("logout", () => bridge.logout(createCorrelationId()))}>
+            Sign out
+          </button>
         </div>
-        <button type="button" className="secondary-action" disabled={busy !== null} onClick={() => void invoke("logout", () => bridge.logout(createCorrelationId()))}>
-          Sign out
-        </button>
       </div>
 
-      <dl className="human-session-summary">
-        <div><dt>Device trust</dt><dd>{state.deviceTrusted ? "Established" : "Unavailable"}</dd></div>
-        <div><dt>Session audience</dt><dd>{state.audience === "APT" ? "Assisted Payment Terminal" : "Unavailable"}</dd></div>
-        <div><dt>Authentication</dt><dd>{state.assurance === "PASSWORD" ? "Username and password" : "Online session"}</dd></div>
-        <div><dt>Session status</dt><dd>{state.cashOperationsAuthorized ? "Current" : "Locked for new cash"}</dd></div>
-        <div><dt>Own shift</dt><dd>{shiftOpen ? "Open" : "Not open"}</dd></div>
-        <div><dt>Own custody</dt><dd>{custodyOpen ? "Open" : "Not open"}</dd></div>
-        <div><dt>Online validation due</dt><dd>{expiry}</dd></div>
-        <div><dt>Support reference</dt><dd>{state.safeSupportReference}</dd></div>
-      </dl>
+      {state.errorCode === "OPEN_CUSTODY_LOGOUT_BLOCKED" && (
+        <p className="cash-error" role="alert">Sign out is unavailable while you have open cash custody.</p>
+      )}
 
-      <div className={`status-notice ${state.errorCode ? "danger" : state.cashOperationsAuthorized ? "success" : "danger"}`} role={state.errorCode ? "alert" : "status"}>
-        <strong>{state.errorCode === "OPEN_CUSTODY_LOGOUT_BLOCKED" ? "Sign out unavailable" : state.cashOperationsAuthorized ? "Online cashier authority current" : "Authentication locked for new cash"}</strong>
-        <p>{state.safeMessage}</p>
-        {custodyOpen && !state.cashOperationsAuthorized && <p>Physical cash custody remains open. Authentication lock did not close or erase custody.</p>}
-      </div>
+      {expanded && (
+        <div className="cashier-session-body" aria-label="Cashier Session">
+          <section className="cashier-session-group">
+            <h3>Shift</h3>
+            <p>Status: {shiftOpen ? "Open" : "No active shift"}</p>
+            {!shiftOpen && (
+              <button type="button" disabled={busy !== null || !state.shiftOperationsAuthorized} onClick={() => void invoke("shift", () => bridge.openOrResumeShift(createCorrelationId()))}>
+                Open Shift
+              </button>
+            )}
+            {shiftOpen && !custodyOpen && <p>Your own open shift is ready for cash custody.</p>}
+          </section>
 
-      <div className="human-session-actions" aria-label="Cashier session and cash accountability actions">
-        <button type="button" disabled={busy !== null || shiftOpen || !state.shiftOperationsAuthorized} onClick={() => void invoke("shift", () => bridge.openOrResumeShift(createCorrelationId()))}>
-          {shiftOpen ? "Own shift resumed" : "Open or resume own shift"}
-        </button>
-        <label htmlFor="openingCashAmount">Opening cash amount</label>
-        <input
-          id="openingCashAmount"
-          inputMode="decimal"
-          value={openingCashAmount}
-          onChange={(event) => setOpeningCashAmount(event.target.value)}
-          disabled={busy !== null || custodyOpen}
-        />
-        <button
-          type="button"
-          disabled={busy !== null || custodyOpen || !shiftOpen || !state.custodyOperationsAuthorized || !Number.isFinite(Number(openingCashAmount)) || Number(openingCashAmount) < 0}
-          onClick={() => void invoke("custody", () => bridge.openOrResumeCustody(createCorrelationId(), Number(openingCashAmount)))}
-        >
-          {custodyOpen ? "Own custody resumed" : "Open or resume own custody"}
-        </button>
-      </div>
-      <p>APT cashier and supervisor authentication uses username and password only. No MFA prompt is required in v1.3.</p>
+          <section className="cashier-session-group">
+            <h3>Cash Custody</h3>
+            {!custodyOpen ? (
+              <div className="session-form-row">
+                <label htmlFor="openingCashAmount">Opening Cash Amount</label>
+                <input id="openingCashAmount" inputMode="decimal" value={openingCashAmount} onChange={(event) => setOpeningCashAmount(event.target.value)} disabled={busy !== null} />
+                <button
+                  type="button"
+                  disabled={busy !== null || !shiftOpen || !state.custodyOperationsAuthorized || !Number.isFinite(Number(openingCashAmount)) || Number(openingCashAmount) < 0}
+                  onClick={() => void invoke("custody", () => bridge.openOrResumeCustody(createCorrelationId(), Number(openingCashAmount)))}
+                >
+                  Open Cash Custody
+                </button>
+              </div>
+            ) : (
+              <div className="cashier-closing-grid">
+                <div><span>Opening Cash</span><strong>{formatCurrencyFromMajor(state.activeCashCustodySession?.openingCashAmount ?? 0)}</strong></div>
+                <div><span>Expected Cash</span><strong>{expectedCash == null ? "Calculated on close" : formatCurrencyFromMajor(expectedCash)}</strong></div>
+                <label htmlFor="closingCashAmount">Actual Closing Cash</label>
+                <input id="closingCashAmount" inputMode="decimal" value={closingCashAmount} onChange={(event) => setClosingCashAmount(event.target.value)} disabled={busy !== null} />
+                <div><span>Variance</span><strong>{variance == null ? "Calculated on close" : formatCurrencyFromMajor(variance)}</strong></div>
+                <button
+                  type="button"
+                  disabled={busy !== null || !state.custodyOperationsAuthorized || !Number.isFinite(closingAmount) || closingAmount < 0}
+                  onClick={() => void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), closingAmount))}
+                >
+                  Close Cash Custody
+                </button>
+              </div>
+            )}
+          </section>
+
+          {shiftOpen && (
+            <section className="cashier-session-group end-shift">
+              <h3>End Shift</h3>
+              <button type="button" disabled={busy !== null || custodyOpen || !state.shiftOperationsAuthorized} onClick={() => void invoke("close-shift", () => bridge.closeOwnShift(createCorrelationId()))}>
+                Close Cashier Shift
+              </button>
+            </section>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -1199,15 +1066,12 @@ function OperationalContextPanel({ context, health }: { context: TerminalContext
 }
 
 function localCashPrerequisiteBlockers(
-  nonLiveCashCaptureEnabled: boolean,
   health: LocalJournalHealth | null,
   healthMessage: string | null,
+  activeShift: HumanSessionState["activeShift"],
+  activeCustody: HumanSessionState["activeCashCustodySession"],
 ): string[] {
   const blockers: string[] = [];
-  if (!nonLiveCashCaptureEnabled) {
-    blockers.push("Local cash capture is disabled in this terminal profile.");
-  }
-
   if (healthMessage) {
     blockers.push(`Local operational state could not be read: ${healthMessage}`);
     return blockers;
@@ -1222,102 +1086,52 @@ function localCashPrerequisiteBlockers(
     blockers.push(health.localPersistence?.safeAction ?? "Encrypted local persistence is not ready for cash operations.");
   }
 
-  if (health.operationalState?.activeShiftRecordCount !== 1 || health.operationalState.activeShift?.status !== "Open") {
-    blockers.push("No active cashier shift is recorded in local recovery state.");
+  if (activeShift?.status !== "Open") {
+    blockers.push("Open or resume your cashier shift.");
   }
 
-  if (health.operationalState?.activeCashCustodySessionRecordCount !== 1 || health.operationalState.activeCashCustodySession?.status !== "Open") {
-    blockers.push("No active cash-custody session is recorded in local recovery state.");
+  if (activeCustody?.status !== "Open") {
+    blockers.push("Open or resume your cash custody.");
   }
 
   return blockers;
 }
 
-function SessionSummary({ basis, restored, statutoryWorkflowActive, statutoryCashReady }: { basis: PayableBasisResponse; restored: boolean; statutoryWorkflowActive: boolean; statutoryCashReady: boolean }) {
-  const amount = formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency);
-  const primaryRows = [
-    [basis.ticketReference ? "Ticket reference" : "Plate number", basis.ticketReference ?? basis.plateNumber ?? "Unavailable"],
-    ["Parking session", "Authoritatively resolved"],
-    ["Tariff version", "Authoritatively resolved"],
-    ["Tariff valid until", formatDate(basis.tariffValidUntil)],
-    ["Payment status", basis.paymentStatus],
-  ];
-
-  const secondaryRows = [
-    ["Masked plate", maskPlate(basis.plateNumber)],
-    ["Site", basis.siteName ?? "Authoritative Site"],
-    ["Entry timestamp", formatDate(basis.entryTimestamp)],
-    ["Currency", basis.currency],
-    ["Tariff calculated", formatDate(basis.tariffCalculatedAt)],
-    ["Fee valid until", formatDate(basis.feeValidUntil)],
-  ];
+function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse; statutoryState: StatutoryDiscountWorkflowState }) {
+  const statutory = statutoryStatusSummary(statutoryState);
+  const discountAmount = basis.statutoryDiscountReadiness?.statutoryDiscountAmountMinorUnits ?? 0;
+  const taxPending = "Confirmed on Sales Invoice";
+  const customerInformation = basis.customerInformationSubmitted === true ? "Submitted" : "Not submitted";
 
   return (
-    <section className="session-summary" aria-label="Resolved parking session" data-testid="payable-basis-summary">
-      <div className="amount-band">
-        <div>
-          <p className="eyebrow">Authoritative payable basis</p>
-          <strong data-testid="payable-basis-amount">{amount}</strong>
-        </div>
-        <span className={basis.readyForCashAcceptance && (!statutoryWorkflowActive || statutoryCashReady) ? "status-badge success" : "status-badge"}>
-          {restored ? "Previously resolved" : statutoryWorkflowActive && statutoryCashReady ? "Statutory ready" : statutoryWorkflowActive && basis.readyForCashAcceptance ? "Statutory blocked" : basis.readyForCashAcceptance ? "Ready" : "Blocked"}
-        </span>
+    <section className="session-summary" aria-label="Parking Session Details" data-testid="payable-basis-summary">
+      <div className="section-heading session-summary-heading">
+        <p className="eyebrow">2. Parking Session Details</p>
+        <h2>Parking session details</h2>
       </div>
-      <dl className="summary-primary">{primaryRows.map(([label, value]) => <div key={label} className="summary-row"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-      <details className="session-details">
-        <summary>Session details</summary>
-        <dl>{secondaryRows.map(([label, value]) => <div key={label} className="summary-row"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-      </details>
-    </section>
-  );
-}
-
-function ReadinessPanel({ basis, tariffExpired, statutoryWorkflowActive, statutoryCashReady }: { basis: PayableBasisResponse; tariffExpired: boolean; statutoryWorkflowActive: boolean; statutoryCashReady: boolean }) {
-  const ready = basis.readyForCashAcceptance && !tariffExpired;
-  const cashierReady = ready && (!statutoryWorkflowActive || statutoryCashReady);
-  const title = cashierReady
-    ? statutoryWorkflowActive ? "Statutory payable basis ready for cash acceptance" : "Ready for cash acceptance"
-    : statutoryWorkflowActive && ready ? "Central PMS payable basis ready" : "Cash acceptance blocked";
-  const dimensions = [
-    { label: "Session", value: basis.sessionReadiness ?? basis.parkingStatus, testId: "session-readiness-value" },
-    { label: "Tariff", value: tariffExpired ? "EXPIRED" : basis.tariffReadiness ?? "UNKNOWN", testId: "tariff-readiness-value" },
-    { label: "Payment eligibility", value: basis.paymentEligibility ?? basis.paymentStatus, testId: "payment-eligibility-value" },
-    { label: "Terminal cash", value: basis.terminalCashAvailability ?? "UNKNOWN", testId: "terminal-cash-readiness-value" },
-    { label: "Sales Invoice configuration", value: basis.salesInvoiceConfigurationReadiness ?? "UNKNOWN", testId: "sales-invoice-readiness-value" },
-    { label: "Fiscal readiness", value: basis.fiscalReadiness ?? "UNKNOWN", testId: "fiscal-readiness-value" },
-  ];
-
-  return (
-    <StatusNotice tone={cashierReady ? "success" : statutoryWorkflowActive && ready ? "info" : basis.retryable ? "info" : "danger"} title={title} dataTestId="cash-readiness-status">
-      <p>{cashierReady
-        ? statutoryWorkflowActive
-          ? "Central PMS confirmed the applied statutory payable basis. Continue to Cash runs statutory-aware revalidation before cash entry, and CASH_RECEIVED revalidates again before local custody is recorded."
-          : "Central PMS confirmed all pre-cash readiness checks. Revalidation will still run immediately before CASH_RECEIVED."
-        : statutoryWorkflowActive && ready
-          ? "Central PMS confirms the statutory payable basis is ready, but local statutory cash requirements are still blocked."
-          : blockerMessage(basis)}</p>
-      <dl className="central-pms-details">
-        {dimensions.map((dimension) => <div key={dimension.label}><dt>{dimension.label}</dt><dd data-testid={dimension.testId}>{friendlyCode(dimension.value)}</dd></div>)}
+      <dl className="approved-session-details">
+        <div><dt>Ticket reference</dt><dd>{basis.ticketReference ?? "Unavailable"}</dd></div>
+        <div><dt>Plate number</dt><dd>{basis.plateNumber ?? "Unavailable"}</dd></div>
+        <div><dt>Entry timestamp</dt><dd>{formatDate(basis.entryTimestamp)}</dd></div>
+        <div><dt>Parking duration</dt><dd>{basis.parkingDurationDisplay ?? formatParkingDuration(basis.entryTimestamp, basis.currentFeeCalculationTime ?? basis.tariffCalculatedAt)}</dd></div>
+        <div><dt>Tariff calculated</dt><dd>{formatDate(basis.tariffCalculatedAt)}</dd></div>
+        <div><dt>Fee valid until</dt><dd>{formatDate(basis.feeValidUntil ?? basis.tariffValidUntil)}</dd></div>
+        <div><dt>Discount Request</dt><dd>{statutory.label}</dd></div>
+        {statutory.reason && <div><dt>Reason</dt><dd>{statutory.reason}</dd></div>}
+        <div><dt>Customer Information for Sales Invoice</dt><dd>{customerInformation}</dd></div>
       </dl>
-      {basis.statutoryDiscountReadiness?.applicable && (
-        <details open>
-          <summary>Statutory readiness</summary>
-          <dl className="central-pms-details">
-            <div><dt>Status</dt><dd data-testid="statutory-readiness-value">{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessStatus)}</dd></div>
-            <div><dt>Action</dt><dd>{friendlyCode(basis.statutoryDiscountReadiness.payableBasisReadinessAction)}</dd></div>
-            <div><dt>Decision</dt><dd>{basis.statutoryDiscountReadiness.statutoryDiscountDecisionCommandId ? "Recorded" : "Unavailable"}</dd></div>
-          </dl>
-        </details>
-      )}
-      {basis.blockingReasonCodes.length > 0 && (
-        <details>
-          <summary>Support details</summary>
-          <p>Safe codes: {basis.blockingReasonCodes.join(", ")}</p>
-          <p>Classification: {basis.safeUserFacingClassification}</p>
-          <p>An internal diagnostic reference is retained for support.</p>
-        </details>
-      )}
-    </StatusNotice>
+      <div className="amount-summary" aria-label="Amount summary">
+        <div className="amount-summary-total"><span>Amount Due</span><strong data-testid="payable-basis-amount">{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</strong></div>
+        <dl>
+          <div><dt>Discount Amount</dt><dd>{formatCurrency(discountAmount, basis.currency)}</dd></div>
+          <div><dt>VATable Sales</dt><dd>{formatOptionalCurrency(basis.vatableSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+          <div><dt>VAT Amount</dt><dd>{formatOptionalCurrency(basis.vatAmountMinorUnits ?? basis.statutoryDiscountReadiness?.vatAmountMinorUnits, basis.currency, taxPending)}</dd></div>
+          <div><dt>VAT Exempt Sales</dt><dd>{formatOptionalCurrency(basis.vatExemptSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+          <div><dt>Zero Rated Sales</dt><dd>{formatOptionalCurrency(basis.zeroRatedSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+          <div className="amount-summary-total-row"><dt>Total Amount</dt><dd>{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</dd></div>
+        </dl>
+      </div>
+    </section>
   );
 }
 
@@ -1336,19 +1150,6 @@ function AmountChangedNotice({ previous, current, onAcknowledge }: { previous: P
       </dl>
       <button className="secondary-action" type="button" onClick={onAcknowledge}>Acknowledge new amount</button>
     </StatusNotice>
-  );
-}
-
-function PaymentStage() {
-  return (
-    <section className="payment-stage" aria-label="Payment stage disabled">
-      <div>
-        <p className="eyebrow">Payment stage</p>
-        <h2>Unavailable in this slice</h2>
-        <p>Central PMS payable-basis readiness is displayed here. Local cash custody remains the next desktop boundary.</p>
-      </div>
-      <button type="button" disabled>Collect payment</button>
-    </section>
   );
 }
 
@@ -1421,182 +1222,7 @@ function parseStatutoryState(raw?: string | null, restoredAfterRestart = false):
 }
 
 function serializeStatutoryState(state: StatutoryDiscountWorkflowState): string | null {
-  return state.status === "none" && !state.ordinanceAvailability ? null : JSON.stringify(state);
-}
-
-async function resolveOrdinanceForEntitlement(
-  client: CentralPmsClient,
-  basis: PayableBasisResponse,
-  entitlementType: StatutoryEntitlementType,
-): Promise<StatutoryOrdinanceAvailabilityResponse> {
-  const correlationId = createCorrelationId();
-  if (!client.resolveStatutoryOrdinanceAvailability) {
-    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Central PMS ordinance availability is unavailable from this terminal.", "RESOLVE");
-  }
-  try {
-    const result = await client.resolveStatutoryOrdinanceAvailability(basis, entitlementType, correlationId);
-    return result.ok
-      ? result.response
-      : unavailableOrdinanceResponse(basis, entitlementType, result.error.correlationId, classificationForFailure(result.kind), result.error.retryable, result.error.message, "RESOLVE");
-  } catch {
-    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Central PMS ordinance availability is unavailable from this terminal.", "RESOLVE");
-  }
-}
-
-async function revalidateOrdinanceForEntitlement(
-  client: CentralPmsClient,
-  basis: PayableBasisResponse,
-  entitlementType: StatutoryEntitlementType,
-): Promise<StatutoryOrdinanceAvailabilityResponse> {
-  const correlationId = createCorrelationId();
-  if (!client.revalidateStatutoryOrdinanceAvailability) {
-    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Statutory ordinance coverage could not be revalidated. Cash acceptance remains blocked.", "REVALIDATE");
-  }
-  try {
-    const result = await client.revalidateStatutoryOrdinanceAvailability(basis, entitlementType, correlationId);
-    return result.ok
-      ? result.response
-      : unavailableOrdinanceResponse(basis, entitlementType, result.error.correlationId, classificationForFailure(result.kind), result.error.retryable, result.error.message, "REVALIDATE");
-  } catch {
-    return unavailableOrdinanceResponse(basis, entitlementType, correlationId, "SOURCE_UNAVAILABLE", true, "Statutory ordinance coverage could not be revalidated. Cash acceptance remains blocked.", "REVALIDATE");
-  }
-}
-
-function unavailableOrdinanceResponse(
-  basis: PayableBasisResponse,
-  entitlementType: StatutoryEntitlementType,
-  correlationId: string,
-  classification: StatutoryOrdinanceAvailabilityResponse["classification"],
-  retryable: boolean,
-  safeMessage: string,
-  operation: "RESOLVE" | "REVALIDATE",
-): StatutoryOrdinanceAvailabilityResponse {
-  return {
-    operation,
-    revalidationOutcome: operation === "REVALIDATE" ? "FAILED" : null,
-    classification,
-    entitlementType,
-    ordinanceCoverageAvailable: false,
-    statutoryRequestAllowed: false,
-    preCashRevalidationPassed: false,
-    readyForStatutoryCashFlow: false,
-    ordinaryPaymentPreserved: true,
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    siteGroupId: basis.siteGroupId,
-    resolvedScopeType: "SITE",
-    coverageClassification: classification,
-    policyStatusClassification: classification,
-    supportReference: correlationId,
-    correlationId,
-    evaluatedAt: new Date().toISOString(),
-    retryable,
-    safeMessage,
-  };
-}
-
-function malformedOrdinanceResponse(
-  basis: PayableBasisResponse,
-  entitlementType: StatutoryEntitlementType,
-  correlationId: string,
-): StatutoryOrdinanceAvailabilityResponse {
-  return unavailableOrdinanceResponse(
-    basis,
-    entitlementType,
-    correlationId,
-    "MALFORMED_AUTHORITATIVE_STATE",
-    false,
-    "Central PMS returned ordinance availability for a different parking session or Site. Statutory actions remain blocked.",
-    "RESOLVE",
-  );
-}
-
-function classificationForFailure(kind: CentralPmsFailureKind): StatutoryOrdinanceAvailabilityResponse["classification"] {
-  switch (kind) {
-    case "unauthorized": return "ACCESS_DENIED";
-    case "not_found": return "SESSION_NOT_FOUND";
-    case "ambiguous": return "AMBIGUOUS_SESSION";
-    case "malformed_response": return "MALFORMED_AUTHORITATIVE_STATE";
-    case "service_unavailable":
-    case "timeout": return "SOURCE_UNAVAILABLE";
-    default: return "UNEXPECTED_FAILURE";
-  }
-}
-
-function ordinanceResponseMatchesBasis(response: StatutoryOrdinanceAvailabilityResponse, basis: PayableBasisResponse): boolean {
-  return response.parkingSessionId === basis.parkingSessionId
-    && response.siteId === basis.siteId
-    && response.siteGroupId === basis.siteGroupId;
-}
-
-function ordinanceSnapshot(
-  basis: PayableBasisResponse,
-  seniorCitizen: StatutoryOrdinanceAvailabilityResponse,
-  pwd: StatutoryOrdinanceAvailabilityResponse,
-): StatutoryOrdinanceAvailabilitySnapshot {
-  return {
-    authoritative: false,
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    siteGroupId: basis.siteGroupId,
-    recordedAt: new Date().toISOString(),
-    seniorCitizen,
-    pwd,
-  };
-}
-
-function snapshotFromViewState(state: StatutoryOrdinanceAvailabilityViewState): StatutoryOrdinanceAvailabilitySnapshot | null {
-  return state.status === "ready"
-    ? {
-        authoritative: false,
-        parkingSessionId: state.parkingSessionId,
-        siteId: state.siteId,
-        siteGroupId: state.seniorCitizen.siteGroupId,
-        recordedAt: new Date().toISOString(),
-        seniorCitizen: state.seniorCitizen,
-        pwd: state.pwd,
-      }
-    : null;
-}
-
-function asStatutoryEntitlementType(value?: string | null): StatutoryEntitlementType | null {
-  return value === "SENIOR_CITIZEN" || value === "PWD" ? value : null;
-}
-
-function ordinanceRevalidationPassed(
-  response: StatutoryOrdinanceAvailabilityResponse,
-  basis: PayableBasisResponse,
-  entitlementType: StatutoryEntitlementType,
-): boolean {
-  return response.operation === "REVALIDATE"
-    && response.revalidationOutcome === "PASSED_UNCHANGED"
-    && response.classification === "AVAILABLE"
-    && response.entitlementType === entitlementType
-    && ordinanceResponseMatchesBasis(response, basis)
-    && response.ordinanceCoverageAvailable
-    && response.preCashRevalidationPassed
-    && response.readyForStatutoryCashFlow;
-}
-
-function replaceOrdinanceAvailability(
-  current: StatutoryOrdinanceAvailabilityViewState,
-  basis: PayableBasisResponse,
-  response: StatutoryOrdinanceAvailabilityResponse,
-): StatutoryOrdinanceAvailabilityViewState {
-  const seniorCitizen = current.status === "ready"
-    ? current.seniorCitizen
-    : unavailableOrdinanceResponse(basis, "SENIOR_CITIZEN", response.correlationId, "SOURCE_UNAVAILABLE", true, "Fresh ordinance availability is required.", "RESOLVE");
-  const pwd = current.status === "ready"
-    ? current.pwd
-    : unavailableOrdinanceResponse(basis, "PWD", response.correlationId, "SOURCE_UNAVAILABLE", true, "Fresh ordinance availability is required.", "RESOLVE");
-  return {
-    status: "ready",
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    restoredRefresh: false,
-    seniorCitizen: response.entitlementType === "SENIOR_CITIZEN" ? response : seniorCitizen,
-    pwd: response.entitlementType === "PWD" ? response : pwd,
-  };
+  return state.status === "none" ? null : JSON.stringify(state);
 }
 
 function statutoryCashGateStatus(
@@ -1609,7 +1235,7 @@ function statutoryCashGateStatus(
   }
 
   if (lookupState.status === "amount_changed" || !statutoryState.amountAcknowledged) {
-    return { ready: false, message: "The applied statutory amount must be acknowledged before Continue to Cash." };
+    return { ready: false, message: "Review the updated amount before recording cash." };
   }
 
   const readiness = basis.statutoryDiscountReadiness;
@@ -1659,7 +1285,7 @@ function statutoryCashGateStatus(
   }
 
   if (!statutoryState.evidenceRecovery?.readyForAptPreCash) {
-    return { ready: false, message: "Authoritative statutory evidence readiness must be refreshed before Continue to Cash." };
+    return { ready: false, message: "The discount request is not ready for payment." };
   }
 
   if (basis.blockingReasonCodes.length > 0) {
@@ -1951,11 +1577,60 @@ function formatCurrency(amountMinorUnits: number, currency: string): string {
   return new Intl.NumberFormat("en-PH", { style: "currency", currency }).format(amountMinorUnits / 100);
 }
 
-function maskPlate(plate?: string | null): string {
-  if (!plate) return "Unavailable";
-  const compact = plate.replace(/[^a-z0-9]/gi, "");
-  if (compact.length <= 3) return "***";
-  return `${compact.slice(0, 3)}-${"*".repeat(Math.max(2, compact.length - 3))}`;
+function formatCurrencyFromMajor(amount: number): string {
+  return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(amount);
+}
+
+function formatOptionalCurrency(amountMinorUnits: number | null | undefined, currency: string, fallback: string): string {
+  return amountMinorUnits == null ? fallback : formatCurrency(amountMinorUnits, currency);
+}
+
+function formatParkingDuration(entryTimestamp?: string | null, calculationTimestamp?: string | null): string {
+  if (!entryTimestamp || !calculationTimestamp) return "Unavailable";
+  const milliseconds = new Date(calculationTimestamp).getTime() - new Date(entryTimestamp).getTime();
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "Unavailable";
+  const totalMinutes = Math.floor(milliseconds / 60_000);
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", `${minutes}m`].filter(Boolean).join(" ");
+}
+
+function statutoryStatusSummary(state: StatutoryDiscountWorkflowState): { label: string; message: string; reason?: string } {
+  switch (state.status) {
+    case "none": return { label: "None", message: "No statutory discount request is active." };
+    case "draft":
+    case "submitting":
+    case "awaiting_review":
+    case "approved_application_not_requested":
+    case "application_submitting":
+    case "application_processing":
+      return { label: "Submitted", message: "Statutory discount request is being processed." };
+    case "applied": return { label: "Approved", message: "Approved statutory discount is included in the amount due." };
+    case "rejected": return { label: "Rejected", message: "Statutory discount request was rejected.", reason: "The submitted request was not approved." };
+    default: return { label: "Submitted", message: "Statutory discount status is temporarily unavailable." };
+  }
+}
+
+function lookupMismatchFailure(): Exclude<CentralPmsResult, { ok: true }> {
+  return {
+    ok: false,
+    kind: "invalid_request",
+    error: {
+      errorCode: "REFERENCE_MISMATCH",
+      message: "Ticket and plate do not identify the same parking session.",
+      correlationId: "local-validation",
+      retryable: false,
+    },
+  };
+}
+
+function recordPerformanceTiming(name: string, startedAt: number): void {
+  try {
+    performance.measure(name, { start: startedAt, end: performance.now() });
+  } catch {
+    // Performance diagnostics must never affect cashier workflow.
+  }
 }
 
 function formatDate(value?: string | null): string {

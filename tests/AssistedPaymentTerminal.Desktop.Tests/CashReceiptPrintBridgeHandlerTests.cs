@@ -33,6 +33,9 @@ public sealed class CashReceiptPrintBridgeHandlerTests
         Assert.Equal("SI-000001", payload.GetProperty("job").GetProperty("fiscalDocumentNumber").GetString());
         Assert.Equal(receipt.AuthoritativePayloadHash, payload.GetProperty("job").GetProperty("authoritativePayloadHash").GetString());
         var printLines = PrintLines(payload);
+        var canonicalLines = CanonicalLines(CashReceiptPreviewBridgeHandlerTests.CanonicalPrintableText);
+        Assert.Equal(canonicalLines, printLines);
+        Assert.All(printLines, line => Assert.True(line.Length <= 48, $"Canonical receipt line exceeds 48 columns: '{line}'"));
         Assert.Contains(printLines, line => string.Equals(line.Trim(), "SALES INVOICE", StringComparison.Ordinal));
         Assert.DoesNotContain(printLines, line => line.Contains("REPRINTED:", StringComparison.Ordinal));
         Assert.DoesNotContain(printLines, line => line.Contains("SALES INVOICE DETAILS", StringComparison.Ordinal));
@@ -73,6 +76,10 @@ public sealed class CashReceiptPrintBridgeHandlerTests
         Assert.True(reprintIndex >= 0, "Reprint output must include the durable REPRINTED timestamp marker.");
         Assert.True(headingIndex >= 0, "Reprint output must include the Sales Invoice heading.");
         Assert.True(reprintIndex < headingIndex, "REPRINTED marker must appear above the Sales Invoice heading.");
+        Assert.Equal(new string('-', 48), printLines[1]);
+        Assert.Equal(
+            CanonicalLines(CashReceiptPreviewBridgeHandlerTests.CanonicalPrintableText),
+            printLines.Skip(2).ToArray());
         Assert.DoesNotContain(printLines, line => line.Contains("SALES INVOICE DETAILS", StringComparison.Ordinal));
         Assert.Equal(receipt.AuthoritativePayloadHash, payload.GetProperty("printDocument").GetProperty("authoritativePayloadHash").GetString());
         Assert.Equal(receipt.PosFiscalDocumentId, payload.GetProperty("printDocument").GetProperty("fiscalDocumentId").GetGuid());
@@ -196,41 +203,9 @@ public sealed class CashReceiptPrintBridgeHandlerTests
 
     private static TerminalCashReceiptPresentationResponse Available(TerminalCashReceiptRetrievalCommand command)
     {
-        using var document = JsonDocument.Parse(
-            """
-            {
-              "presentation": {
-                "registeredBusinessName": "GOVERNED REGISTERED BUSINESS NAME",
-                "registeredBusinessAddress": "GOVERNED REGISTERED BUSINESS ADDRESS",
-                "tin": "GOVERNED TIN",
-                "posSerialNumber": "GOVERNED POS SERIAL NUMBER",
-                "machineIdentificationNumber": "GOVERNED MACHINE IDENTIFICATION NUMBER",
-                "parkingLocation": "GOVERNED PARKING LOCATION",
-                "terminalId": "GOVERNED TERMINAL ID",
-                "fiscalDocumentNumber": "SI-000001",
-                "issuedAt": "GOVERNED ISSUED DATE",
-                "plateNumber": "GOVERNED PLATE NUMBER",
-                "entryTime": "GOVERNED ENTRY TIME",
-                "exitTime": "GOVERNED EXIT TIME",
-                "durationDisplay": "GOVERNED DURATION",
-                "lines": [{ "description": "Parking fee - cash", "quantity": "1", "unitPriceDisplay": "PHP 125.00", "displayAmount": "PHP 125.00" }],
-                "subtotalDisplay": "PHP 125.00",
-                "discounts": [{ "description": "None", "displayAmount": "PHP 0.00" }],
-                "vatableSalesDisplay": "PHP 125.00",
-                "outputVatDisplay": "PHP 0.00",
-                "vatExemptSalesDisplay": "PHP 0.00",
-                "zeroRatedSalesDisplay": "PHP 0.00",
-                "tenders": [{ "tenderType": "CASH", "provider": "not_applicable", "displayAmount": "PHP 150.00", "changeDisplay": "PHP 25.00" }],
-                "salesInvoiceStatement": "THIS SERVES AS YOUR SALES INVOICE",
-                "footer": { "message": "THANK YOU FOR CHOOSING OUR SERVICE" },
-                "birAccreditationNumber": "GOVERNED BIR ACCREDITATION NO.",
-                "birAccreditationIssuedDateDisplay": "GOVERNED BIR ACCREDITATION DATE ISSUED",
-                "birAccreditationValidUntilDisplay": "GOVERNED BIR ACCREDITATION VALID UNTIL",
-                "ptuNumber": "GOVERNED PTU NO.",
-                "ptuIssuedDateDisplay": "GOVERNED PTU DATE ISSUED"
-              }
-            }
-            """);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(
+            CashReceiptPreviewBridgeHandlerTests.CanonicalPresentation(complete: true),
+            JsonOptions));
 
         return new TerminalCashReceiptPresentationResponse(
             command.TerminalCashTenderId,
@@ -269,6 +244,13 @@ public sealed class CashReceiptPrintBridgeHandlerTests
             .GetProperty("lines")
             .EnumerateArray()
             .Select(line => line.GetString() ?? string.Empty)
+            .ToArray();
+
+    private static string[] CanonicalLines(string canonicalText) =>
+        canonicalText.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n')
+            .SkipLast(1)
             .ToArray();
 
     private static async Task<JsonDocument> SendAsync(LocalJournalBridgeHandler handler, string command, string correlationId, object payload)

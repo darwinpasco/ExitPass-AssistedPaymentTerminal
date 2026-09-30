@@ -36,7 +36,6 @@ public sealed class LocalJournalBridgeHandler
     ];
 
     private readonly CashJournalService _journal;
-    private readonly bool _enabled;
     private readonly bool _centralPmsCashSubmissionEnabled;
     private readonly bool _centralPmsFiscalIssuanceEnabled;
     private readonly bool _centralPmsReceiptRetrievalEnabled;
@@ -57,7 +56,6 @@ public sealed class LocalJournalBridgeHandler
 
     public LocalJournalBridgeHandler(
         CashJournalService journal,
-        bool enabled,
         bool centralPmsCashSubmissionEnabled = false,
         bool centralPmsFiscalIssuanceEnabled = false,
         bool centralPmsReceiptRetrievalEnabled = false,
@@ -77,7 +75,6 @@ public sealed class LocalJournalBridgeHandler
         bool allowDevelopmentSessionCommands = true)
     {
         _journal = journal;
-        _enabled = enabled;
         _centralPmsCashSubmissionEnabled = centralPmsCashSubmissionEnabled;
         _centralPmsFiscalIssuanceEnabled = centralPmsFiscalIssuanceEnabled;
         _centralPmsReceiptRetrievalEnabled = centralPmsReceiptRetrievalEnabled;
@@ -173,15 +170,6 @@ public sealed class LocalJournalBridgeHandler
                 $"Unsupported local journal bridge command '{request.Command}'.");
         }
 
-        if (request.Command != LocalJournalBridgeCommand.Health && !_enabled)
-        {
-            return SerializeFailure(
-                request.Command,
-                request.CorrelationId,
-                "feature_disabled",
-                "Non-live cash custody capture is disabled.");
-        }
-
         try
         {
             return request.Command switch
@@ -263,7 +251,6 @@ public sealed class LocalJournalBridgeHandler
             request.CorrelationId,
             new LocalJournalHealthResponse(
                 Healthy: true,
-                Enabled: _enabled,
                 DatabasePath: _journal.DatabasePath,
                 CashDrawerEnabled: false,
                 AuthorityWarning: "Local CASH_RECEIVED is terminal-local custody evidence only. Canonical payment and fiscal issuance are not performed.",
@@ -512,7 +499,10 @@ public sealed class LocalJournalBridgeHandler
                 $"No Central PMS cash-payment outbox command exists for local tender '{payload.LocalCashTenderId}'.");
         }
 
-        var submitted = await _submissionService.SubmitOrReadbackAsync(command.Id, cancellationToken).ConfigureAwait(false);
+        var submitted = command.Status == TerminalCashPaymentCommandStatus.Conflict
+            && string.Equals(command.LastSafeErrorCode, "STALE_TARIFF", StringComparison.Ordinal)
+            ? await _submissionService.RecoverStaleTariffConflictAsync(command.Id, cancellationToken).ConfigureAwait(false)
+            : await _submissionService.SubmitOrReadbackAsync(command.Id, cancellationToken).ConfigureAwait(false);
         return SerializeSuccess(
             request.Command,
             request.CorrelationId,
@@ -1177,7 +1167,6 @@ public sealed record LocalJournalBridgeError(string Code, string Message, object
 
 public sealed record LocalJournalHealthResponse(
     bool Healthy,
-    bool Enabled,
     string DatabasePath,
     bool CashDrawerEnabled,
     string AuthorityWarning,
@@ -1318,6 +1307,7 @@ public sealed record CentralPmsCashFiscalCommandSnapshot(
     string? FiscalDocumentNumber,
     DateTimeOffset? FiscalNumberAssignedAt,
     string? SemanticHashSourceVersion,
+    bool ExitAuthorizationIssued,
     DateTimeOffset? RecordedAt,
     DateTimeOffset? NextRetryAt,
     int? LastSafeHttpStatus,
@@ -1354,6 +1344,7 @@ public sealed record CentralPmsCashFiscalCommandSnapshot(
             command.FiscalDocumentNumber,
             command.FiscalNumberAssignedAt,
             command.SemanticHashSourceVersion,
+            command.ExitAuthorizationIssued,
             command.RecordedAt,
             command.NextRetryAt,
             command.LastSafeHttpStatus,

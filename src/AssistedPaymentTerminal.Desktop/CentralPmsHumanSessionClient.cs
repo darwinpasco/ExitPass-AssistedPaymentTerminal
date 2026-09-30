@@ -13,6 +13,7 @@ public interface ICentralPmsHumanSessionClient
     Task<HumanSessionClientResult> GetAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken);
     Task<HumanSessionClientResult> ContinueAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken);
     Task<HumanSessionClientResult> ReauthenticateAsync(Guid sessionReference, string sessionToken, string password, Guid correlationId, CancellationToken cancellationToken);
+    Task<HumanSessionClientResult> ChangePasswordAsync(Guid sessionReference, string sessionToken, string currentPassword, string newPassword, string totpCode, Guid correlationId, CancellationToken cancellationToken);
     Task<HumanSessionClientResult> LogoutAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken);
 }
 
@@ -86,6 +87,23 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
             new { password, totpCode = (string?)null },
             cancellationToken);
 
+    public Task<HumanSessionClientResult> ChangePasswordAsync(
+        Guid sessionReference,
+        string sessionToken,
+        string currentPassword,
+        string newPassword,
+        string totpCode,
+        Guid correlationId,
+        CancellationToken cancellationToken) =>
+        SendAsync(
+            HttpMethod.Post,
+            $"/v1/apt/human-sessions/{sessionReference:D}/password/change",
+            correlationId,
+            sessionToken,
+            new { currentPassword, newPassword, totpCode },
+            cancellationToken,
+            acceptedNonAuthenticatedOutcome: "PASSWORD_CHANGED");
+
     public Task<HumanSessionClientResult> LogoutAsync(
         Guid sessionReference,
         string sessionToken,
@@ -99,7 +117,8 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
         Guid correlationId,
         string? sessionToken,
         object? body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? acceptedNonAuthenticatedOutcome = null)
     {
         if (_baseUri is null || !_deviceServiceIdentityId.HasValue)
         {
@@ -147,7 +166,10 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
             if (payload is not null && IsSafeResponse(payload))
             {
                 _trace.Record("central-pms.request-completed", sourceMethod: nameof(CentralPmsHumanSessionClient), sourceTrigger: path, centralPmsCorrelationId: correlationId, outcome: payload.Outcome);
-                return response.IsSuccessStatusCode && payload.Authenticated && payload.Session is not null
+                var accepted = response.IsSuccessStatusCode
+                    && ((payload.Authenticated && payload.Session is not null)
+                        || string.Equals(payload.Outcome, acceptedNonAuthenticatedOutcome, StringComparison.Ordinal));
+                return accepted
                     ? HumanSessionClientResult.Success(payload)
                     : HumanSessionClientResult.Failure(
                         payload.ErrorCode ?? payload.Outcome,
@@ -202,6 +224,11 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
         "INVALID_CREDENTIALS" => "The username or password is incorrect.",
         "ACCOUNT_UNAVAILABLE" => "This account is not available for cashier work.",
         "AUTHENTICATION_THROTTLED" => "Login is temporarily limited. Wait before trying again.",
+        "CURRENT_PASSWORD_INVALID" => "The current temporary password was not accepted.",
+        "TOTP_REQUIRED" => "Enter the current authenticator code to change the temporary password.",
+        "TOTP_INVALID" => "The authenticator code was not accepted.",
+        "PASSWORD_POLICY_FAILED" or "PASSWORD_REJECTED" => "The new password does not meet the current Central PMS password policy.",
+        "TEMPORARY_PASSWORD_EXPIRED" => "The temporary password expired. Use the approved account recovery process.",
         "SESSION_EXPIRED" => "The cashier session expired. Sign in again to restore authority.",
         "SESSION_REVOKED" or "SESSION_INVALID" or "SESSION_NOT_FOUND" => "The cashier session is no longer valid. Sign in again.",
         "APT_DEVICE_TRUST_REQUIRED" or "AUDIENCE_DEVICE_MISMATCH" => "Central PMS rejected this terminal or session binding.",

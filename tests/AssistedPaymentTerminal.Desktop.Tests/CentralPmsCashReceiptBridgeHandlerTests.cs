@@ -402,7 +402,6 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
         var journal = new CashJournalService(options);
         return new LocalJournalBridgeHandler(
             journal,
-            enabled: true,
             centralPmsCashSubmissionEnabled: true,
             centralPmsFiscalIssuanceEnabled: true,
             centralPmsReceiptRetrievalEnabled: receiptEnabled,

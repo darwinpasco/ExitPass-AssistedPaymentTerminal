@@ -196,6 +196,12 @@ public sealed class TerminalCashFiscalOutboxTests
         Assert.Equal(response.PosFiscalDocumentId, result.PosFiscalDocumentId);
         Assert.Equal(response.FiscalDocumentNumber, result.FiscalDocumentNumber);
         Assert.Equal("IDEMPOTENT_REPLAY", result.ResultClassification);
+        Assert.True(result.ExitAuthorizationIssued);
+
+        var restarted = await new TerminalCashFiscalSubmissionService(new ScriptedCentralPmsFiscalClient(), database.Options)
+            .GetFiscalCommandByTenderAsync(command.TerminalCashTenderId);
+        Assert.NotNull(restarted);
+        Assert.True(restarted.ExitAuthorizationIssued);
     }
 
     [Fact]
@@ -402,7 +408,7 @@ public sealed class TerminalCashFiscalOutboxTests
             null,
             null,
             true,
-            false,
+            true,
             false);
 }
 

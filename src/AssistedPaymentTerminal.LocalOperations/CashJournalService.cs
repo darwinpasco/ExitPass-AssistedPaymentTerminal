@@ -56,7 +56,9 @@ public sealed class CashJournalService
         await using var dbContext = CreateDbContext();
         await dbContext.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
         await EnsureCashierShiftSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+        await EnsureCashCustodyClosureSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureCashTenderStatutoryEvidenceSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+        await EnsureTerminalCashFiscalSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
     }
 
     public LocalPersistenceReadiness GetLocalPersistenceReadiness()
@@ -152,6 +154,19 @@ public sealed class CashJournalService
                 $"Cashier shift '{request.CashierShiftId}' was not found."));
         }
 
+        var sameOwnerAndScope =
+            string.Equals(shift.CashierId, request.CashierId, StringComparison.Ordinal)
+            && string.Equals(shift.TerminalId, request.TerminalId, StringComparison.Ordinal)
+            && string.Equals(shift.SiteId, request.SiteId, StringComparison.Ordinal)
+            && string.Equals(shift.SiteGroupId, request.SiteGroupId, StringComparison.Ordinal)
+            && string.Equals(shift.PosServerId, request.PosServerId, StringComparison.Ordinal);
+        if (!sameOwnerAndScope)
+        {
+            return CashJournalResult<CashierShiftSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Only the authenticated owning cashier may close this shift in its original terminal scope."));
+        }
+
         if (shift.Status == CashierShiftStatus.Closed)
         {
             return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
@@ -170,6 +185,7 @@ public sealed class CashJournalService
 
         shift.Status = CashierShiftStatus.Closed;
         shift.ClosedAt = request.ClosedAt ?? DateTimeOffset.UtcNow;
+        shift.ClosedByAuthenticatedCashierSessionReference = request.AuthenticatedCashierSessionReference;
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         return CashJournalResult<CashierShiftSnapshot>.Success(CashierShiftSnapshot.FromEntity(shift));
@@ -282,6 +298,89 @@ public sealed class CashJournalService
         return existing is not null
             ? CashJournalResult<CashCustodySessionSnapshot>.Success(CashCustodySessionSnapshot.FromEntity(existing))
             : await CreateCashCustodySessionAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<CashJournalResult<CashCustodySessionSnapshot>> CloseCashCustodySessionAsync(
+        CloseCashCustodySessionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        if (request.ClosingCashAmount < 0)
+        {
+            return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Closing cash amount cannot be negative."));
+        }
+
+        await using var dbContext = CreateDbContext();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var session = await dbContext.CashCustodySessions
+            .SingleOrDefaultAsync(value => value.Id == request.CashCustodySessionId, cancellationToken)
+            .ConfigureAwait(false);
+        if (session is null)
+        {
+            return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.NotFound,
+                "The cash-custody session was not found."));
+        }
+
+        var sameOwnerAndScope =
+            string.Equals(session.CashierId, request.CashierId, StringComparison.Ordinal)
+            && string.Equals(session.CashierShiftId, request.CashierShiftId, StringComparison.Ordinal)
+            && string.Equals(session.TerminalId, request.TerminalId, StringComparison.Ordinal)
+            && string.Equals(session.SiteId, request.SiteId, StringComparison.Ordinal)
+            && string.Equals(session.SiteGroupId, request.SiteGroupId, StringComparison.Ordinal)
+            && string.Equals(session.PosServerId, request.PosServerId, StringComparison.Ordinal);
+        if (!sameOwnerAndScope)
+        {
+            return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Only the authenticated owning cashier may close this cash custody in its original terminal scope."));
+        }
+
+        if (session.Status == CashCustodySessionStatus.Closed)
+        {
+            return session.ClosingCashAmount == request.ClosingCashAmount
+                ? CashJournalResult<CashCustodySessionSnapshot>.Success(CashCustodySessionSnapshot.FromEntity(session))
+                : CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                    CashJournalErrorCode.InvalidStateTransition,
+                    "Closed cash-custody evidence is immutable."));
+        }
+
+        var shift = await dbContext.CashierShifts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == session.CashierShiftId, cancellationToken)
+            .ConfigureAwait(false);
+        if (shift is null
+            || shift.Status != CashierShiftStatus.Open
+            || !string.Equals(shift.CashierId, request.CashierId, StringComparison.Ordinal))
+        {
+            return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                CashJournalErrorCode.InvalidStateTransition,
+                "Cash custody can close only under the owning cashier's open shift."));
+        }
+
+        var receivedCashAmounts = await dbContext.CashTenders
+            .AsNoTracking()
+            .Where(tender => tender.CashCustodySessionId == session.Id)
+            .Where(tender => tender.CurrentLocalState == CashTenderState.CashReceived)
+            .Select(tender => tender.AmountDue)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var receivedCash = receivedCashAmounts.Sum();
+        var expectedClosingCash = session.OpeningCashAmount + receivedCash;
+
+        session.ExpectedClosingCashAmount = expectedClosingCash;
+        session.ClosingCashAmount = request.ClosingCashAmount;
+        session.VarianceAmount = request.ClosingCashAmount - expectedClosingCash;
+        session.ClosedAt = request.ClosedAt ?? DateTimeOffset.UtcNow;
+        session.ClosedByAuthenticatedCashierSessionReference = request.AuthenticatedCashierSessionReference;
+        session.Status = CashCustodySessionStatus.Closed;
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return CashJournalResult<CashCustodySessionSnapshot>.Success(CashCustodySessionSnapshot.FromEntity(session));
     }
 
     public async Task<CashJournalResult<CashTenderSnapshot>> StartCashTenderAsync(
@@ -819,7 +918,40 @@ public sealed class CashJournalService
             ON cashier_shifts (TerminalId, CashierId, Status);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "cashier_shifts",
+            "ClosedByAuthenticatedCashierSessionReference",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
     }
+
+    private static async Task EnsureCashCustodyClosureSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ExpectedClosingCashAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ClosingCashAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "VarianceAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ClosedAt", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            dbContext,
+            "cash_custody_sessions",
+            "ClosedByAuthenticatedCashierSessionReference",
+            "TEXT NULL",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task EnsureTerminalCashFiscalSchemaAsync(
+        CashJournalDbContext dbContext,
+        CancellationToken cancellationToken) =>
+        AddColumnIfMissingAsync(
+            dbContext,
+            "terminal_cash_fiscal_outbox_commands",
+            "ExitAuthorizationIssued",
+            "INTEGER NOT NULL DEFAULT 0",
+            cancellationToken);
 
     private static void ApplyStatutoryTenderEvidence(
         CashTender tender,

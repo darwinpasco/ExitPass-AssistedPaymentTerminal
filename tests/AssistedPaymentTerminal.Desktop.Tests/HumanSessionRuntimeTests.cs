@@ -21,6 +21,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         HumanSessionRuntimeOptions.CustodyOperatePermission,
         HumanSessionRuntimeOptions.CashReceivePermission
     ];
+    private const string AptCashierOperatePermission = "apt.cashier.operate";
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "ExitPass.APT.HumanSession.Tests", Guid.NewGuid().ToString("N"));
 
     public HumanSessionRuntimeTests() => Directory.CreateDirectory(_directory);
@@ -43,6 +44,148 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         client.GetResult = Failure("SESSION_REVOKED");
         await runtime.RefreshAsync();
         Assert.Null(await runtime.GetCurrentRequestCredentialAsync());
+    }
+
+    [Fact]
+    public async Task FirstLoginRequiresGovernedPasswordChangeBeforeCashierAuthorityExists()
+    {
+        var restricted = PasswordChangeRequired(CashierId);
+        var client = new FakeHumanSessionClient(restricted)
+        {
+            ChangePasswordResult = PasswordChanged(),
+            LoginResults = new Queue<HumanSessionClientResult>([restricted, Success(CashierId, permissions: [AptCashierOperatePermission])])
+        };
+        var store = new MemoryCredentialStore();
+        var runtime = CreateRuntime(client, store, out _);
+
+        var pending = await runtime.LoginAsync("cashier.synthetic", Credential(runtime, credentialValue: "temporary-password"));
+
+        Assert.False(pending.Authenticated);
+        Assert.Equal("PASSWORD_CHANGE_REQUIRED", pending.AuthenticationState);
+        Assert.False(pending.ShiftOperationsAuthorized);
+        Assert.False(pending.CustodyOperationsAuthorized);
+        Assert.False(pending.CashOperationsAuthorized);
+        Assert.Null(store.Credential);
+        Assert.Null(await runtime.GetCurrentRequestCredentialAsync());
+
+        var currentAuthorityVersion = runtime.AuthorityVersion;
+        using var changeCredential = new ExplicitHumanCredentialSubmission(
+            Guid.NewGuid(),
+            HumanCredentialOperation.ChangePassword,
+            currentAuthorityVersion,
+            Guid.NewGuid().ToString("N"),
+            "temporary-password",
+            "replacement-password",
+            "replacement-password",
+            "123456");
+        var authenticated = await runtime.ChangePasswordAndLoginAsync("cashier.synthetic", changeCredential);
+
+        Assert.True(authenticated.Authenticated);
+        Assert.True(authenticated.ShiftOperationsAuthorized);
+        Assert.True(authenticated.CustodyOperationsAuthorized);
+        Assert.True(authenticated.CashOperationsAuthorized);
+        Assert.NotNull(store.Credential);
+        Assert.Equal(2, client.LoginCalls);
+        Assert.Equal(1, client.ChangePasswordCalls);
+        Assert.Equal("temporary-password", client.LastCurrentCredential);
+        Assert.Equal("replacement-password", client.LastNewCredential);
+        Assert.Equal("123456", client.LastTotpCode);
+        Assert.Equal(new[] { "temporary-password", "replacement-password" }, client.LoginPasswords);
+    }
+
+    [Fact]
+    public async Task RejectedPasswordChangeKeepsRestrictedStateAndDoesNotRetryLogin()
+    {
+        var restricted = PasswordChangeRequired(CashierId);
+        var client = new FakeHumanSessionClient(restricted)
+        {
+            ChangePasswordResult = Failure("PASSWORD_POLICY_FAILED")
+        };
+        var store = new MemoryCredentialStore();
+        var runtime = CreateRuntime(client, store, out _);
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime, credentialValue: "temporary-password"));
+        using var changeCredential = new ExplicitHumanCredentialSubmission(
+            Guid.NewGuid(), HumanCredentialOperation.ChangePassword, runtime.AuthorityVersion,
+            Guid.NewGuid().ToString("N"), "temporary-password", "weak", "weak", "123456");
+
+        var state = await runtime.ChangePasswordAndLoginAsync("cashier.synthetic", changeCredential);
+
+        Assert.False(state.Authenticated);
+        Assert.Equal("PASSWORD_CHANGE_REQUIRED", state.AuthenticationState);
+        Assert.Equal("PASSWORD_POLICY_FAILED", state.ErrorCode);
+        Assert.False(state.CashOperationsAuthorized);
+        Assert.Null(store.Credential);
+        Assert.Equal(1, client.LoginCalls);
+        Assert.Equal(1, client.ChangePasswordCalls);
+    }
+
+    [Theory]
+    [InlineData("replacement-password", "different-password", "123456")]
+    [InlineData("replacement-password", "replacement-password", "")]
+    public async Task InvalidNativePasswordChangeInputsNeverReachCentralPms(
+        string newPassword,
+        string confirmation,
+        string totpCode)
+    {
+        var restricted = PasswordChangeRequired(CashierId);
+        var client = new FakeHumanSessionClient(restricted);
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime, credentialValue: "temporary-password"));
+        using var changeCredential = new ExplicitHumanCredentialSubmission(
+            Guid.NewGuid(), HumanCredentialOperation.ChangePassword, runtime.AuthorityVersion,
+            Guid.NewGuid().ToString("N"), "temporary-password", newPassword, confirmation, totpCode);
+
+        var state = await runtime.ChangePasswordAndLoginAsync("cashier.synthetic", changeCredential);
+
+        Assert.False(state.Authenticated);
+        Assert.Equal("PASSWORD_CHANGE_REQUIRED", state.AuthenticationState);
+        Assert.Equal("INVALID_PASSWORD_CHANGE_REQUEST", state.ErrorCode);
+        Assert.Equal(0, client.ChangePasswordCalls);
+        Assert.Equal(1, client.LoginCalls);
+    }
+
+    [Fact]
+    public async Task BridgeUsesSeparateNativeLoginAndPasswordChangePromptsBeforePublishingAuthority()
+    {
+        var restricted = PasswordChangeRequired(CashierId);
+        var client = new FakeHumanSessionClient(restricted)
+        {
+            ChangePasswordResult = PasswordChanged(),
+            LoginResults = new Queue<HumanSessionClientResult>([restricted, Success(CashierId, permissions: [AptCashierOperatePermission])])
+        };
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        var prompt = new FakeHumanCredentialPrompt();
+        var handler = new HumanSessionBridgeHandler(runtime, prompt);
+
+        using var response = await SendBridgeCommandAsync(
+            handler,
+            HumanSessionBridgeCommand.Login,
+            new LoginPayload("cashier.synthetic"));
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.True(response.RootElement.GetProperty("payload").GetProperty("authenticated").GetBoolean());
+        Assert.Equal(
+            new[] { HumanCredentialOperation.Login, HumanCredentialOperation.ChangePassword },
+            prompt.Operations);
+        Assert.Equal(2, client.LoginCalls);
+        Assert.Equal(1, client.ChangePasswordCalls);
+    }
+
+    [Fact]
+    public async Task AptCashierOperateCompositeCapabilityAuthorizesExistingOperationSpecificGates()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId, permissions: [AptCashierOperatePermission]));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+
+        var login = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+        var shift = await runtime.OpenOrResumeShiftAsync();
+        var custody = await runtime.OpenOrResumeCustodyAsync(100m);
+        var cash = await runtime.AuthorizeCashAsync();
+
+        Assert.True(login.Authenticated);
+        Assert.NotNull(shift.ActiveShift);
+        Assert.NotNull(custody.ActiveCashCustodySession);
+        Assert.True(cash.Authorized);
     }
 
     [Fact]
@@ -77,6 +220,100 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.Equal("OPEN_CUSTODY_LOGOUT_BLOCKED", refreshed.ErrorCode);
         Assert.Contains("Sign out is unavailable while you have open cash custody.", refreshed.SafeMessage, StringComparison.Ordinal);
         Assert.NotNull(store.Credential);
+    }
+
+    [Fact]
+    public async Task OwningCashierCanCloseCustodyThenShiftThroughOnlineValidatedRuntime()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+        await runtime.OpenOrResumeShiftAsync();
+        await runtime.OpenOrResumeCustodyAsync(100m);
+        var getCallsBeforeClose = client.GetCalls;
+
+        var closedCustody = await runtime.CloseOwnCustodyAsync(100m);
+        var closedShift = await runtime.CloseOwnShiftAsync();
+
+        Assert.True(closedCustody.Authenticated);
+        Assert.NotNull(closedCustody.ActiveShift);
+        Assert.Null(closedCustody.ActiveCashCustodySession);
+        Assert.True(closedShift.Authenticated);
+        Assert.Null(closedShift.ActiveShift);
+        Assert.Null(closedShift.ActiveCashCustodySession);
+        Assert.True(client.GetCalls >= getCallsBeforeClose + 2);
+    }
+
+    [Fact]
+    public async Task OtherCashiersCustodyCloseCannotChangePriorCashiersAuthentication()
+    {
+        var journal = CreateJournal();
+        var mariaClient = new FakeHumanSessionClient(Success(CashierId));
+        var mariaRuntime = CreateRuntime(mariaClient, new MemoryCredentialStore(), journal);
+        var mariaFirstLogin = await mariaRuntime.LoginAsync(
+            "MariaDC02",
+            Credential(mariaRuntime, credentialValue: "replacement-password"));
+        var mariaLogout = await mariaRuntime.LogoutAsync();
+
+        var juanId = Guid.Parse("55555555-5555-4555-8555-555555555555");
+        var juanClient = new FakeHumanSessionClient(Success(juanId));
+        var juanRuntime = CreateRuntime(juanClient, new MemoryCredentialStore(), journal);
+        await juanRuntime.LoginAsync("JuanDC01", Credential(juanRuntime));
+        await juanRuntime.OpenOrResumeShiftAsync();
+        await juanRuntime.OpenOrResumeCustodyAsync(100m);
+        var juanClose = await juanRuntime.CloseOwnCustodyAsync(100m);
+        var juanLogout = await juanRuntime.LogoutAsync();
+
+        var mariaSecondLogin = await mariaRuntime.LoginAsync(
+            "MariaDC02",
+            Credential(mariaRuntime, credentialValue: "replacement-password"));
+
+        Assert.True(mariaFirstLogin.Authenticated);
+        Assert.False(mariaLogout.Authenticated);
+        Assert.True(juanClose.Authenticated);
+        Assert.Null(juanClose.ActiveCashCustodySession);
+        Assert.False(juanLogout.Authenticated);
+        Assert.True(mariaSecondLogin.Authenticated);
+        Assert.Equal("AUTHENTICATED", mariaSecondLogin.AuthenticationState);
+        Assert.Equal("CROSS_CASHIER_SHIFT_BLOCKED", mariaSecondLogin.ErrorCode);
+        Assert.Null(mariaSecondLogin.ActiveCashCustodySession);
+        Assert.Equal(2, mariaClient.LoginCalls);
+        Assert.Equal(new[] { "replacement-password", "replacement-password" }, mariaClient.LoginPasswords);
+    }
+
+    [Fact]
+    public async Task CustodyCloseFailsClosedAfterCurrentPermissionRevocation()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+        await runtime.OpenOrResumeShiftAsync();
+        await runtime.OpenOrResumeCustodyAsync(100m);
+        client.GetResult = Success(CashierId, permissions: Without(HumanSessionRuntimeOptions.CustodyOperatePermission));
+
+        var denied = await runtime.CloseOwnCustodyAsync(100m);
+
+        Assert.Equal("CUSTODY_PERMISSION_DENIED", denied.ErrorCode);
+        Assert.NotNull(denied.ActiveCashCustodySession);
+        Assert.False(denied.CustodyOperationsAuthorized);
+        Assert.False(denied.CashOperationsAuthorized);
+    }
+
+    [Fact]
+    public async Task BridgeClosesOnlyTheAuthenticatedCashiersOwnCustodyAndShift()
+    {
+        var runtime = CreateRuntime(new FakeHumanSessionClient(Success(CashierId)), new MemoryCredentialStore(), out _);
+        var handler = new HumanSessionBridgeHandler(runtime, new FakeHumanCredentialPrompt());
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(100m));
+
+        using var custody = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnCustody, new CloseCustodyPayload(100m));
+        using var shift = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnShift, new { });
+
+        Assert.Equal(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeCashCustodySession").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
+        Assert.Equal(JsonValueKind.Null, shift.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
     }
 
     [Fact]
@@ -809,11 +1046,12 @@ public sealed class HumanSessionRuntimeTests : IDisposable
     {
         HttpRequestMessage? captured = null;
         string? body = null;
+        AptHumanAuthenticationResponse nextResponse = Success(CashierId).Response!;
         var handler = new DelegateHttpHandler(async request =>
         {
             captured = request;
             body = request.Content is null ? null : await request.Content.ReadAsStringAsync();
-            return JsonResponse(Success(CashierId).Response!);
+            return JsonResponse(nextResponse);
         });
         var client = new CentralPmsHumanSessionClient(new HttpClient(handler), "https://central-pms.invalid", DeviceId.ToString("D"));
 
@@ -838,6 +1076,24 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.Equal("/v1/apt/human-sessions/66666666-6666-4666-8666-666666666666/reauthenticate", captured.RequestUri!.AbsolutePath);
         Assert.Contains("\"password\":\"fresh-password\"", body, StringComparison.Ordinal);
 
+        nextResponse = PasswordChanged().Response!;
+        var passwordChange = await client.ChangePasswordAsync(
+            Guid.Parse("66666666-6666-4666-8666-666666666666"),
+            "restricted-password-change-token",
+            "temporary-password",
+            "replacement-password",
+            "123456",
+            Guid.NewGuid(),
+            default);
+        Assert.True(passwordChange.Ok);
+        Assert.Equal("/v1/apt/human-sessions/66666666-6666-4666-8666-666666666666/password/change", captured.RequestUri!.AbsolutePath);
+        Assert.Equal("ExitPass-HumanSession", captured.Headers.Authorization!.Scheme);
+        Assert.Equal("restricted-password-change-token", captured.Headers.Authorization.Parameter);
+        Assert.Contains("\"currentPassword\":\"temporary-password\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"newPassword\":\"replacement-password\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"totpCode\":\"123456\"", body, StringComparison.Ordinal);
+
+        nextResponse = Success(CashierId).Response!;
         await client.LogoutAsync(Guid.Parse("66666666-6666-4666-8666-666666666666"), "opaque-session-token", Guid.NewGuid(), default);
         Assert.Equal("/v1/apt/human-sessions/66666666-6666-4666-8666-666666666666/logout", captured.RequestUri!.AbsolutePath);
         Assert.Equal("ExitPass-HumanSession", captured.Headers.Authorization!.Scheme);
@@ -1014,6 +1270,25 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         return HumanSessionClientResult.Success(new AptHumanAuthenticationResponse("AUTHENTICATED", true, session, token, null, false, correlationId));
     }
 
+    private static HumanSessionClientResult PasswordChangeRequired(Guid cashierId)
+    {
+        var correlationId = Guid.NewGuid();
+        var session = new AptHumanSessionDto(
+            Guid.NewGuid(), cashierId, "cashier.synthetic", "Synthetic Cashier", "APT", "PASSWORD_CHANGE_REQUIRED",
+            false, true, false, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddMinutes(15), DateTimeOffset.UtcNow.AddHours(12),
+            [], [SiteId], [SiteGroupId], false, DeviceId, correlationId);
+        return HumanSessionClientResult.Success(new AptHumanAuthenticationResponse(
+            "PASSWORD_CHANGE_REQUIRED", true, session, "restricted-password-change-token", null, false, correlationId));
+    }
+
+    private static HumanSessionClientResult PasswordChanged()
+    {
+        var correlationId = Guid.NewGuid();
+        return HumanSessionClientResult.Success(new AptHumanAuthenticationResponse(
+            "PASSWORD_CHANGED", false, null, null, null, false, correlationId));
+    }
+
     private static HumanSessionClientResult Failure(string code, bool retryable = false) =>
         HumanSessionClientResult.Failure(code, "Online cashier authority is unavailable.", Guid.NewGuid(), retryable);
 
@@ -1061,16 +1336,36 @@ public sealed class HumanSessionRuntimeTests : IDisposable
     private sealed class FakeHumanSessionClient(HumanSessionClientResult initial) : ICentralPmsHumanSessionClient
     {
         public HumanSessionClientResult LoginResult { get; set; } = initial;
+        public Queue<HumanSessionClientResult>? LoginResults { get; set; }
         public HumanSessionClientResult GetResult { get; set; } = initial;
         public HumanSessionClientResult ContinueResult { get; set; } = initial;
+        public HumanSessionClientResult ChangePasswordResult { get; set; } = PasswordChanged();
         public int ContinueCalls { get; private set; }
         public int LoginCalls { get; private set; }
         public int GetCalls { get; private set; }
         public int ReauthenticateCalls { get; private set; }
-        public Task<HumanSessionClientResult> LoginAsync(string username, string password, Guid siteId, Guid correlationId, CancellationToken cancellationToken) { LoginCalls++; return Task.FromResult(LoginResult); }
+        public int ChangePasswordCalls { get; private set; }
+        public List<string> LoginPasswords { get; } = [];
+        public string? LastCurrentCredential { get; private set; }
+        public string? LastNewCredential { get; private set; }
+        public string? LastTotpCode { get; private set; }
+        public Task<HumanSessionClientResult> LoginAsync(string username, string password, Guid siteId, Guid correlationId, CancellationToken cancellationToken)
+        {
+            LoginCalls++;
+            LoginPasswords.Add(password);
+            return Task.FromResult(LoginResults is { Count: > 0 } ? LoginResults.Dequeue() : LoginResult);
+        }
         public Task<HumanSessionClientResult> GetAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken) { GetCalls++; return Task.FromResult(GetResult); }
         public Task<HumanSessionClientResult> ContinueAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken) { ContinueCalls++; return Task.FromResult(ContinueResult); }
         public Task<HumanSessionClientResult> ReauthenticateAsync(Guid sessionReference, string sessionToken, string password, Guid correlationId, CancellationToken cancellationToken) { ReauthenticateCalls++; return Task.FromResult(LoginResult); }
+        public Task<HumanSessionClientResult> ChangePasswordAsync(Guid sessionReference, string sessionToken, string currentPassword, string newPassword, string totpCode, Guid correlationId, CancellationToken cancellationToken)
+        {
+            ChangePasswordCalls++;
+            LastCurrentCredential = currentPassword;
+            LastNewCredential = newPassword;
+            LastTotpCode = totpCode;
+            return Task.FromResult(ChangePasswordResult);
+        }
         public Task<HumanSessionClientResult> LogoutAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken) => Task.FromResult(LoginResult);
     }
 
@@ -1080,17 +1375,22 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         public Guid? ReturnedAttemptReference { get; set; }
         public int Calls { get; private set; }
         public int CancelCalls { get; private set; }
+        public List<HumanCredentialOperation> Operations { get; } = [];
 
         public Task<HumanCredentialPromptResult> PromptAsync(
             HumanCredentialPromptRequest request,
             CancellationToken cancellationToken = default)
         {
             Calls++;
+            Operations.Add(request.Operation);
             return Task.FromResult(new HumanCredentialPromptResult(
                 ReturnedAttemptReference ?? request.AttemptReference,
                 Accepted,
                 Accepted ? "not-a-real-password" : null,
-                Accepted ? "NATIVE_EXPLICIT_SUBMIT" : "CANCELLED"));
+                Accepted ? "NATIVE_EXPLICIT_SUBMIT" : "CANCELLED",
+                request.Operation == HumanCredentialOperation.ChangePassword && Accepted ? "replacement-password" : null,
+                request.Operation == HumanCredentialOperation.ChangePassword && Accepted ? "replacement-password" : null,
+                request.Operation == HumanCredentialOperation.ChangePassword && Accepted ? "123456" : null));
         }
 
         public void CancelActive(string reason) => CancelCalls++;
