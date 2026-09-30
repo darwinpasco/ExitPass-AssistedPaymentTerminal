@@ -181,10 +181,16 @@ export type PayableBasisResponse = {
   entryTimestamp?: string | null;
   entryTime?: string | null;
   currentFeeCalculationTime?: string | null;
+  parkingDurationDisplay?: string | null;
   parkingStatus: string;
   paymentStatus: string;
   authoritativeAmountMinorUnits: number;
   netPayableMinorUnits?: number;
+  vatableSalesMinorUnits?: number | null;
+  vatAmountMinorUnits?: number | null;
+  vatExemptSalesMinorUnits?: number | null;
+  zeroRatedSalesMinorUnits?: number | null;
+  customerInformationSubmitted?: boolean | null;
   currency: string;
   tariffCalculatedAt?: string | null;
   tariffValidUntil: string;
@@ -363,7 +369,6 @@ export type StatutoryDiscountWorkflowState = {
   lastReadbackAt?: string | null;
   restoredAfterRestart?: boolean;
   amountAcknowledged?: boolean;
-  ordinanceAvailability?: StatutoryOrdinanceAvailabilitySnapshot | null;
   evidenceRequired?: boolean;
   evidenceRecorded?: boolean;
   evidenceRecovery?: StatutoryEvidenceRecoveryState | null;

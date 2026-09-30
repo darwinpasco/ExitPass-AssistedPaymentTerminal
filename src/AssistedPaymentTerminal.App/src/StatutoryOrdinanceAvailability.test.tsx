@@ -1,125 +1,49 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
-import type {
-  CentralPmsClient,
-  PayableBasisResponse,
-  StatutoryOrdinanceAvailabilityClassification,
-  StatutoryOrdinanceAvailabilityResponse,
-  StatutoryOrdinanceAvailabilityViewState,
-} from "./api/centralPmsTypes";
+import type { CentralPmsClient, PayableBasisResponse, StatutoryEntitlementType } from "./api/centralPmsTypes";
 import { buildTerminalContext } from "./terminalContext";
 import { mode1Config } from "./test/testConfig";
 
-const blockedClassifications: StatutoryOrdinanceAvailabilityClassification[] = [
-  "NOT_AVAILABLE",
-  "NO_CONFIGURED_POLICY",
-  "NOT_YET_EFFECTIVE",
-  "EXPIRED",
-  "INACTIVE",
-  "AMBIGUOUS_SCOPE",
-  "SESSION_NOT_FOUND",
-  "AMBIGUOUS_SESSION",
-  "SOURCE_UNAVAILABLE",
-  "MALFORMED_AUTHORITATIVE_STATE",
-  "ACCESS_DENIED",
-  "UNEXPECTED_FAILURE",
-];
+describe("configured statutory entitlements", () => {
+  it("offers only entitlements configured for the Site", () => {
+    renderPanel(["SENIOR_CITIZEN"]);
 
-describe("Statutory ordinance availability gate", () => {
-  it.each(blockedClassifications)("keeps %s fail closed without converting it to coverage", (classification) => {
-    renderPanel(readyState(classification));
-
-    expect(screen.getByTestId("senior-citizen-ordinance-availability")).toHaveTextContent(friendly(classification));
-    expect(screen.getByTestId("pwd-ordinance-availability")).toHaveTextContent(friendly(classification));
-    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("ordinary-payment-preserved")).toHaveTextContent("Ordinary payment remains available");
+    expect(screen.getByTestId("covered-entitlement-selector")).toHaveDisplayValue("Senior citizen");
+    expect(screen.getByRole("button", { name: "Start statutory request" })).toBeEnabled();
+    expect(screen.queryByRole("option", { name: "Person with disability" })).not.toBeInTheDocument();
   });
 
-  it("does not render evidence or entitlement controls before authoritative availability is known", () => {
-    renderPanel({ status: "loading", parkingSessionId: basis.parkingSessionId, siteId: basis.siteId, restoredRefresh: false });
+  it("offers no statutory action when the Site has no configured entitlement", () => {
+    renderPanel([]);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Checking authoritative");
     expect(screen.queryByTestId("covered-entitlement-selector")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Statutory ID")).not.toBeInTheDocument();
-  });
-
-  it("offers keyboard-focusable retry only for retryable authoritative failures", () => {
-    renderPanel(readyState("SOURCE_UNAVAILABLE", true));
-
-    expect(screen.getByRole("button", { name: "Retry ordinance availability" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
   });
 
-  it("renders only safe fields from the browser contract", () => {
-    renderPanel(readyState("MALFORMED_AUTHORITATIVE_STATE"));
+  it("does not expose ordinance-source or policy diagnostics", () => {
+    renderPanel(["SENIOR_CITIZEN", "PWD"]);
 
-    expect(document.body).not.toHaveTextContent("stack trace");
-    expect(document.body).not.toHaveTextContent("SELECT ");
-    expect(document.body).not.toHaveTextContent("Authorization");
-    expect(document.body).not.toHaveTextContent("X-ExitPass-Permissions");
-    expect(document.body).not.toHaveTextContent("internalPolicyId");
+    expect(document.body).not.toHaveTextContent("Site ordinance availability");
+    expect(document.body).not.toHaveTextContent("Source Unavailable");
+    expect(screen.queryByRole("button", { name: "Retry ordinance availability" })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("compatibility policy");
+    expect(document.body).not.toHaveTextContent("verification unknown");
   });
 });
 
-function renderPanel(ordinanceAvailability: StatutoryOrdinanceAvailabilityViewState) {
+function renderPanel(availableEntitlements: readonly StatutoryEntitlementType[]) {
   render(
     <StatutoryDiscountPanel
       basis={basis}
       client={client}
       context={buildTerminalContext(mode1Config())}
       state={{ status: "none" }}
-      ordinanceAvailability={ordinanceAvailability}
-      onRetryAvailability={vi.fn()}
+      availableEntitlements={availableEntitlements}
       onStateChange={vi.fn()}
       onAppliedBasisReady={vi.fn(async () => undefined)}
     />,
   );
-}
-
-function readyState(classification: StatutoryOrdinanceAvailabilityClassification, retryable = false): StatutoryOrdinanceAvailabilityViewState {
-  return {
-    status: "ready",
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    restoredRefresh: false,
-    seniorCitizen: response("SENIOR_CITIZEN", classification, retryable),
-    pwd: response("PWD", classification, retryable),
-  };
-}
-
-function response(
-  entitlementType: "SENIOR_CITIZEN" | "PWD",
-  classification: StatutoryOrdinanceAvailabilityClassification,
-  retryable: boolean,
-): StatutoryOrdinanceAvailabilityResponse {
-  const available = classification === "AVAILABLE";
-  return {
-    operation: "RESOLVE",
-    revalidationOutcome: null,
-    classification,
-    entitlementType,
-    ordinanceCoverageAvailable: available,
-    statutoryRequestAllowed: available,
-    preCashRevalidationPassed: false,
-    readyForStatutoryCashFlow: available,
-    ordinaryPaymentPreserved: true,
-    parkingSessionId: basis.parkingSessionId,
-    siteId: basis.siteId,
-    siteGroupId: basis.siteGroupId,
-    resolvedScopeType: "SITE",
-    coverageClassification: classification,
-    policyStatusClassification: classification,
-    supportReference: "safe-support-reference",
-    correlationId: "safe-correlation-reference",
-    evaluatedAt: "2026-08-03T00:00:00Z",
-    retryable,
-    safeMessage: retryable ? "Coverage could not be confirmed. Retry is available." : "Coverage is not available for this entitlement.",
-  };
-}
-
-function friendly(value: string): string {
-  return value.replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
 
 const basis: PayableBasisResponse = {

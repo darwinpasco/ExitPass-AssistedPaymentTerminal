@@ -14,6 +14,8 @@ public static class HumanSessionBridgeCommand
     public const string Logout = "humanSession.logout";
     public const string OpenOrResumeShift = "humanSession.openOrResumeShift";
     public const string OpenOrResumeCustody = "humanSession.openOrResumeCustody";
+    public const string CloseOwnCustody = "humanSession.closeOwnCustody";
+    public const string CloseOwnShift = "humanSession.closeOwnShift";
     public const string AuthorizeCash = "humanSession.authorizeCash";
 }
 
@@ -84,6 +86,8 @@ public sealed class HumanSessionBridgeHandler
                 HumanSessionBridgeCommand.Logout => await _runtime.LogoutAsync(cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.OpenOrResumeShift => await _runtime.OpenOrResumeShiftAsync(cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.OpenOrResumeCustody => await OpenCustodyAsync(request, cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.CloseOwnCustody => await CloseCustodyAsync(request, cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.CloseOwnShift => await _runtime.CloseOwnShiftAsync(cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.AuthorizeCash => await AuthorizeCashAsync(cancellationToken).ConfigureAwait(false),
                 _ => null
             };
@@ -131,11 +135,22 @@ public sealed class HumanSessionBridgeHandler
             throw new HumanCredentialPromptException("LOGIN_NOT_REQUIRED", "Current cashier authority is already established.");
         }
 
-        return await RunExplicitCredentialOperationAsync(
+        var state = await RunExplicitCredentialOperationAsync(
             HumanCredentialOperation.Login,
             payload.Username.Trim(),
             request.CorrelationId,
             credential => _runtime.LoginAsync(payload.Username, credential, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(state.AuthenticationState, "PASSWORD_CHANGE_REQUIRED", StringComparison.Ordinal))
+        {
+            return state;
+        }
+
+        return await RunExplicitCredentialOperationAsync(
+            HumanCredentialOperation.ChangePassword,
+            payload.Username.Trim(),
+            request.CorrelationId,
+            credential => _runtime.ChangePasswordAndLoginAsync(payload.Username, credential, cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -273,6 +288,14 @@ public sealed class HumanSessionBridgeHandler
         return await _runtime.OpenOrResumeCustodyAsync(payload.OpeningCashAmount, cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task<HumanSessionSafeState> CloseCustodyAsync(HumanSessionBridgeRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(request.Payload, "closingCashAmount");
+        var payload = request.Payload.Deserialize<CloseCustodyPayload>(JsonOptions)
+            ?? throw new JsonException();
+        return await _runtime.CloseOwnCustodyAsync(payload.ClosingCashAmount, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<HumanSessionSafeState> AuthorizeCashAsync(CancellationToken cancellationToken)
     {
         var authorization = await _runtime.AuthorizeCashAsync(cancellationToken).ConfigureAwait(false);
@@ -292,6 +315,7 @@ public sealed class HumanSessionBridgeHandler
 public sealed record HumanSessionBridgeRequest(string Source, string Command, string CorrelationId, JsonElement Payload);
 public sealed record LoginPayload(string Username);
 public sealed record OpenCustodyPayload(decimal OpeningCashAmount);
+public sealed record CloseCustodyPayload(decimal ClosingCashAmount);
 
 public sealed class HumanCredentialPromptException : Exception
 {

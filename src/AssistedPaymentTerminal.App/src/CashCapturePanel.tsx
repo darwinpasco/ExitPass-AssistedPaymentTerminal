@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import type { PayableBasisResponse } from "./api/centralPmsTypes";
@@ -69,6 +69,12 @@ type ReceiptPrintHistoryStatus =
   | { kind: "ready"; history: SalesInvoicePrintHistory; correlationId: string; detail?: SalesInvoicePrintHistoryDetail }
   | { kind: "error"; message: string; correlationId: string };
 
+type CompletionStatus =
+  | { kind: "idle" }
+  | { kind: "loading"; message: string }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
+
 const defaultBridge = createWebViewLocalJournalBridge();
 const denominations = [
   { code: "PHP-1000", value: 1000 },
@@ -93,7 +99,6 @@ export function CashCapturePanel({
   activeCashCustodySessionId,
   bridge = defaultBridge,
   developmentFixtureLocalCashTenderId,
-  autoAdvanceAfterCashReceived = true,
 }: {
   config: AptConfig;
   context: TerminalContext;
@@ -106,7 +111,6 @@ export function CashCapturePanel({
   activeCashCustodySessionId?: string | null;
   bridge?: LocalJournalBridge;
   developmentFixtureLocalCashTenderId?: string;
-  autoAdvanceAfterCashReceived?: boolean;
 }) {
   const amountDue = session.authoritativeAmountMinorUnits / 100;
   const [amountTenderedText, setAmountTenderedText] = useState(amountDue.toFixed(2));
@@ -119,11 +123,9 @@ export function CashCapturePanel({
   const [receiptPreviewStatus, setReceiptPreviewStatus] = useState<ReceiptPreviewStatus>({ kind: "idle" });
   const [receiptPrintStatus, setReceiptPrintStatus] = useState<ReceiptPrintStatus>({ kind: "idle" });
   const [receiptPrintHistoryStatus, setReceiptPrintHistoryStatus] = useState<ReceiptPrintHistoryStatus>({ kind: "idle" });
+  const [completionStatus, setCompletionStatus] = useState<CompletionStatus>({ kind: "idle" });
   const [receiptPrintHistoryOpen, setReceiptPrintHistoryOpen] = useState(false);
   const [receiptPrintHistoryFilter, setReceiptPrintHistoryFilter] = useState<"All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation">("All");
-  const autoSubmissionKeys = useRef(new Set<string>());
-  const autoFiscalKeys = useRef(new Set<string>());
-  const autoReceiptKeys = useRef(new Set<string>());
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -138,15 +140,12 @@ export function CashCapturePanel({
     setReceiptPreviewStatus({ kind: "idle" });
     setReceiptPrintStatus({ kind: "idle" });
     setReceiptPrintHistoryStatus({ kind: "idle" });
+    setCompletionStatus({ kind: "idle" });
     setReceiptPrintHistoryOpen(false);
     setReceiptPrintHistoryFilter("All");
   }, [amountDue, session.parkingSessionId]);
 
   useEffect(() => {
-    if (!config.nonLiveCashCaptureEnabled || tariffExpired) {
-      return;
-    }
-
     let cancelled = false;
     const correlationId = createCorrelationId();
     setStatus({ kind: "checking", message: "Checking local journal readiness..." });
@@ -162,8 +161,8 @@ export function CashCapturePanel({
       });
       if (cancelled) return;
 
-      if (!health.ok || !health.payload.enabled || !health.payload.healthy) {
-        setStatus({ kind: "error", message: health.ok ? "Local journal bridge is disabled." : health.error.message });
+      if (!health.ok || !health.payload.healthy) {
+        setStatus({ kind: "error", message: health.ok ? "Local journal readiness could not be established." : health.error.message });
         return;
       }
 
@@ -182,7 +181,7 @@ export function CashCapturePanel({
     return () => {
       cancelled = true;
     };
-  }, [bridge, cashAcceptanceReady, config.nonLiveCashCaptureEnabled, context, session.parkingSessionId, tariffExpired]);
+  }, [bridge, cashAcceptanceReady, context, session.parkingSessionId, tariffExpired]);
 
   const existingTender =
     status.kind === "ready" ? status.readback.tender : status.kind === "success" ? status.readback.tender ?? status.tender : null;
@@ -202,11 +201,10 @@ export function CashCapturePanel({
     fiscalStatus,
     receiptStatus,
     receiptPreviewEligible,
-    exitAuthorizationContractAvailable: false,
   });
 
   useEffect(() => {
-    if (!config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
+    if (completionStatus.kind !== "idle" || !config.centralPmsCashSubmissionEnabled || !existingTender || existingTender.currentLocalState !== "CashReceived") {
       return;
     }
 
@@ -235,9 +233,13 @@ export function CashCapturePanel({
     return () => {
       cancelled = true;
     };
-  }, [bridge, centralPmsConfig.message, centralPmsConfig.valid, config.centralPmsCashSubmissionEnabled, existingTender?.id, existingTender?.currentLocalState]);
+  }, [bridge, centralPmsConfig.message, centralPmsConfig.valid, completionStatus.kind, config.centralPmsCashSubmissionEnabled, existingTender?.id, existingTender?.currentLocalState]);
 
   useEffect(() => {
+    if (completionStatus.kind !== "idle") {
+      return;
+    }
+
     if (!existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed) {
       setFiscalStatus({ kind: "idle" });
       return;
@@ -276,6 +278,7 @@ export function CashCapturePanel({
   }, [
     bridge,
     canonicalPaymentConfirmed,
+    completionStatus.kind,
     config.centralPmsFiscalIssuanceEnabled,
     existingTender?.id,
     existingTender?.currentLocalState,
@@ -284,6 +287,10 @@ export function CashCapturePanel({
   ]);
 
   useEffect(() => {
+    if (completionStatus.kind !== "idle") {
+      return;
+    }
+
     if (!existingTender || existingTender.currentLocalState !== "CashReceived" || !fiscalRecorded) {
       setReceiptStatus({ kind: "idle" });
       setReceiptPreviewStatus({ kind: "idle" });
@@ -322,6 +329,7 @@ export function CashCapturePanel({
     };
   }, [
     bridge,
+    completionStatus.kind,
     config.centralPmsReceiptRetrievalEnabled,
     existingTender?.id,
     existingTender?.currentLocalState,
@@ -392,86 +400,6 @@ export function CashCapturePanel({
     };
   }, [bridge, existingTender?.id, receiptPrintEligible]);
 
-  useEffect(() => {
-    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !centralPmsConfig.valid) {
-      return;
-    }
-
-    if (centralPmsStatus.kind !== "ready") {
-      return;
-    }
-
-    const command = centralPmsStatus.status.command;
-    const eligibleStatuses = new Set([undefined, "Pending", "ReadbackRequired", "RetryPending"]);
-    if (!eligibleStatuses.has(command?.status)) {
-      return;
-    }
-
-    const key = `${existingTender.id}:payment:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
-    if (autoSubmissionKeys.current.has(key)) {
-      return;
-    }
-
-    autoSubmissionKeys.current.add(key);
-    void submitOrReadbackCentralPms();
-  }, [autoAdvanceAfterCashReceived, centralPmsConfig.valid, centralPmsStatus, existingTender?.id, existingTender?.currentLocalState]);
-
-  useEffect(() => {
-    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed || !fiscalConfig.valid) {
-      return;
-    }
-
-    if (fiscalStatus.kind !== "ready") {
-      return;
-    }
-
-    const command = fiscalStatus.status.command;
-    const eligibleStatuses = new Set([undefined, "Pending", "ReadbackRequired", "RetryPending", "Unknown"]);
-    if (!eligibleStatuses.has(command?.status)) {
-      return;
-    }
-
-    const key = `${existingTender.id}:fiscal:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
-    if (autoFiscalKeys.current.has(key)) {
-      return;
-    }
-
-    autoFiscalKeys.current.add(key);
-    void submitOrReadbackFiscal();
-  }, [autoAdvanceAfterCashReceived, canonicalPaymentConfirmed, existingTender?.id, existingTender?.currentLocalState, fiscalConfig.valid, fiscalStatus]);
-
-  useEffect(() => {
-    if (!autoAdvanceAfterCashReceived || !existingTender || existingTender.currentLocalState !== "CashReceived" || !canonicalPaymentConfirmed || !fiscalRecorded || !receiptConfig.valid) {
-      return;
-    }
-
-    if (receiptStatus.kind !== "ready") {
-      return;
-    }
-
-    const command = receiptStatus.status.command;
-    const eligibleStatuses = new Set([undefined, "Pending", "NotReady", "RetryPending", "Unavailable"]);
-    if (!eligibleStatuses.has(command?.status) || command?.lastRetryable === false) {
-      return;
-    }
-
-    const key = `${existingTender.id}:receipt:${command?.status ?? "none"}:${command?.attemptCount ?? 0}`;
-    if (autoReceiptKeys.current.has(key)) {
-      return;
-    }
-
-    autoReceiptKeys.current.add(key);
-    void retrieveOrCheckReceipt();
-  }, [
-    autoAdvanceAfterCashReceived,
-    canonicalPaymentConfirmed,
-    existingTender?.id,
-    existingTender?.currentLocalState,
-    fiscalRecorded,
-    receiptConfig.valid,
-    receiptStatus,
-  ]);
-
   const denominationPayload = useMemo(
     () =>
       denominations.map((denomination) => ({
@@ -481,20 +409,6 @@ export function CashCapturePanel({
       })).filter((denomination) => denomination.quantity > 0),
     [denominationCounts],
   );
-
-  if (!config.nonLiveCashCaptureEnabled) {
-    return null;
-  }
-
-  if (tariffExpired) {
-    return (
-      <section className="cash-capture-panel unavailable" aria-label="Non-live cash capture unavailable">
-        <p className="eyebrow">Non-live development simulation</p>
-        <h2>Cash capture unavailable</h2>
-        <p>Cash custody recording is blocked until the payable basis is current and non-expired.</p>
-      </section>
-    );
-  }
 
   async function recordCashReceived() {
     if (!Number.isFinite(amountTendered) || amountTendered < amountDue) {
@@ -642,6 +556,108 @@ export function CashCapturePanel({
     }
   }
 
+  async function completeTransaction() {
+    if (!existingTender || existingTender.currentLocalState !== "CashReceived") {
+      setCompletionStatus({ kind: "error", message: "Recorded cash could not be found. Open transaction support details." });
+      return;
+    }
+
+    if (!centralPmsConfig.valid || !fiscalConfig.valid || !receiptConfig.valid) {
+      setCompletionStatus({ kind: "error", message: "Transaction completion is unavailable. Contact support." });
+      return;
+    }
+
+    setCompletionStatus({ kind: "loading", message: "Confirming payment..." });
+    const paymentCorrelationId = createCorrelationId();
+    const paymentResult = await bridge.submitOrReadbackCentralPmsCashSubmission(paymentCorrelationId, existingTender.id);
+    if (!paymentResult.ok) {
+      setCentralPmsStatus({ kind: "error", message: paymentResult.error.message, correlationId: paymentCorrelationId });
+      setCompletionStatus({ kind: "error", message: "Central PMS could not confirm the payment. Try again." });
+      return;
+    }
+
+    setCentralPmsStatus({ kind: "ready", status: paymentResult.payload, correlationId: paymentCorrelationId });
+    if (paymentResult.payload.command?.status !== "Confirmed") {
+      setCompletionStatus({ kind: "error", message: "Payment confirmation is pending. Try again." });
+      return;
+    }
+
+    setCompletionStatus({ kind: "loading", message: "Issuing Sales Invoice and exit authorization..." });
+    const fiscalCorrelationId = createCorrelationId();
+    const fiscalResult = await bridge.submitOrReadbackCentralPmsCashFiscal(fiscalCorrelationId, existingTender.id);
+    if (!fiscalResult.ok) {
+      setFiscalStatus({ kind: "error", message: fiscalResult.error.message, correlationId: fiscalCorrelationId });
+      setCompletionStatus({ kind: "error", message: "Sales Invoice issuance could not be confirmed. Try again." });
+      return;
+    }
+
+    setFiscalStatus({ kind: "ready", status: fiscalResult.payload, correlationId: fiscalCorrelationId });
+    const completedFiscal = fiscalResult.payload.command;
+    if (completedFiscal?.status !== "Recorded") {
+      setCompletionStatus({ kind: "error", message: "Sales Invoice issuance is pending. Try again." });
+      return;
+    }
+
+    if (!completedFiscal.exitAuthorizationIssued) {
+      setCompletionStatus({ kind: "error", message: "Exit authorization has not been issued. Try again or contact support." });
+      return;
+    }
+
+    setCompletionStatus({ kind: "loading", message: "Retrieving Sales Invoice..." });
+    const receiptCorrelationId = createCorrelationId();
+    const receiptResult = await bridge.retrieveOrCheckCentralPmsCashReceipt(receiptCorrelationId, existingTender.id);
+    if (!receiptResult.ok) {
+      setReceiptStatus({ kind: "error", message: receiptResult.error.message, correlationId: receiptCorrelationId });
+      setCompletionStatus({ kind: "error", message: "Sales Invoice is not available yet. Try again." });
+      return;
+    }
+
+    setReceiptStatus({ kind: "ready", status: receiptResult.payload, correlationId: receiptCorrelationId });
+    const completedReceipt = receiptResult.payload.command;
+    if (completedReceipt?.status !== "Available" && completedReceipt?.status !== "Voided") {
+      setCompletionStatus({ kind: "error", message: "Sales Invoice is not available yet. Try again." });
+      return;
+    }
+
+    if (config.receiptPreviewEnabled) {
+      const previewCorrelationId = createCorrelationId();
+      const previewResult = await bridge.getCentralPmsCashReceiptPreview(previewCorrelationId, existingTender.id);
+      if (previewResult.ok) {
+        setReceiptPreviewStatus({ kind: "ready", preview: previewResult.payload, correlationId: previewCorrelationId });
+      } else {
+        setReceiptPreviewStatus({
+          kind: "blocked",
+          message: previewResult.error.message,
+          code: previewResult.error.code,
+          detail: previewResult.error.detail,
+          correlationId: previewCorrelationId,
+        });
+        setCompletionStatus({ kind: "error", message: "Sales Invoice was issued but its preview could not be opened." });
+        return;
+      }
+    }
+
+    if (config.receiptPrintingEnabled) {
+      const printCorrelationId = createCorrelationId();
+      const printResult = await bridge.submitCentralPmsCashReceiptPrint(printCorrelationId, existingTender.id);
+      if (!printResult.ok) {
+        setReceiptPrintStatus({ kind: "error", message: printResult.error.message, correlationId: printCorrelationId });
+        setCompletionStatus({ kind: "error", message: "Sales Invoice was issued but could not be printed." });
+        return;
+      }
+
+      const printStatusResult = await bridge.getCentralPmsCashReceiptPrintStatus(createCorrelationId(), existingTender.id);
+      if (printStatusResult.ok) {
+        setReceiptPrintStatus({ kind: "ready", status: printStatusResult.payload, correlationId: printCorrelationId, lastSubmit: printResult.payload });
+      }
+    }
+
+    setCompletionStatus({
+      kind: "success",
+      message: config.receiptPrintingEnabled ? "Exit authorization issued. Sales Invoice sent to the printer." : "Exit authorization issued. Sales Invoice is ready to print.",
+    });
+  }
+
   async function viewReceiptPreview() {
     if (!existingTender) {
       setReceiptPreviewStatus({
@@ -765,32 +781,6 @@ export function CashCapturePanel({
     }
   }
 
-  async function attemptDuplicateTender() {
-    if (status.kind !== "success") {
-      return;
-    }
-
-    const cashSessionId = status.readback.tender?.cashCustodySessionId;
-    if (!cashSessionId) {
-      return;
-    }
-
-    const correlationId = createCorrelationId();
-    const duplicate = await bridge.startTender(correlationId, {
-      cashCustodySessionId: cashSessionId,
-      parkingSessionId: session.parkingSessionId,
-      tariffSnapshotId: session.tariffSnapshotId,
-      currency: session.currency,
-      amountDue,
-      amountTendered: amountDue,
-      localIdempotencyIdentity: `local-cash-duplicate:${session.parkingSessionId}`,
-    });
-
-    if (!duplicate.ok) {
-      setConflict(duplicate.error, correlationId);
-    }
-  }
-
   function setConflict(error: BridgeError, correlationId: string) {
     setStatus({
       kind: "conflict",
@@ -802,23 +792,8 @@ export function CashCapturePanel({
   }
 
   return (
-    <section className="cash-capture-panel" aria-label="Non-live cash custody capture">
-      <div className="section-heading">
-        <p className="eyebrow">Non-live development simulation</p>
-        <h2>Local cash custody capture</h2>
-      </div>
-
-      <div className="authority-warning" role="status">
-        {existingTender?.currentLocalState === "CashReceived" || status.kind === "success" ? (
-          <>
-            <strong>State at local cash capture:</strong> Cash received locally. At this checkpoint, canonical payment had not yet been submitted and fiscal issuance had not yet started. Exit authorization was unavailable.
-          </>
-        ) : (
-          <>
-            <strong>Cash has not yet been recorded at this terminal.</strong> Complete denomination entry and attest physical receipt before recording CASH_RECEIVED.
-          </>
-        )}
-      </div>
+    <section className="cash-capture-panel" aria-label="Cash custody capture">
+      {tariffExpired && !existingTender && <p className="cash-error" role="status">Parking fee has expired. The current amount will be refreshed before cash is recorded.</p>}
 
       {status.kind === "checking" && <p className="support-line">{status.message}</p>}
       {status.kind === "error" && <p className="cash-error" role="alert">{status.message}</p>}
@@ -828,25 +803,6 @@ export function CashCapturePanel({
           <p>{status.message}</p>
           <p>Existing local state: {status.existingState ?? "Unavailable"}</p>
           <p>The terminal retained the existing custody record and internal diagnostic references.</p>
-        </div>
-      )}
-
-      {existingTender && status.kind !== "success" && (
-        <div className="cash-readback">
-          <h3>Existing local custody record</h3>
-          <p>Local state: {existingTender.currentLocalState}</p>
-          {existingTender.statutoryDiscountDecisionCommandId && (
-            <dl className="central-pms-details" data-testid="statutory-tender-evidence">
-              <div><dt>Statutory decision</dt><dd>Recorded</dd></div>
-              <div><dt>Statutory application</dt><dd>{existingTender.statutoryDiscountPayableBasisApplicationCommandId ? "Recorded" : "Unavailable"}</dd></div>
-              <div><dt>Applied tariff</dt><dd>Authoritative version retained</dd></div>
-              <div><dt>Final statutory amount</dt><dd>{formatMoney(existingTender.statutoryFinalAmountMinorUnits, existingTender.statutoryCurrency ?? existingTender.currency)}</dd></div>
-              <div><dt>Revalidated at</dt><dd>{existingTender.statutoryImmediateRevalidatedAt ? formatDateTime(existingTender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
-            </dl>
-          )}
-          <button className="secondary-action" type="button" onClick={attemptDuplicateTender}>
-            Attempt duplicate cash tender
-          </button>
         </div>
       )}
 
@@ -911,52 +867,63 @@ export function CashCapturePanel({
 
       {status.kind === "success" && (
         <div className="cash-success" role="status">
-          <h3>Cash received locally</h3>
-          <p>Local state: {status.tender.currentLocalState}</p>
-          {status.tender.statutoryDiscountDecisionCommandId && (
-            <dl className="central-pms-details" data-testid="statutory-tender-evidence">
-              <div><dt>Statutory decision</dt><dd>Recorded</dd></div>
-              <div><dt>Statutory application</dt><dd>{status.tender.statutoryDiscountPayableBasisApplicationCommandId ? "Recorded" : "Unavailable"}</dd></div>
-              <div><dt>Applied tariff</dt><dd>Authoritative version retained</dd></div>
-              <div><dt>Final statutory amount</dt><dd>{formatMoney(status.tender.statutoryFinalAmountMinorUnits, status.tender.statutoryCurrency ?? status.tender.currency)}</dd></div>
-              <div><dt>Revalidated at</dt><dd>{status.tender.statutoryImmediateRevalidatedAt ? formatDateTime(status.tender.statutoryImmediateRevalidatedAt) : "Unavailable"}</dd></div>
-            </dl>
-          )}
-          <p>Event history entries: {status.readback.events.length}</p>
+          <h3>Payment recorded</h3>
+          <p>Cash was recorded at this terminal.</p>
         </div>
       )}
 
       {existingTender?.currentLocalState === "CashReceived" && (
-        <CashierTransactionStatePanel state={transactionState} />
+        <section className="transaction-completion" aria-label="Complete Transaction">
+          <div className="section-heading">
+            <p className="eyebrow">4. Complete Transaction</p>
+            <h2>Complete transaction</h2>
+          </div>
+          <p><strong>Payment recorded</strong></p>
+          {transactionState.fiscalDocumentNumber && <p>Sales Invoice: {transactionState.fiscalDocumentNumber}</p>}
+          {completionStatus.kind === "idle" && (
+            <button type="button" onClick={() => void completeTransaction()}>
+              Get Exit Authorization &amp; Print Sales Invoice
+            </button>
+          )}
+          {completionStatus.kind === "loading" && <p role="status">{completionStatus.message}</p>}
+          {completionStatus.kind === "error" && (
+            <div role="alert">
+              <p>{completionStatus.message}</p>
+              <button type="button" onClick={() => void completeTransaction()}>Try again</button>
+            </div>
+          )}
+          {completionStatus.kind === "success" && <p role="status">{completionStatus.message}</p>}
+        </section>
       )}
 
-      {config.centralPmsCashSubmissionEnabled && existingTender?.currentLocalState === "CashReceived" && (
-        <CentralPmsCanonicalPaymentPanel
-          centralPmsStatus={centralPmsStatus}
-          onSubmitOrReadback={() => void submitOrReadbackCentralPms()}
-        />
-      )}
-
-      {existingTender?.currentLocalState === "CashReceived" && canonicalPaymentConfirmed && (
-        <CentralPmsFiscalIssuancePanel
-          enabled={config.centralPmsFiscalIssuanceEnabled}
-          fiscalStatus={fiscalStatus}
-          onSubmitOrReadback={() => void submitOrReadbackFiscal()}
-        />
-      )}
-
-      {existingTender?.currentLocalState === "CashReceived" && canonicalPaymentConfirmed && fiscalRecorded && (
-        <CentralPmsReceiptAvailabilityPanel
-          enabled={config.centralPmsReceiptRetrievalEnabled}
-          previewEnabled={config.receiptPreviewEnabled}
-          receiptStatus={receiptStatus}
-          onRetrieveOrCheck={() => void retrieveOrCheckReceipt()}
-          onViewPreview={() => void viewReceiptPreview()}
-        />
+      {existingTender?.currentLocalState === "CashReceived" && (
+        <details className="support-details">
+          <summary>Transaction support details</summary>
+          <CashierTransactionStatePanel state={transactionState} />
+          {config.centralPmsCashSubmissionEnabled && (
+            <CentralPmsCanonicalPaymentPanel centralPmsStatus={centralPmsStatus} onSubmitOrReadback={() => void submitOrReadbackCentralPms()} />
+          )}
+          {canonicalPaymentConfirmed && (
+            <CentralPmsFiscalIssuancePanel enabled={config.centralPmsFiscalIssuanceEnabled} fiscalStatus={fiscalStatus} onSubmitOrReadback={() => void submitOrReadbackFiscal()} />
+          )}
+          {canonicalPaymentConfirmed && fiscalRecorded && (
+            <CentralPmsReceiptAvailabilityPanel
+              enabled={config.centralPmsReceiptRetrievalEnabled}
+              previewEnabled={config.receiptPreviewEnabled}
+              receiptStatus={receiptStatus}
+              onRetrieveOrCheck={() => void retrieveOrCheckReceipt()}
+              onViewPreview={() => void viewReceiptPreview()}
+            />
+          )}
+          <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
+            Reload transaction status
+          </button>
+        </details>
       )}
 
       <ReceiptPreviewSurface
         status={receiptPreviewStatus}
+        exitAuthorizationIssued={fiscalCommand?.exitAuthorizationIssued === true}
         configuredPaperWidthMm={config.receiptPaperWidthMm}
         paperWidthWarning={config.receiptPaperWidthWarning}
         onClose={() => setReceiptPreviewStatus({ kind: "idle" })}
@@ -971,34 +938,26 @@ export function CashCapturePanel({
         onPrint={() => void printReceipt()}
       />
 
-      <SalesInvoicePrintHistoryPanel
-        receiptAvailable={receiptPreviewEligible}
-        status={receiptPrintHistoryStatus}
-        open={receiptPrintHistoryOpen}
-        filter={receiptPrintHistoryFilter}
-        onOpen={() => setReceiptPrintHistoryOpen(true)}
-        onClose={() => setReceiptPrintHistoryOpen(false)}
-        onFilter={setReceiptPrintHistoryFilter}
-        onDetail={(printJobId) => void openPrintHistoryDetail(printJobId)}
-      />
-
-      <button className="secondary-action" type="button" onClick={() => void reloadLocalTender()}>
-        Reload local tender
-      </button>
+      {receiptPreviewEligible && (
+        <details className="support-details">
+          <summary>Sales Invoice print history</summary>
+          <SalesInvoicePrintHistoryPanel
+            receiptAvailable={receiptPreviewEligible}
+            status={receiptPrintHistoryStatus}
+            open={receiptPrintHistoryOpen}
+            filter={receiptPrintHistoryFilter}
+            onOpen={() => setReceiptPrintHistoryOpen(true)}
+            onClose={() => setReceiptPrintHistoryOpen(false)}
+            onFilter={setReceiptPrintHistoryFilter}
+            onDetail={(printJobId) => void openPrintHistoryDetail(printJobId)}
+          />
+        </details>
+      )}
     </section>
   );
 }
-
 function formatAmount(value: number): string {
   return value.toFixed(2);
-}
-
-function formatMoney(minorUnits?: number | null, currency = "PHP"): string {
-  if (minorUnits == null) {
-    return "Unavailable";
-  }
-
-  return new Intl.NumberFormat("en-PH", { style: "currency", currency }).format(minorUnits / 100);
 }
 
 function buildStatutoryTenderEvidence(session: PayableBasisResponse) {
@@ -1099,14 +1058,12 @@ function buildCashierTransactionState({
   fiscalStatus,
   receiptStatus,
   receiptPreviewEligible,
-  exitAuthorizationContractAvailable,
 }: {
   localTender: CashTenderSnapshot | null;
   centralPmsStatus: CentralPmsPanelStatus;
   fiscalStatus: FiscalPanelStatus;
   receiptStatus: ReceiptPanelStatus;
   receiptPreviewEligible: boolean;
-  exitAuthorizationContractAvailable: boolean;
 }): CashierTransactionState {
   const paymentCommand = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
   const fiscalCommand = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
@@ -1130,10 +1087,11 @@ function buildCashierTransactionState({
   const paymentFinal = paymentCommand?.status === "Confirmed";
   const fiscalRecorded = fiscalCommand?.status === "Recorded";
   const receiptAvailable = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided" || receiptPreviewEligible;
-  const exitAuthorization = exitAuthorizationContractAvailable ? "EXIT_AUTHORIZATION_NOT_EVALUATED" : "EXIT_AUTHORIZATION_READBACK_CONTRACT_MISSING";
-  const authorizationBlocked = receiptAvailable && !exitAuthorizationContractAvailable;
+  const exitAuthorizationIssued = fiscalCommand?.exitAuthorizationIssued === true;
+  const exitAuthorization = exitAuthorizationIssued ? "EXIT_AUTHORIZATION_ISSUED" : "EXIT_AUTHORIZATION_NOT_ISSUED";
+  const authorizationBlocked = receiptAvailable && !exitAuthorizationIssued;
   // Completion requires durable cash custody plus authoritative payment, fiscal, receipt, and ExitAuthorization readback; no local ExitAuthorization inference is allowed.
-  const complete = Boolean(localTender?.currentLocalState === "CashReceived" && paymentFinal && fiscalRecorded && receiptAvailable && exitAuthorizationContractAvailable);
+  const complete = Boolean(localTender?.currentLocalState === "CashReceived" && paymentFinal && fiscalRecorded && receiptAvailable && exitAuthorizationIssued);
 
   let completion: CashierTransactionState["completion"] = "TRANSACTION_IN_PROGRESS";
   if (paymentTerminal || fiscalTerminal || receiptTerminal || authorizationBlocked) {
@@ -1255,9 +1213,6 @@ function CashierTransactionStatePanel({ state }: { state: CashierTransactionStat
         <PreviewMeta label="Sales Invoice No." value={state.fiscalDocumentNumber} />
         <PreviewMeta label="Latest update" value={state.latestUpdatedAt ? formatDateTime(state.latestUpdatedAt) : null} />
       </dl>
-      {state.exitAuthorization === "EXIT_AUTHORIZATION_READBACK_CONTRACT_MISSING" && (
-        <p>ExitAuthorization readback is not evaluated in this desktop slice because no APT-usable Central PMS readback contract is present. No authorization is inferred locally.</p>
-      )}
       {state.completion === "TRANSACTION_COMPLETE" && (
         <p>The cashier may start a new transaction after local evidence is preserved. No gate action is created.</p>
       )}
@@ -1727,29 +1682,7 @@ function ReceiptPrintPanel({
   status: ReceiptPrintStatus;
   onPrint: () => void;
 }) {
-  if (!enabled && !receiptAvailable) {
-    return null;
-  }
-
-  if (!enabled) {
-    return (
-      <section className="central-pms-panel receipt-print unavailable" aria-label="Sales Invoice printing">
-        <h3>Sales Invoice printing</h3>
-        <p>Thermal printing is disabled.</p>
-        <p>Preview remains read-only. No print job was created.</p>
-      </section>
-    );
-  }
-
-  if (!receiptAvailable) {
-    return (
-      <section className="central-pms-panel receipt-print unavailable" aria-label="Sales Invoice printing">
-        <h3>Sales Invoice printing</h3>
-        <p>Ready only after the authoritative Sales Invoice presentation is available.</p>
-        <p>No fallback receipt will be printed.</p>
-      </section>
-    );
-  }
+  if (!enabled || !receiptAvailable) return null;
 
   const jobs = status.kind === "ready" ? status.status.jobs : [];
   const latestJob = jobs.at(-1);
@@ -1771,56 +1704,36 @@ function ReceiptPrintPanel({
       role={latestJob?.status?.includes("Failed") || latestJob?.status === "PrinterUnavailable" ? "alert" : "status"}
     >
       <div className="central-pms-status-row">
-        <h3>Sales Invoice printing</h3>
+        <h3>Sales Invoice</h3>
         <strong>{latestJob?.statusLabel ?? (status.kind === "loading" ? status.message : "Ready to print")}</strong>
       </div>
 
-      <dl className="central-pms-details">
-        <div>
-          <dt>Configured printer</dt>
-          <dd>{configuredPrinterName ?? "Not configured"}</dd>
-        </div>
-        <div>
-          <dt>Paper width</dt>
-          <dd>{configuredPaperWidthMm} mm</dd>
-        </div>
-        <div>
-          <dt>Last print attempt</dt>
-          <dd>{latestJob?.requestedAt ? formatDateTime(latestJob.requestedAt) : "None"}</dd>
-        </div>
-        <div>
-          <dt>Print classification</dt>
-          <dd>{latestJob?.classificationLabel ?? (originalAccepted ? "Reprint" : "Original")}</dd>
-        </div>
-        <div>
-          <dt>Copy sequence</dt>
-          <dd>{latestJob?.copySequence ? String(latestJob.copySequence) : "Not printed"}</dd>
-        </div>
-      </dl>
-
       {status.kind === "error" && <p className="cash-error">{status.message}</p>}
-      {latestJob?.failureClassification && (
-        <p>Safe printer failure classification: {latestJob.failureClassification}</p>
-      )}
       {latestJob?.status === "UnknownAfterRestart" && (
         <p>Print result requires confirmation. The terminal will not silently resubmit this job after restart.</p>
       )}
-      {retryable && <p>Retry is available after confirming the printer is ready.</p>}
-      {status.kind === "ready" && status.lastSubmit && (
-        <p>{status.lastSubmit.safeMessage}</p>
-      )}
-      {status.kind === "ready" && status.lastSubmit && (
-        <article className="receipt-print-output" aria-label="Prepared print output">
-          {status.lastSubmit.printDocument.lines.map((line, index) => (
-            <p key={`${line}-${index}`}>{line}</p>
-          ))}
-        </article>
-      )}
-      <p>Printing uses the stored authoritative Sales Invoice presentation. It does not retrieve another receipt or change payment, fiscal, ExitAuthorization, HikCentral, gate, or cash-drawer state.</p>
 
       <button className="secondary-action" type="button" disabled={!canPrint} onClick={onPrint}>
         {retryable ? "Retry Sales Invoice Print" : buttonText}
       </button>
+
+      <details className="support-details">
+        <summary>Printer details</summary>
+        <dl className="central-pms-details">
+          <div><dt>Configured printer</dt><dd>{configuredPrinterName ?? "Not configured"}</dd></div>
+          <div><dt>Paper width</dt><dd>{configuredPaperWidthMm} mm</dd></div>
+          <div><dt>Last print attempt</dt><dd>{latestJob?.requestedAt ? formatDateTime(latestJob.requestedAt) : "None"}</dd></div>
+          <div><dt>Print classification</dt><dd>{latestJob?.classificationLabel ?? (originalAccepted ? "Reprint" : "Original")}</dd></div>
+          <div><dt>Copy sequence</dt><dd>{latestJob?.copySequence ? String(latestJob.copySequence) : "Not printed"}</dd></div>
+        </dl>
+        {latestJob?.failureClassification && <p>Printer failure: {latestJob.failureClassification}</p>}
+        {status.kind === "ready" && status.lastSubmit && <p>{status.lastSubmit.safeMessage}</p>}
+        {status.kind === "ready" && status.lastSubmit && (
+          <article className="receipt-print-output" aria-label="Prepared print output">
+            {status.lastSubmit.printDocument.lines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+          </article>
+        )}
+      </details>
     </section>
   );
 }
@@ -1987,11 +1900,13 @@ function SalesInvoicePrintHistoryPanel({
 
 function ReceiptPreviewSurface({
   status,
+  exitAuthorizationIssued,
   configuredPaperWidthMm,
   paperWidthWarning,
   onClose,
 }: {
   status: ReceiptPreviewStatus;
+  exitAuthorizationIssued: boolean;
   configuredPaperWidthMm: 57 | 58 | 80;
   paperWidthWarning: string | null;
   onClose: () => void;
@@ -2029,7 +1944,7 @@ function ReceiptPreviewSurface({
           <span>Paper width: {width} mm</span>
           {preview && <span>Configuration completeness: {preview.configurationCompleteness}</span>}
           <span>Not printed</span>
-          <span>Exit authorization unavailable</span>
+          <span>{exitAuthorizationIssued ? "Exit Authorization: ISSUED" : "Exit authorization unavailable"}</span>
         </div>
         {warning && <p className="receipt-preview-warning">{warning}</p>}
 
@@ -2080,136 +1995,24 @@ function ReceiptPreviewSurface({
             </details>
 
             <article className={`receipt-paper ${preview.paperProfile.id}`} aria-label="Read-only receipt body">
-              {preview.sections.map((section) => <ReceiptPaperSection key={section.title} section={section} />)}
+              {preview.sections.map((section) => (
+                <section className="receipt-paper-section" key={section.name}>
+                  <h4>{section.label}</h4>
+                  <dl className="receipt-paper-fields">
+                    {section.rows.map((row) => (
+                      <div key={row.key}>
+                        <dt>{row.label}</dt>
+                        <dd>{row.displayValue}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
             </article>
           </>
         )}
       </div>
     </section>
-  );
-}
-
-type ReceiptPreviewPaperField = {
-  key?: string;
-  label: string;
-  value: string;
-  isPlaceholder?: boolean;
-};
-
-function ReceiptPaperSection({
-  section,
-}: {
-  section: {
-    title: string;
-    fields: ReceiptPreviewPaperField[];
-    rows: Array<{ fields: ReceiptPreviewPaperField[] }>;
-  };
-}) {
-  if (section.title === "Sales Invoice Title") {
-    return (
-      <section className="receipt-paper-title">
-        <h4>{section.fields[0]?.value ?? "SALES INVOICE"}</h4>
-      </section>
-    );
-  }
-
-  if (section.title === "Registered business and statutory header") {
-    return (
-      <section className="receipt-paper-header">
-        {section.fields.slice(0, 2).map((field, index) => (
-          <p key={`${field.key ?? field.value}-${index}`} className={`${index === 0 ? "receipt-paper-merchant" : ""} ${field.isPlaceholder ? "receipt-placeholder" : ""}`.trim()}>
-            {field.value}
-          </p>
-        ))}
-        <ReceiptPreviewFields fields={section.fields.slice(2)} />
-      </section>
-    );
-  }
-
-  if (section.title === "Customer-service footer") {
-    return (
-      <section className="receipt-paper-footer">
-        {section.fields.map((field, index) => (
-          <p key={`${field.key ?? field.value}-${index}`} className={field.isPlaceholder ? "receipt-placeholder" : undefined}>
-            {field.value}
-          </p>
-        ))}
-      </section>
-    );
-  }
-
-  if (section.title === "ITEMS") {
-    return (
-      <section className="receipt-paper-section receipt-paper-lines">
-        <h4>ITEMS</h4>
-        {section.rows.map((row, index) => (
-          <ReceiptLineItem fields={row.fields} key={`${section.title}-${index}`} />
-        ))}
-      </section>
-    );
-  }
-
-  if (section.title === "SUBTOTAL" || section.title === "TOTAL PAID AND CHANGE") {
-    return (
-      <section className="receipt-paper-section receipt-paper-totals">
-        <h4>{section.title}</h4>
-        {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
-        {section.rows.map((row, index) => <ReceiptPreviewFields fields={row.fields} key={`${section.title}-${index}`} />)}
-      </section>
-    );
-  }
-
-  if (section.title === "PAYMENT DETAILS") {
-    return (
-      <section className="receipt-paper-section receipt-paper-payment">
-        <h4>PAYMENT DETAILS</h4>
-        {section.rows.map((row, index) => (
-          <ReceiptPreviewFields fields={row.fields} key={`${section.title}-${index}`} />
-        ))}
-        {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
-      </section>
-    );
-  }
-
-  return (
-    <section className="receipt-paper-section">
-      <h4>{section.title}</h4>
-      {section.fields.length > 0 && <ReceiptPreviewFields fields={section.fields} />}
-      {section.rows.map((row, index) => (
-        <div className="receipt-paper-row" key={`${section.title}-${index}`}>
-          <ReceiptPreviewFields fields={row.fields} />
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function ReceiptLineItem({ fields }: { fields: ReceiptPreviewPaperField[] }) {
-  const description = fields.find((field) => field.key === "description" || field.label === "Description");
-  const amount = fields.find((field) => field.key === "amount" || field.label === "Amount");
-  const supportingFields = fields.filter((field) => field !== description && field !== amount);
-
-  return (
-    <div className="receipt-line-item">
-      <div className="receipt-line-main">
-        <span className={description?.isPlaceholder ? "receipt-placeholder" : undefined}>{description?.value ?? "Line item"}</span>
-        {amount && <strong className={amount.isPlaceholder ? "receipt-placeholder" : undefined}>{amount.value}</strong>}
-      </div>
-      {supportingFields.length > 0 && <ReceiptPreviewFields fields={supportingFields} />}
-    </div>
-  );
-}
-
-function ReceiptPreviewFields({ fields }: { fields: ReceiptPreviewPaperField[] }) {
-  return (
-    <dl className="receipt-paper-fields">
-      {fields.map((field, index) => (
-        <div key={`${field.key ?? field.label}-${index}`} className={field.isPlaceholder ? "receipt-placeholder-row" : undefined}>
-          <dt>{field.label}</dt>
-          <dd className={field.isPlaceholder ? "receipt-placeholder" : undefined}>{field.value}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 

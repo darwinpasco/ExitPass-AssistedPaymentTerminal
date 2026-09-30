@@ -213,6 +213,32 @@ dl {
   font-weight: 900;
 }
 
+.lookup-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lookup-fields label {
+  display: grid;
+  gap: 4px;
+}
+
+.lookup-fields input {
+  width: 100%;
+  min-height: 40px;
+  border: 2px solid #aebbc5;
+  border-radius: 5px;
+  padding: 0 9px;
+  font-size: 14px;
+}
+
+.lookup-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 7px;
+}
+
 .lookup-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -234,6 +260,101 @@ dl {
   gap: 8px;
   align-items: start;
   margin-top: 6px;
+}
+
+.cashier-workflow {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.85fr) minmax(480px, 1.15fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 10px;
+}
+
+.payment-section {
+  min-width: 0;
+}
+
+.session-summary-heading {
+  padding: 9px 10px 2px;
+}
+
+.approved-session-details,
+.amount-summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  padding: 4px 10px 8px;
+}
+
+.approved-session-details div,
+.amount-summary dl div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 1.2fr);
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #e6ecef;
+}
+
+.approved-session-details dt,
+.amount-summary dt {
+  color: #53616f;
+  font-weight: 700;
+}
+
+.approved-session-details dd,
+.amount-summary dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.amount-summary {
+  border-top: 1px solid #d7e0e5;
+  background: #f8fbfc;
+}
+
+.amount-summary-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+}
+
+.amount-summary-total span {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.amount-summary-total strong {
+  color: #0e4f40;
+  font-size: 28px;
+}
+
+.amount-summary-total-row {
+  grid-column: 1 / -1;
+  font-size: 14px;
+}
+
+.transaction-completion {
+  margin-top: 10px;
+  padding: 10px;
+  border-left: 4px solid #17834d;
+  background: #eef8f1;
+}
+
+.support-details {
+  margin-top: 8px;
+  border-top: 1px solid #d7e0e5;
+  padding-top: 6px;
+}
+
+.support-details > summary {
+  color: #53616f;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .session-column {
@@ -1167,54 +1288,135 @@ dl {
 }
 
 .human-session-panel {
-  padding: 18px;
-  border-block: 1px solid #c7ced6;
-  background: #f8fafb;
+  border: 1px solid #c7ced6;
+  border-radius: 6px;
+  background: #fff;
 }
 
-.human-session-heading-row {
+.cashier-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
+  padding: 8px 10px;
 }
 
-.human-session-summary {
+.cashier-header-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px 16px;
+  grid-template-columns: repeat(5, minmax(100px, 1fr));
+  flex: 1;
+  gap: 8px;
 }
 
-.human-session-summary div {
+.cashier-header-summary div {
   min-width: 0;
 }
 
-.human-session-summary dt {
+.cashier-header-summary dt {
   color: #53616f;
-  font-size: 0.82rem;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
-.human-session-summary dd {
+.cashier-header-summary dd {
   margin: 2px 0 0;
   overflow-wrap: anywhere;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.human-session-actions {
+.cashier-header-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.cashier-session-body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  padding: 10px;
+  border-top: 1px solid #d7e0e5;
+  background: #f8fafb;
+}
+
+.cashier-session-group {
+  min-width: 0;
+}
+
+.cashier-session-group h3,
+.cashier-session-group p {
+  margin: 0 0 7px;
+}
+
+.session-form-row,
+.cashier-closing-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
+  gap: 8px;
   align-items: end;
 }
 
+.session-form-row label,
+.cashier-closing-grid label,
+.cashier-closing-grid span {
+  color: #53616f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.session-form-row input,
+.cashier-closing-grid input {
+  width: 100%;
+  min-height: 38px;
+  border: 2px solid #aebbc5;
+  border-radius: 5px;
+  padding: 0 8px;
+}
+
+.cashier-closing-grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.end-shift {
+  grid-column: 1 / -1;
+  border-top: 1px solid #d7e0e5;
+  padding-top: 9px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (max-width: 760px) {
-  .human-session-summary,
-  .human-session-actions {
+  .cashier-header-summary,
+  .cashier-session-body,
+  .lookup-fields,
+  .cashier-workflow,
+  .approved-session-details,
+  .amount-summary dl {
     grid-template-columns: 1fr;
   }
 
-  .human-session-heading-row {
+  .cashier-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .cashier-header-actions,
+  .session-form-row,
+  .cashier-closing-grid {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }

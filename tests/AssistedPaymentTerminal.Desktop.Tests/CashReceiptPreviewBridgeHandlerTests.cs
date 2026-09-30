@@ -57,24 +57,18 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         Assert.False(preview.GetProperty("hasPlaceholders").GetBoolean());
         Assert.Equal("Complete", preview.GetProperty("configurationCompleteness").GetString());
         Assert.Equal(receipt.AuthoritativePayloadHash, preview.GetProperty("authoritativePayloadHash").GetString());
-        var sectionText = preview.GetProperty("sections").GetRawText();
-        Assert.Contains("GOVERNED REGISTERED BUSINESS NAME", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED TIN", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED PLATE NUMBER", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION NO.", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED PTU NO.", sectionText, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED PTU DATE ISSUED", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"key\":\"birAccreditationIssuedDateDisplay\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("\"key\":\"ptuIssuedDateDisplay\"", sectionText, StringComparison.Ordinal);
-        Assert.Contains("PHP 0.00", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[REGISTERED BUSINESS NAME]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[TIN]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[PLATE NUMBER]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[DISCOUNT AMOUNT]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[BIR ACCREDITATION VALID UNTIL]", sectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("[PTU DATE ISSUED]", sectionText, StringComparison.Ordinal);
+        var serialized = preview.GetProperty("sections").GetRawText();
+        Assert.Contains("GOVERNED REGISTERED BUSINESS NAME", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED TIN", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED PLATE NUMBER", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED BIR ACCREDITATION NO.", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED PTU NO.", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED PTU DATE ISSUED", serialized, StringComparison.Ordinal);
+        Assert.Contains("PHP 0.00", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("rawValue", serialized, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -310,68 +304,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         bool voided,
         bool complete)
     {
-        var payload = complete
-            ? """
-              {
-                "presentation": {
-                  "registeredBusinessName": "GOVERNED REGISTERED BUSINESS NAME",
-                  "registeredBusinessAddress": "GOVERNED REGISTERED BUSINESS ADDRESS",
-                  "tin": "GOVERNED TIN",
-                  "posSerialNumber": "GOVERNED POS SERIAL NUMBER",
-                  "machineIdentificationNumber": "GOVERNED MACHINE IDENTIFICATION NUMBER",
-                  "parkingLocation": "GOVERNED PARKING LOCATION",
-                  "terminalId": "GOVERNED TERMINAL ID",
-                  "fiscalDocumentNumber": "SI-000001",
-                  "issuedAt": "GOVERNED ISSUED DATE",
-                  "plateNumber": "GOVERNED PLATE NUMBER",
-                  "entryTime": "GOVERNED ENTRY TIME",
-                  "exitTime": "GOVERNED EXIT TIME",
-                  "durationDisplay": "GOVERNED DURATION",
-                  "lines": [
-                    { "description": "Parking fee - cash", "quantity": "1", "unitPriceDisplay": "PHP 125.00", "displayAmount": "PHP 125.00" }
-                  ],
-                  "subtotalDisplay": "PHP 125.00",
-                  "discounts": [
-                    { "description": "None", "displayAmount": "PHP 0.00" }
-                  ],
-                  "vatableSalesDisplay": "PHP 125.00",
-                  "outputVatDisplay": "PHP 0.00",
-                  "vatExemptSalesDisplay": "PHP 0.00",
-                  "zeroRatedSalesDisplay": "PHP 0.00",
-                  "tenders": [
-                    { "tenderType": "CASH", "provider": "not_applicable", "displayAmount": "PHP 150.00", "changeDisplay": "PHP 25.00" }
-                  ],
-                  "salesInvoiceStatement": "THIS SERVES AS YOUR SALES INVOICE",
-                  "footer": { "message": "THANK YOU FOR CHOOSING OUR SERVICE" },
-                  "birAccreditationNumber": "GOVERNED BIR ACCREDITATION NO.",
-                  "birAccreditationIssuedDateDisplay": "GOVERNED BIR ACCREDITATION DATE ISSUED",
-                  "birAccreditationValidUntilDisplay": "GOVERNED BIR ACCREDITATION VALID UNTIL",
-                  "ptuNumber": "GOVERNED PTU NO.",
-                  "ptuIssuedDateDisplay": "GOVERNED PTU DATE ISSUED"
-                }
-              }
-              """
-            : """
-              {
-                "presentation": {
-                  "fiscalDocumentNumber": "SI-000001",
-                  "lines": [
-                    { "description": "Parking fee - cash", "quantity": "1", "displayAmount": "PHP 125.00" }
-                  ],
-                  "taxes": [
-                    { "taxType": "VAT", "displayAmount": "PHP 0.00" }
-                  ],
-                  "totals": [
-                    { "totalType": "grand_total", "displayAmount": "PHP 125.00" }
-                  ],
-                  "tenders": [
-                    { "tenderType": "CASH", "displayAmount": "PHP 150.00", "changeDisplay": "PHP 25.00" }
-                  ]
-                }
-              }
-              """;
-
-        using var document = JsonDocument.Parse(payload);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(CanonicalPresentation(complete), JsonOptions));
 
         return new TerminalCashReceiptPresentationResponse(
             command.TerminalCashTenderId,
@@ -398,6 +331,157 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
             DateTimeOffset.Parse("2026-07-15T00:05:00Z"),
             Guid.Parse(command.RetrievalCorrelationId));
     }
+
+    internal static object CanonicalPresentation(bool complete)
+    {
+        if (!complete)
+        {
+            return new
+            {
+                canonicalText = CanonicalPrintableText,
+                presentation = new
+                {
+                    sections = new[]
+                    {
+                        Section("fiscalNumbering", "Fiscal Numbering", 50,
+                            Row("fiscalNumbering.fiscalDocumentNumber", "Fiscal Document Number", "SI-000001"))
+                    }
+                }
+            };
+        }
+
+        return new
+        {
+            canonicalText = CanonicalPrintableText,
+            presentation = new
+            {
+                sections = new[]
+                {
+                    Section("header", "Header", 10,
+                        Row("header.documentTitle", "Document Title", "SALES INVOICE")),
+                    Section("salesInvoiceHeaderSnapshot", "Sales Invoice Header Snapshot", 20,
+                        Row("salesInvoiceHeaderSnapshot.fiscalIdentityId", "Fiscal Identity ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                        Row("salesInvoiceHeaderSnapshot.registeredBusinessName", "Registered Business Name", "GOVERNED REGISTERED BUSINESS NAME"),
+                        Row("salesInvoiceHeaderSnapshot.registeredBusinessAddress", "Registered Business Address", "GOVERNED REGISTERED BUSINESS ADDRESS"),
+                        Row("salesInvoiceHeaderSnapshot.tin", "TIN", "GOVERNED TIN"),
+                        Row("salesInvoiceHeaderSnapshot.posSerialNumber", "POS Serial Number", "GOVERNED POS SERIAL NUMBER"),
+                        Row("salesInvoiceHeaderSnapshot.machineIdentificationNumber", "MIN", "GOVERNED MACHINE IDENTIFICATION NUMBER"),
+                        Row("salesInvoiceHeaderSnapshot.parkingLocationDisplay", "Parking Location", "GOVERNED PARKING LOCATION"),
+                        Row("salesInvoiceHeaderSnapshot.supplierDeveloperRegisteredName", "Supplier / Developer Registered Name", "GOVERNED SUPPLIER"),
+                        Row("salesInvoiceHeaderSnapshot.supplierDeveloperAddress", "Supplier / Developer Address", "GOVERNED SUPPLIER ADDRESS"),
+                        Row("salesInvoiceHeaderSnapshot.supplierDeveloperTin", "Supplier / Developer TIN", "GOVERNED SUPPLIER TIN"),
+                        Row("salesInvoiceHeaderSnapshot.birAccreditationNumber", "BIR Accreditation Number", "GOVERNED BIR ACCREDITATION NO."),
+                        Row("salesInvoiceHeaderSnapshot.birAccreditationIssuedDate", "BIR Accreditation Issued Date", "GOVERNED BIR ACCREDITATION DATE ISSUED"),
+                        Row("salesInvoiceHeaderSnapshot.birAccreditationValidUntil", "BIR Accreditation Valid Until", "GOVERNED BIR ACCREDITATION VALID UNTIL"),
+                        Row("salesInvoiceHeaderSnapshot.ptuNumber", "PTU Number", "GOVERNED PTU NO."),
+                        Row("salesInvoiceHeaderSnapshot.ptuIssuedDate", "PTU Issued Date", "GOVERNED PTU DATE ISSUED"),
+                        Row("salesInvoiceHeaderSnapshot.salesInvoiceLegalStatement", "Sales Invoice Legal Statement", "THIS SERVES AS YOUR SALES INVOICE")),
+                    Section("fiscalNumbering", "Fiscal Numbering", 50,
+                        Row("fiscalNumbering.fiscalDocumentNumber", "Fiscal Document Number", "SI-000001")),
+                    Section("parkingPaymentReferences", "Parking / Payment", 60,
+                        Row("parkingPaymentReferences.branchOrSite", "Branch / Site", "GOVERNED SITE"),
+                        Row("parkingPaymentReferences.ticketNumber", "Ticket Number", "GOVERNED TICKET"),
+                        Row("parkingPaymentReferences.plateNumber", "Plate Number", "GOVERNED PLATE NUMBER"),
+                        Row("parkingPaymentReferences.entryTime", "Entry Time", "GOVERNED ENTRY TIME"),
+                        Row("parkingPaymentReferences.paymentTime", "Payment Time", "GOVERNED PAYMENT TIME"),
+                        Row("parkingPaymentReferences.parkingDuration", "Parking Duration", "GOVERNED DURATION"),
+                        Row("parkingPaymentReferences.paymentMethod", "Payment Method", "CASH")),
+                    Section("lineItems", "Line Items", 70,
+                        Row("lineItems[0000].description", "Description", "Parking fee - cash"),
+                        Row("lineItems[0000].quantity", "Quantity", "1"),
+                        Row("lineItems[0000].netAmount", "Net Amount", "PHP 125.00")),
+                    Section("vatBreakdown", "VAT Breakdown", 95,
+                        Row("totals.vatableSales", "VATable Sales", "PHP 125.00"),
+                        Row("totals.vatAmount", "VAT Amount", "PHP 0.00"),
+                        Row("totals.vatExemptSales", "VAT Exempt Sales", "PHP 0.00"),
+                        Row("totals.zeroRatedSales", "Zero Rated Sales", "PHP 0.00")),
+                    Section("tenders", "Tenders", 100,
+                        Row("tenders[0000].tenderTypeCodeKey", "Tender Type", "CASH"),
+                        Row("tenders[0000].amount", "Tender Amount", "PHP 150.00")),
+                    Section("totals", "Totals", 110,
+                        Row("totals.summary.subtotal", "Subtotal", "PHP 125.00"),
+                        Row("totals.summary.totalAmount", "Total Amount", "PHP 125.00"))
+                }
+            }
+        };
+    }
+
+    internal static string CanonicalPrintableText { get; } = string.Join("\r\n",
+    [
+        "          ExitPass Parking Corporation",
+        "             123 Sample Address",
+        "",
+        "VAT REG TIN                      123-456-789",
+        "MIN                                  MIN-001",
+        "S/N                               POS-SN-001",
+        "Branch / Site               PITX Level 3",
+        "Parking Location            PITX Level 3",
+        "------------------------------------------------",
+        "                 SALES INVOICE",
+        "------------------------------------------------",
+        "                    ORIGINAL",
+        "",
+        "SI No                           SI-000001",
+        "Issued Date              2026-07-15 08:05",
+        "------------------------------------------------",
+        "                PARKING DETAILS",
+        "------------------------------------------------",
+        "Ticket Number              GOVERNED TICKET",
+        "Plate Number          GOVERNED PLATE NUMBER",
+        "Entry Time             GOVERNED ENTRY TIME",
+        "Payment              GOVERNED PAYMENT TIME",
+        "Duration                 GOVERNED DURATION",
+        "------------------------------------------------",
+        "                     ITEMS",
+        "------------------------------------------------",
+        "# Description      Qty        Unit       Amount",
+        " 1 Parking fee      1  PHP 125.00   PHP 125.00",
+        "Subtotal                         PHP 125.00",
+        "------------------------------------------------",
+        "                   DISCOUNTS",
+        "------------------------------------------------",
+        "Discount Reason                        NONE",
+        "Discount Amount                    PHP 0.00",
+        "------------------------------------------------",
+        "                 VAT BREAKDOWN",
+        "------------------------------------------------",
+        "VATable Sales                    PHP 125.00",
+        "VAT Amount                         PHP 0.00",
+        "VAT Exempt Sales                   PHP 0.00",
+        "Zero Rated Sales                   PHP 0.00",
+        "Total Amount                     PHP 125.00",
+        "------------------------------------------------",
+        "                PAYMENT DETAILS",
+        "------------------------------------------------",
+        "CASH                         PHP 150.00",
+        "Total Paid                       PHP 150.00",
+        "Change                            PHP 25.00",
+        "------------------------------------------------",
+        "        THIS SERVES AS YOUR SALES INVOICE",
+        "------------------------------------------------",
+        "              Customer Information",
+        "------------------------------------------------",
+        "NAME                        Juan Dela Cruz",
+        "ADDRESS                 123 Sample Street",
+        "TIN                      123-456-789-000",
+        "BUS. STYLE                         Retail",
+        "------------------------------------------------",
+        "       POS SOFTWARE SUPPLIER / DEVELOPER",
+        "------------------------------------------------",
+        "               GOVERNED SUPPLIER",
+        "TIN                         SUPPLIER-TIN",
+        "ACCR. NO.                    ACCR-0001",
+        "PTU                           PTU-0001",
+        "        THANK YOU FOR CHOOSING OUR SERVICE",
+        "                NOTHING FOLLOWS",
+        ""
+    ]);
+
+    private static object Section(string name, string label, int sortOrder, params object[] rows) =>
+        new { name, label, sortOrder, posture = "required", rows };
+
+    private static object Row(string key, string label, string displayValue) =>
+        new { key, label, valueKind = "text", posture = "required", displayValue, rawValue = displayValue };
 
     private static async Task MutateReceiptAsync(
         ReceiptBridgeTestDatabase database,
@@ -429,7 +513,6 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
 
         return new LocalJournalBridgeHandler(
             new CashJournalService(options),
-            enabled: true,
             centralPmsCashSubmissionEnabled: true,
             centralPmsFiscalIssuanceEnabled: true,
             centralPmsReceiptRetrievalEnabled: true,
@@ -475,7 +558,6 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         return JsonDocument.Parse(response!);
     }
 }
-
 internal sealed class DeterministicLocalDatabaseKeyProtector : ILocalDatabaseKeyProtector
 {
     public string Scope => LocalDatabaseKeyEnvelope.CurrentUserScope;

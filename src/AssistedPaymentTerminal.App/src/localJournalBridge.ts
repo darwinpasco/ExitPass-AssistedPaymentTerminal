@@ -16,7 +16,6 @@ export type BridgeError = {
 
 export type LocalJournalHealth = {
   healthy: boolean;
-  enabled: boolean;
   databasePath: string;
   cashDrawerEnabled: boolean;
   authorityWarning: string;
@@ -78,6 +77,9 @@ export type CashCustodySessionSnapshot = {
   openingCashAmount: number;
   openedAt: string;
   status: string;
+  expectedClosingCashAmount?: number | null;
+  closingCashAmount?: number | null;
+  varianceAmount?: number | null;
 };
 
 export type LocalOperationalState = {
@@ -184,6 +186,7 @@ export type CentralPmsCashFiscalCommand = {
   fiscalDocumentNumber: string | null;
   fiscalNumberAssignedAt: string | null;
   semanticHashSourceVersion: string | null;
+  exitAuthorizationIssued: boolean;
   recordedAt: string | null;
   nextRetryAt: string | null;
   lastSafeHttpStatus: number | null;
@@ -269,18 +272,14 @@ export type ReceiptPreviewPaperProfile = {
 export type ReceiptPreviewField = {
   key: string;
   label: string;
-  value: string;
-  isPlaceholder: boolean;
-};
-
-export type ReceiptPreviewRow = {
-  fields: ReceiptPreviewField[];
+  displayValue: string;
+  posture: string;
 };
 
 export type ReceiptPreviewSection = {
-  title: string;
-  fields: ReceiptPreviewField[];
-  rows: ReceiptPreviewRow[];
+  name: string;
+  label: string;
+  rows: ReceiptPreviewField[];
 };
 
 export type ReceiptPreviewDocument = {
@@ -581,7 +580,6 @@ export interface LocalJournalBridge {
     printJobId: string,
   ): Promise<BridgeResult<SalesInvoicePrintHistoryDetail>>;
 }
-
 declare global {
   interface Window {
     chrome?: {

@@ -54,6 +54,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(shift => shift.PosServerId).HasMaxLength(128).IsRequired();
             entity.Property(shift => shift.OpenedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(shift => shift.ClosedAt).HasConversion(nullableDateTimeOffsetConverter);
+            entity.Property(shift => shift.ClosedByAuthenticatedCashierSessionReference).HasMaxLength(256);
             entity.Property(shift => shift.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.HasIndex(shift => new { shift.TerminalId, shift.CashierId, shift.Status });
         });
@@ -71,6 +72,11 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(session => session.PosServerId).HasMaxLength(128).IsRequired();
             entity.Property(session => session.OpeningCashAmount).HasPrecision(18, 2);
             entity.Property(session => session.OpenedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(session => session.ExpectedClosingCashAmount).HasPrecision(18, 2);
+            entity.Property(session => session.ClosingCashAmount).HasPrecision(18, 2);
+            entity.Property(session => session.VarianceAmount).HasPrecision(18, 2);
+            entity.Property(session => session.ClosedAt).HasConversion(nullableDateTimeOffsetConverter);
+            entity.Property(session => session.ClosedByAuthenticatedCashierSessionReference).HasMaxLength(256);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.HasIndex(session => new { session.TerminalId, session.CashierId, session.Status });
         });
@@ -194,6 +200,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(command => command.FiscalIssuanceState).HasMaxLength(128);
             entity.Property(command => command.FiscalDocumentNumber).HasMaxLength(128);
             entity.Property(command => command.SemanticHashSourceVersion).HasMaxLength(128);
+            entity.Property(command => command.ExitAuthorizationIssued).IsRequired();
             entity.Property(command => command.FirstAttemptedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.LastAttemptedAt).HasConversion(dateTimeOffsetConverter);
             entity.Property(command => command.NextRetryAt).HasConversion(dateTimeOffsetConverter);

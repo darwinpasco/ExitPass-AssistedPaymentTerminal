@@ -88,13 +88,16 @@ export async function installLocalJournalBridgeFixture(page, options = {}) {
           return null;
         }
 
+        if (command === "localJournal.readTenderByParkingSession") {
+          return { tender: null, events: [] };
+        }
+
         if (command !== "localJournal.health") {
           return null;
         }
 
         return {
           healthy: true,
-          enabled: true,
           databasePath: "e2e-fixture-cash-journal.db",
           cashDrawerEnabled: false,
           authorityWarning: "E2E fixture bridge.",

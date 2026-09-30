@@ -64,20 +64,19 @@ public partial class MainWindow : Window
         };
         _localJournalBridge = new LocalJournalBridgeHandler(
             journal,
-            options.EnableNonLiveCashCapture,
-            options.EnableCentralPmsCashSubmission,
-            options.EnableCentralPmsFiscalIssuance,
-            options.EnableCentralPmsReceiptRetrieval,
-            options.EnableReceiptPreview,
-            options.ReceiptPaperWidthMm,
-            options.CentralPmsBaseUrl,
-            new TerminalCashPaymentSubmissionService(
+            centralPmsCashSubmissionEnabled: options.EnableCentralPmsCashSubmission,
+            centralPmsFiscalIssuanceEnabled: options.EnableCentralPmsFiscalIssuance,
+            centralPmsReceiptRetrievalEnabled: options.EnableCentralPmsReceiptRetrieval,
+            receiptPreviewEnabled: options.EnableReceiptPreview,
+            receiptPaperWidthMm: options.ReceiptPaperWidthMm,
+            centralPmsBaseUrl: options.CentralPmsBaseUrl,
+            submissionService: new TerminalCashPaymentSubmissionService(
                 new CentralPmsTerminalCashPaymentClient(new HttpClient()),
                 localOptions),
-            new TerminalCashFiscalSubmissionService(
+            fiscalService: new TerminalCashFiscalSubmissionService(
                 new CentralPmsTerminalCashFiscalClient(new HttpClient()),
                 localOptions),
-            new TerminalCashReceiptRetrievalService(
+            receiptService: new TerminalCashReceiptRetrievalService(
                 new CentralPmsTerminalCashReceiptClient(new HttpClient()),
                 localOptions),
             receiptPrintingEnabled: options.EnableReceiptPrinting,
@@ -339,7 +338,6 @@ public partial class MainWindow : Window
                 }
               };
               window.__APT_DESKTOP_FLAGS__ = {
-                APT_ENABLE_NON_LIVE_CASH_CAPTURE: "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
                 APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION: "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
                 APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE: "__APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE__",
                 APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL: "__APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL__",
@@ -365,9 +363,6 @@ public partial class MainWindow : Window
               });
             })();
             """.Replace(
-                "__APT_ENABLE_NON_LIVE_CASH_CAPTURE__",
-                _options.EnableNonLiveCashCapture ? "true" : "false")
-            .Replace(
                 "__APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION__",
                 _options.EnableCentralPmsCashSubmission ? "true" : "false")
             .Replace(

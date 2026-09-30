@@ -31,7 +31,6 @@ $viteProcess = $null
 $originalEnv = @{
   APT_PROFILE = $env:APT_PROFILE
   APT_LOCAL_DB_PATH = $env:APT_LOCAL_DB_PATH
-  APT_ENABLE_NON_LIVE_CASH_CAPTURE = $env:APT_ENABLE_NON_LIVE_CASH_CAPTURE
   APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION
   APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE
   APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL
@@ -131,7 +130,6 @@ try {
 
   $env:APT_PROFILE = "CASHIER_ASSISTED_TERMINAL"
   $env:APT_LOCAL_DB_PATH = $databasePath
-  $env:APT_ENABLE_NON_LIVE_CASH_CAPTURE = "true"
   $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = "true"
   $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = "true"
   $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = "true"
@@ -273,7 +271,6 @@ try {
   dotnet run --no-restore --project $desktopProjectPath -- `
     --profile=CASHIER_ASSISTED_TERMINAL `
     --web-ui-url=$visualSmokeUrl `
-    --enable-non-live-cash-capture `
     --enable-central-pms-cash-submission `
     --enable-central-pms-fiscal-issuance `
     --enable-central-pms-receipt-retrieval `

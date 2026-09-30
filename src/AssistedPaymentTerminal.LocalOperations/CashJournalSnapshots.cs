@@ -10,7 +10,8 @@ public sealed record CashierShiftSnapshot(
     string PosServerId,
     DateTimeOffset OpenedAt,
     DateTimeOffset? ClosedAt,
-    CashierShiftStatus Status)
+    CashierShiftStatus Status,
+    string? ClosedByAuthenticatedCashierSessionReference = null)
 {
     public static CashierShiftSnapshot FromEntity(CashierShift shift) =>
         new(
@@ -23,7 +24,8 @@ public sealed record CashierShiftSnapshot(
             shift.PosServerId,
             shift.OpenedAt,
             shift.ClosedAt,
-            shift.Status);
+            shift.Status,
+            shift.ClosedByAuthenticatedCashierSessionReference);
 }
 
 public sealed record LocalOperationalStateSnapshot(
@@ -43,7 +45,12 @@ public sealed record CashCustodySessionSnapshot(
     string PosServerId,
     decimal OpeningCashAmount,
     DateTimeOffset OpenedAt,
-    CashCustodySessionStatus Status)
+    CashCustodySessionStatus Status,
+    decimal? ExpectedClosingCashAmount = null,
+    decimal? ClosingCashAmount = null,
+    decimal? VarianceAmount = null,
+    DateTimeOffset? ClosedAt = null,
+    string? ClosedByAuthenticatedCashierSessionReference = null)
 {
     public static CashCustodySessionSnapshot FromEntity(CashCustodySession session) =>
         new(
@@ -57,7 +64,12 @@ public sealed record CashCustodySessionSnapshot(
             session.PosServerId,
             session.OpeningCashAmount,
             session.OpenedAt,
-            session.Status);
+            session.Status,
+            session.ExpectedClosingCashAmount,
+            session.ClosingCashAmount,
+            session.VarianceAmount,
+            session.ClosedAt,
+            session.ClosedByAuthenticatedCashierSessionReference);
 }
 
 public sealed record CashTenderSnapshot(

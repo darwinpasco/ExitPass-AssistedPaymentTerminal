@@ -4,7 +4,7 @@
 
 J-008 replaces production development-cashier authority with the merged I-020 Central PMS APT human-session contract. The sequence is device trust, online username/password authentication, APT audience/permission/Site scope validation, own shift open or resume, own cash-custody open or resume, then payment work.
 
-Human identity, Windows account, device/service identity, human session, cashier shift, and custody remain distinct. Cashier and supervisor APT authentication is username/password only for v1.3. No TOTP, passkey, phone MFA, or offline login is implemented.
+Human identity, Windows account, device/service identity, human session, cashier shift, and custody remain distinct. Routine cashier and supervisor APT authentication is username/password only for v1.3. No TOTP challenge is added to routine APT sign-in; the shared Central PMS credential authority may require the account's existing authenticator code for governed temporary-password mutation. No passkey, phone MFA, or offline login is implemented.
 
 ## I-020 and I-021 Contracts
 
@@ -19,7 +19,7 @@ I-021A defines separate operation permissions, and I-021B supplies their canonic
 
 Each sensitive operation first refreshes the I-020 current session, then checks its operation-specific permission. Permission loss therefore blocks the next affected operation. `terminal-cash.payable-basis.read` remains strictly the read-only Central PMS payable-basis resolve/revalidate permission. The desktop does not treat it as APT access, shift, custody, or physical-cash authority, and does not redundantly inspect it where Central PMS already enforces the payable-basis endpoint policy.
 
-The current human-session bridge exposes governed open/resume operations for shift and custody; it does not expose cashier close or supervisor handover commands. Any later close operation must enforce the corresponding shift or custody permission and current ownership. Supervisor handover remains deferred pending DR-08/DR-09 and cannot be inferred from the four I-021A permissions.
+The human-session bridge exposes governed open/resume and close operations for the authenticated cashier's own shift and custody. Close performs an immediate online session refresh, enforces the corresponding shift or custody capability, derives the stable user and scope from host state, and accepts no owner or custody identifier from React. Custody close records expected cash, actual closing cash, variance, time, and the current authenticated session reference before shift close is permitted. Supervisor transfer or handover remains deferred pending DR-08/DR-09 and cannot be inferred from cashier permissions.
 
 ## Secret Boundary
 
@@ -37,7 +37,7 @@ The runtime serializes login, continuation, refresh, reauthentication, shift/cus
 
 Only the authenticated cashier's own shift and custody can resume. Another cashier cannot inherit either. New custody requires an own open shift. Normal logout is blocked with open custody and returns a visible cashier-safe explanation. Expiry, revocation, invalid or missing sessions delete unusable continuation material, clear in-memory session and effective-permission authority, and block new cash while preserving cashier-owned durable accountability. Temporary Central PMS failure also clears current authority for new cash, although the encrypted continuation material may remain for a later online validation attempt. A locked login screen may show that the prior cashier's shift and custody remain open, but those durable facts are explicitly non-authoritative until fresh online authentication succeeds. No failure path falls back to password login or reauthentication. Same-user online authentication can recover the same user's state only after the cashier explicitly enters fresh credentials; SQLite state alone never authorizes cash.
 
-Authority validation is automatic and internal. After sign-in and restart continuation, the runtime validates online before restoring authority. While the authenticated workspace is mounted, it revalidates the current I-020 session every 60 seconds. Shift open/resume, custody open/resume, and pre-cash authorization each perform their own immediate current-session validation regardless of that cadence. Revocation, expiry, invalid state, or unavailable Central PMS therefore transitions the UI to the initialized authentication-required screen and locks new cash without requiring a cashier-facing Refresh authority action. The bridge refresh operation remains available only as an internal runtime/test hook; neither Refresh authority nor a generic Reauthenticate button appears in the normal cashier workflow.
+Authority validation is automatic and internal. After sign-in and restart continuation, the runtime validates online before restoring authority. While the authenticated workspace is mounted, it revalidates the current I-020 session every 60 seconds. Shift and custody open/resume/close plus pre-cash authorization each perform their own immediate current-session validation regardless of that cadence. Revocation, expiry, invalid state, or unavailable Central PMS therefore transitions the UI to the initialized authentication-required screen and locks new cash without requiring a cashier-facing Refresh authority action. The bridge refresh operation remains available only as an internal runtime/test hook; neither Refresh authority nor a generic Reauthenticate button appears in the normal cashier workflow.
 
 ## CASH_RECEIVED
 
@@ -51,7 +51,7 @@ Configured development cashier, shift, and fabricated authentication references 
 
 `USE_MOCK_CENTRAL_PMS` belongs to the React Central PMS client configuration. The Windows host does not read that setting: it always constructs `CentralPmsHumanSessionClient` from `CENTRAL_PMS_BASE_URL`, `APT_CENTRAL_PMS_SERVICE_IDENTITY_ID`, and automatic Windows client-certificate selection. Consequently, mock mode alone cannot replace I-020 login, readback, continuation, reauthentication, or logout. A synthetic human session is possible only when all three development gates are present: React mock mode, a loopback origin, and the explicit `humanSessionFixture=1` query parameter.
 
-The original walkthrough's mock setting did not bypass host I-020 when the fixture query was absent, but it was ambiguous because non-authentication React calls remained mocked. The acceptance walkthrough therefore uses a generated, ignored `dist/apt-config.json` with `USE_MOCK_CENTRAL_PMS=false`, the disposable Central PMS URL, and no `humanSessionFixture` query. `APT_ENABLE_NON_LIVE_CASH_CAPTURE=true` remains a separate host-owned control for simulated physical cash; it does not mock authentication.
+The original walkthrough's mock setting did not bypass host I-020 when the fixture query was absent, but it was ambiguous because non-authentication React calls remained mocked. The acceptance walkthrough therefore uses a generated, ignored `dist/apt-config.json` with `USE_MOCK_CENTRAL_PMS=false`, the disposable Central PMS URL, and no `humanSessionFixture` query. Cash capability is intrinsic to the cashier-assisted terminal profile and remains governed by its operational readiness gates.
 
 ## Real I-020 Windows Walkthrough Configuration
 
@@ -84,7 +84,6 @@ $env:APT_POS_SERVER_ID = 'POS-DEV-001'
 $env:CENTRAL_PMS_BASE_URL = (Read-Host 'Disposable Central PMS base URL').TrimEnd('/')
 $env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID = (Read-Host 'Disposable APT service identity ID').Trim()
 $env:USE_MOCK_CENTRAL_PMS = 'false'
-$env:APT_ENABLE_NON_LIVE_CASH_CAPTURE = 'true'
 $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = 'false'
 $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = 'false'
 $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = 'false'
@@ -102,6 +101,8 @@ The Windows host recognizes two explicit initialized frontend states. `[data-tes
 Automated coverage proves I-020 routes, device binding, no MFA UI, operation-specific I-021 permission checks and post-login revocation, non-GLOBAL scope, ownership, logout, expiry/revocation, restart continuation, DPAPI ciphertext, no local `CASH_RECEIVED` mutation after authorization denial, production bridge isolation, native one-shot credential consumption, browser credential exclusion, and browser-storage exclusion. Current-session readback treats terminal I-020 outcomes as locked, invalidates the opaque continuation credential, clears every effective operational permission, and returns the initialized login shell without discarding owned open shift/custody evidence. Malformed or unavailable readback also removes current authority and cannot leave the prior operational shell authoritative. The Windows WebView2 smoke proof uses the actual host profile settings, injects an autofill-like browser password value, submits the login form, and verifies the WebView emits only a username-only prompt request. Host tests prove that duplicate submissions, concurrent prompts, cancellation, stale and delayed results, authority-version changes, and attempt reuse produce zero additional Central PMS password calls. Three consecutive automatic validation cycles after authority loss cannot invoke a prompt, login, or reauthentication. Existing encryption, migration, statutory, payable-basis, receipt, printing, and reconciliation regressions remain mandatory.
 
 Shift and custody ownership are stored against the stable I-020 `UserReference`. Human-session bridge snapshots serialize durable `Open`/`Closed` status values as strings, matching the React contract used for own-shift presentation and custody enablement. A successful shift open or resume returns the reconciled durable state immediately; refresh and online restart reconstruction query the same ownership key and never treat another cashier's open state as local authority.
+
+Interrupted custody recovery is deliberately same-cashier. The owning cashier must establish fresh online authority, enter the actual closing cash amount, close their own custody, and then close their own shift. Expected closing cash is the opening amount plus durably recorded `CASH_RECEIVED` amounts; the actual amount and variance are immutable after close. A different cashier sees the conflict but cannot close, transfer, delete, or inherit it. No direct SQLite repair is a governed recovery mechanism.
 
 Manual Windows validation must use disposable identities and cover valid/invalid login, own and cross-cashier state, logout, expiry/revocation, same-user recovery, restart, outages, and cash/receipt/printing regression.
 

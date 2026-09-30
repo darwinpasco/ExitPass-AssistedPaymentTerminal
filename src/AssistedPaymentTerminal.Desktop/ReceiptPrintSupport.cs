@@ -37,7 +37,6 @@ public sealed record ReceiptPrinterSubmissionResult(
     public static ReceiptPrinterSubmissionResult Failed(string failureClassification, bool retryable, string safeMessage) =>
         new(false, null, failureClassification, retryable, safeMessage);
 }
-
 public interface IReceiptPrinter
 {
     Task<ReceiptPrinterAvailability> CheckAvailabilityAsync(
@@ -59,14 +58,9 @@ public static class ReceiptPrintDocumentBuilder
         DateTimeOffset? reprintAcceptedAt = null,
         TimeZoneInfo? siteTimeZone = null)
     {
-        var lineWidth = preview.PaperProfile.PaperWidthMm switch
-        {
-            80 => 46,
-            58 => 33,
-            _ => 32
-        };
-        var lines = new List<string>();
+        const int lineWidth = 48;
         var separator = new string('-', lineWidth);
+        var lines = new List<string>();
         string? reprintMarker = null;
 
         if (classification == TerminalCashReceiptPrintClassification.Reprint)
@@ -77,22 +71,11 @@ public static class ReceiptPrintDocumentBuilder
             }
 
             reprintMarker = $"REPRINTED: {FormatLocalReprintTimestamp(reprintAcceptedAt.Value, siteTimeZone ?? TimeZoneInfo.Local)}";
-            lines.Add(Center(reprintMarker, lineWidth));
+            lines.Add(reprintMarker);
             lines.Add(separator);
         }
 
-        foreach (var section in preview.Sections)
-        {
-            AppendSection(lines, section, lineWidth, separator);
-        }
-
-        lines.Add(separator);
-        lines.Add($"Fiscal doc: {preview.FiscalDocumentNumber ?? "Unavailable"}");
-        lines.Add($"Payload hash: {preview.AuthoritativePayloadHash ?? "Unavailable"}");
-        if (!string.IsNullOrWhiteSpace(preview.SemanticRequestHash))
-        {
-            lines.Add($"Semantic hash: {preview.SemanticRequestHash}");
-        }
+        lines.AddRange(CanonicalLines(preview.CanonicalPrintableText));
 
         return new ReceiptPrintDocument(
             preview.TerminalCashTenderId,
@@ -114,76 +97,16 @@ public static class ReceiptPrintDocumentBuilder
         return local.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
     }
 
-    private static void AppendSection(
-        List<string> lines,
-        ReceiptPreviewSection section,
-        int lineWidth,
-        string separator)
+    private static IReadOnlyList<string> CanonicalLines(string canonicalText)
     {
-        if (section.Title == "Sales Invoice Title")
+        var normalized = canonicalText.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n').ToList();
+        if (lines.Count > 0 && lines[^1].Length == 0)
         {
-            lines.Add(Center(section.Fields.FirstOrDefault()?.Value ?? "SALES INVOICE", lineWidth));
-            lines.Add(separator);
-            return;
+            lines.RemoveAt(lines.Count - 1);
         }
 
-        lines.Add(section.Title.ToUpperInvariant());
-        foreach (var field in section.Fields)
-        {
-            AppendField(lines, field, lineWidth);
-        }
-
-        foreach (var row in section.Rows)
-        {
-            foreach (var field in row.Fields)
-            {
-                AppendField(lines, field, lineWidth);
-            }
-        }
-
-        lines.Add(separator);
-    }
-
-    private static void AppendField(List<string> lines, ReceiptPreviewField field, int lineWidth)
-    {
-        var prefix = string.IsNullOrWhiteSpace(field.Label) ? "" : $"{field.Label}: ";
-        foreach (var line in Wrap($"{prefix}{field.Value}", lineWidth))
-        {
-            lines.Add(line);
-        }
-    }
-
-    private static string Center(string value, int lineWidth)
-    {
-        var text = value.Trim();
-        if (text.Length >= lineWidth)
-        {
-            return text;
-        }
-
-        var padding = Math.Max(0, (lineWidth - text.Length) / 2);
-        return new string(' ', padding) + text;
-    }
-
-    private static IEnumerable<string> Wrap(string value, int lineWidth)
-    {
-        var remaining = value.Trim();
-        while (remaining.Length > lineWidth)
-        {
-            var splitAt = remaining.LastIndexOf(' ', Math.Min(lineWidth, remaining.Length - 1));
-            if (splitAt <= 0)
-            {
-                splitAt = lineWidth;
-            }
-
-            yield return remaining[..splitAt].TrimEnd();
-            remaining = remaining[splitAt..].TrimStart();
-        }
-
-        if (remaining.Length > 0)
-        {
-            yield return remaining;
-        }
+        return lines;
     }
 }
 

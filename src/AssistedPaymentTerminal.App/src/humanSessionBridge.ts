@@ -37,6 +37,8 @@ export interface HumanSessionBridge {
   logout(correlationId: string): Promise<HumanSessionBridgeResult>;
   openOrResumeShift(correlationId: string): Promise<HumanSessionBridgeResult>;
   openOrResumeCustody(correlationId: string, openingCashAmount: number): Promise<HumanSessionBridgeResult>;
+  closeOwnCustody(correlationId: string, closingCashAmount: number): Promise<HumanSessionBridgeResult>;
+  closeOwnShift(correlationId: string): Promise<HumanSessionBridgeResult>;
   authorizeCash(correlationId: string): Promise<HumanSessionBridgeResult>;
 }
 
@@ -49,6 +51,8 @@ export function createWebViewHumanSessionBridge(): HumanSessionBridge {
     logout: (correlationId) => send("humanSession.logout", correlationId, {}),
     openOrResumeShift: (correlationId) => send("humanSession.openOrResumeShift", correlationId, {}),
     openOrResumeCustody: (correlationId, openingCashAmount) => send("humanSession.openOrResumeCustody", correlationId, { openingCashAmount }),
+    closeOwnCustody: (correlationId, closingCashAmount) => send("humanSession.closeOwnCustody", correlationId, { closingCashAmount }),
+    closeOwnShift: (correlationId) => send("humanSession.closeOwnShift", correlationId, {}),
     authorizeCash: (correlationId) => send("humanSession.authorizeCash", correlationId, {}),
   };
 }
@@ -122,6 +126,24 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
         },
       };
       return success("humanSession.openOrResumeCustody", id);
+    },
+    closeOwnCustody: async (id) => {
+      state = {
+        ...state,
+        activeCashCustodySession: null,
+        cashOperationsAuthorized: false,
+        safeMessage: "Cash custody closed. Closing cash and variance evidence were recorded.",
+      };
+      return success("humanSession.closeOwnCustody", id);
+    },
+    closeOwnShift: async (id) => {
+      state = {
+        ...state,
+        activeShift: null,
+        cashOperationsAuthorized: false,
+        safeMessage: "Cashier shift closed.",
+      };
+      return success("humanSession.closeOwnShift", id);
     },
     authorizeCash: async (id) => success("humanSession.authorizeCash", id),
   };

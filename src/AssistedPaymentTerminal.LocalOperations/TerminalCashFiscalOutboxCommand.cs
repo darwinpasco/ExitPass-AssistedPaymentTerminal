@@ -52,6 +52,8 @@ public sealed class TerminalCashFiscalOutboxCommand
 
     public string? SemanticHashSourceVersion { get; set; }
 
+    public bool ExitAuthorizationIssued { get; set; }
+
     public DateTimeOffset? RecordedAt { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }

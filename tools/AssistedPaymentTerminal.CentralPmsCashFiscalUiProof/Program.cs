@@ -123,7 +123,6 @@ static LocalJournalBridgeHandler CreateBridge(
     var journal = new CashJournalService(options);
     return new LocalJournalBridgeHandler(
         journal,
-        enabled: true,
         centralPmsCashSubmissionEnabled: true,
         centralPmsFiscalIssuanceEnabled: fiscalEnabled,
         centralPmsBaseUrl: baseUrl,

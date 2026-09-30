@@ -90,6 +90,48 @@ public sealed class CentralPmsCashSubmissionBridgeHandlerTests
     }
 
     [Fact]
+    public async Task ExplicitCompletionRecoversOnlyStaleTariffConflictWithReadbackFirst()
+    {
+        using var database = SubmissionBridgeTestDatabase.Create();
+        var command = await database.CreateReceivedTenderWithOutboxAsync();
+        var client = new ScriptedCentralPmsClient();
+        client.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Conflict(409, "STALE_TARIFF"));
+        var handler = database.CreateHandler(client);
+
+        using (var first = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback, "corr-stale", new
+        {
+            localCashTenderId = command.TerminalCashTenderId
+        }))
+        {
+            Assert.Equal("Conflict", first.RootElement.GetProperty("payload").GetProperty("command").GetProperty("status").GetString());
+        }
+
+        var attemptId = Guid.NewGuid();
+        var confirmationId = Guid.NewGuid();
+        client.EnqueueReadback(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentReadbackResponse>.NotFound(404, "MISSING_TERMINAL_CASH_TENDER_RECORD"));
+        client.EnqueueSubmit(CentralPmsTerminalCashPaymentResult<TerminalCashPaymentResponse>.Confirmed(
+            Success(command, attemptId, confirmationId, "CREATED"),
+            201));
+
+        using var recovered = await SendAsync(handler, LocalJournalBridgeCommand.CentralPmsCashSubmissionSubmitOrReadback, "corr-recover", new
+        {
+            localCashTenderId = command.TerminalCashTenderId
+        });
+
+        Assert.Equal(
+            [
+                TerminalCashPaymentOutboxOperationType.Submit,
+                TerminalCashPaymentOutboxOperationType.Readback,
+                TerminalCashPaymentOutboxOperationType.Submit
+            ],
+            client.Operations);
+        var mapped = recovered.RootElement.GetProperty("payload").GetProperty("command");
+        Assert.Equal("Confirmed", mapped.GetProperty("status").GetString());
+        Assert.Equal(attemptId, mapped.GetProperty("canonicalPaymentAttemptId").GetGuid());
+        Assert.Equal(confirmationId, mapped.GetProperty("canonicalPaymentConfirmationId").GetGuid());
+    }
+
+    [Fact]
     public async Task RejectedMapsSafely()
     {
         using var database = SubmissionBridgeTestDatabase.Create();
@@ -265,7 +307,6 @@ internal sealed class SubmissionBridgeTestDatabase : IDisposable
         var journal = new CashJournalService(options);
         return new LocalJournalBridgeHandler(
             journal,
-            enabled: true,
             centralPmsCashSubmissionEnabled: submissionEnabled,
             centralPmsBaseUrl: centralPmsBaseUrl,
             submissionService: new TerminalCashPaymentSubmissionService(client, options));

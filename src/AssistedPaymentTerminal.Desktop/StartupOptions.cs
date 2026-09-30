@@ -7,7 +7,6 @@ public sealed record StartupOptions(
     bool PreferPackagedAssets,
     bool SmokeCheckOnly,
     bool WebViewSmokeCheck = false,
-    bool EnableNonLiveCashCapture = false,
     string? LocalDatabasePath = null,
     bool EnableCentralPmsCashSubmission = false,
     bool EnableCentralPmsFiscalIssuance = false,
@@ -34,7 +33,6 @@ public sealed record StartupOptions(
         var preferPackagedAssets = false;
         var smokeCheckOnly = false;
         var webViewSmokeCheck = false;
-        var enableNonLiveCashCapture = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_NON_LIVE_CASH_CAPTURE"));
         var localDatabasePath = Environment.GetEnvironmentVariable("APT_LOCAL_DB_PATH");
         var enableCentralPmsCashSubmission = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION"));
         var enableCentralPmsFiscalIssuance = IsTrue(Environment.GetEnvironmentVariable("APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE"));
@@ -76,10 +74,6 @@ public sealed record StartupOptions(
             {
                 smokeCheckOnly = false;
                 webViewSmokeCheck = true;
-            }
-            else if (arg.Equals("--enable-non-live-cash-capture", StringComparison.OrdinalIgnoreCase))
-            {
-                enableNonLiveCashCapture = true;
             }
             else if (arg.StartsWith("--local-db-path=", StringComparison.OrdinalIgnoreCase))
             {
@@ -138,7 +132,6 @@ public sealed record StartupOptions(
             preferPackagedAssets,
             smokeCheckOnly,
             webViewSmokeCheck,
-            enableNonLiveCashCapture,
             string.IsNullOrWhiteSpace(localDatabasePath) ? null : localDatabasePath,
             enableCentralPmsCashSubmission,
             enableCentralPmsFiscalIssuance,

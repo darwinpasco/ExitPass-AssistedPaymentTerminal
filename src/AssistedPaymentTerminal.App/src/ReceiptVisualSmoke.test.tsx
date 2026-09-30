@@ -31,7 +31,7 @@ describe("ReceiptVisualSmokeShell", () => {
 
     render(<ReceiptVisualSmokeShell config={enabledConfig()} bridge={bridge} />);
 
-    expect(await screen.findByLabelText("Non-live cash custody capture")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Cash custody capture")).toBeInTheDocument();
     expect(screen.getByLabelText("Receipt visual smoke scenarios")).toBeInTheDocument();
     for (const scenario of receiptVisualSmokeScenarios) {
       expect(screen.getByRole("button", { name: scenario.label })).toBeInTheDocument();
@@ -62,8 +62,7 @@ describe("ReceiptVisualSmokeShell", () => {
 
     await waitFor(() => expect(screen.getByLabelText("Central PMS receipt availability")).toBeInTheDocument());
 
-    expect(screen.getByText(/State at local cash capture:/)).toBeInTheDocument();
-    expect(screen.getByText(/At this checkpoint, canonical payment had not yet been submitted/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Complete transaction" })).toBeInTheDocument();
     expect(screen.queryByText(/^Local cash only\./)).not.toBeInTheDocument();
     expect(screen.getByText("Canonical payment confirmed")).toBeInTheDocument();
     expect(screen.getByText("Fiscal document recorded")).toBeInTheDocument();
@@ -74,7 +73,7 @@ describe("ReceiptVisualSmokeShell", () => {
     const bridge = createSmokeBridge();
 
     render(<ReceiptVisualSmokeShell config={enabledConfig()} bridge={bridge} />);
-    await screen.findByLabelText("Non-live cash custody capture");
+    await screen.findByLabelText("Cash custody capture");
 
     expect(bridge.startTender).not.toHaveBeenCalled();
     expect(bridge.recordCashReceived).not.toHaveBeenCalled();
@@ -89,7 +88,6 @@ describe("ReceiptVisualSmokeShell", () => {
 function enabledConfig(): AptConfig {
   return {
     ...mode1Config(),
-    nonLiveCashCaptureEnabled: true,
     centralPmsCashSubmissionEnabled: true,
     centralPmsFiscalIssuanceEnabled: true,
     centralPmsReceiptRetrievalEnabled: true,
@@ -125,7 +123,6 @@ function createSmokeBridge({ existingTender = false }: { existingTender?: boolea
       correlationId,
       payload: {
         healthy: true,
-        enabled: true,
         databasePath: "D:\\Temp\\receipt-visual-smoke.db",
         cashDrawerEnabled: false,
         authorityWarning: "development fixture",

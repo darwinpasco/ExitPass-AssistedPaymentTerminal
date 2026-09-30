@@ -37,25 +37,24 @@ export type TransactionCompletionScenario = {
   id: TransactionCompletionScenarioId;
   label: string;
   expectedPosture: string;
-  autoAdvance: boolean;
 };
 
 export const transactionCompletionVisualSmokeScenarios: TransactionCompletionScenario[] = [
-  { id: "cash-received-awaiting-submission", label: "CASH_RECEIVED awaiting submission", expectedPosture: "Cash is in local custody; terminal-cash command has not been submitted.", autoAdvance: false },
-  { id: "submission-accepted", label: "Terminal-cash submission accepted", expectedPosture: "Payment command is accepted and payment finality is confirmed.", autoAdvance: false },
-  { id: "submission-retryable", label: "Terminal-cash submission retryable", expectedPosture: "Persisted tender remains retryable without creating another cash record.", autoAdvance: false },
-  { id: "payment-finality-pending", label: "Payment finality pending", expectedPosture: "Accepted command does not imply finality; readback remains pending.", autoAdvance: false },
-  { id: "payment-final-fiscal-pending", label: "Payment final, fiscal pending", expectedPosture: "Payment is final while fiscal issuance remains a separate pending stage.", autoAdvance: false },
-  { id: "fiscal-retryable", label: "Fiscal retryable", expectedPosture: "Fiscal status is retryable; no duplicate fiscal document is requested.", autoAdvance: false },
-  { id: "fiscal-recorded-receipt-unavailable", label: "Fiscal document recorded, receipt unavailable", expectedPosture: "Fiscal document identity is recorded while receipt retrieval remains retryable.", autoAdvance: false },
-  { id: "receipt-available", label: "Receipt available", expectedPosture: "Authoritative receipt presentation is available; ExitAuthorization readback remains contract-blocked.", autoAdvance: false },
-  { id: "terminal-payment-failure", label: "Terminal payment failure", expectedPosture: "Terminal payment failure requires support and does not advance fiscal or receipt state.", autoAdvance: false },
-  { id: "terminal-fiscal-failure", label: "Terminal fiscal failure", expectedPosture: "Payment finality remains distinct while fiscal terminal failure blocks completion.", autoAdvance: false },
-  { id: "receipt-malformed", label: "Receipt malformed or unsupported", expectedPosture: "Malformed receipt response is terminal/support-required; no fallback receipt is rendered.", autoAdvance: false },
-  { id: "restart-after-cash-received", label: "Restart after CASH_RECEIVED", expectedPosture: "Restart restores the same CASH_RECEIVED tender without resubmission.", autoAdvance: false },
-  { id: "restart-payment-pending", label: "Restart during payment pending", expectedPosture: "Restart preserves pending payment readback and the same tender identity.", autoAdvance: false },
-  { id: "restart-fiscal-pending", label: "Restart during fiscal pending", expectedPosture: "Restart preserves payment finality and pending fiscal state.", autoAdvance: false },
-  { id: "restart-receipt-available", label: "Restart with receipt available", expectedPosture: "Restart preserves authoritative receipt evidence and still does not infer ExitAuthorization.", autoAdvance: false },
+  { id: "cash-received-awaiting-submission", label: "CASH_RECEIVED awaiting submission", expectedPosture: "Cash is in local custody; terminal-cash command has not been submitted." },
+  { id: "submission-accepted", label: "Terminal-cash submission accepted", expectedPosture: "Payment command is accepted and payment finality is confirmed." },
+  { id: "submission-retryable", label: "Terminal-cash submission retryable", expectedPosture: "Persisted tender remains retryable without creating another cash record." },
+  { id: "payment-finality-pending", label: "Payment finality pending", expectedPosture: "Accepted command does not imply finality; readback remains pending." },
+  { id: "payment-final-fiscal-pending", label: "Payment final, fiscal pending", expectedPosture: "Payment is final while fiscal issuance remains a separate pending stage." },
+  { id: "fiscal-retryable", label: "Fiscal retryable", expectedPosture: "Fiscal status is retryable; no duplicate fiscal document is requested." },
+  { id: "fiscal-recorded-receipt-unavailable", label: "Fiscal document recorded, receipt unavailable", expectedPosture: "Fiscal document identity is recorded while receipt retrieval remains retryable." },
+  { id: "receipt-available", label: "Receipt available", expectedPosture: "Authoritative ExitAuthorization and receipt presentation are available." },
+  { id: "terminal-payment-failure", label: "Terminal payment failure", expectedPosture: "Terminal payment failure requires support and does not advance fiscal or receipt state." },
+  { id: "terminal-fiscal-failure", label: "Terminal fiscal failure", expectedPosture: "Payment finality remains distinct while fiscal terminal failure blocks completion." },
+  { id: "receipt-malformed", label: "Receipt malformed or unsupported", expectedPosture: "Malformed receipt response is terminal/support-required; no fallback receipt is rendered." },
+  { id: "restart-after-cash-received", label: "Restart after CASH_RECEIVED", expectedPosture: "Restart restores the same CASH_RECEIVED tender without resubmission." },
+  { id: "restart-payment-pending", label: "Restart during payment pending", expectedPosture: "Restart preserves pending payment readback and the same tender identity." },
+  { id: "restart-fiscal-pending", label: "Restart during fiscal pending", expectedPosture: "Restart preserves payment finality and pending fiscal state." },
+  { id: "restart-receipt-available", label: "Restart with receipt available", expectedPosture: "Restart preserves authoritative ExitAuthorization and receipt evidence." },
 ];
 
 export function shouldUseTransactionCompletionVisualSmoke(
@@ -71,7 +70,6 @@ export function TransactionCompletionVisualSmokeShell({ config }: { config: AptC
   const smokeConfig = useMemo<AptConfig>(
     () => ({
       ...config,
-      nonLiveCashCaptureEnabled: true,
       centralPmsCashSubmissionEnabled: true,
       centralPmsFiscalIssuanceEnabled: true,
       centralPmsReceiptRetrievalEnabled: true,
@@ -118,7 +116,7 @@ export function TransactionCompletionVisualSmokeShell({ config }: { config: AptC
       <section className="status-notice info" role="status" aria-label="Selected transaction completion visual smoke scenario">
         <h2>{scenario.label}</h2>
         <p>{scenario.expectedPosture}</p>
-        <p>ExitAuthorization readback scenarios are excluded because no APT-usable Central PMS ExitAuthorization readback contract is present.</p>
+        <p>ExitAuthorization is shown only from authoritative Central PMS fiscal readback.</p>
       </section>
 
       <div className="resolved-workflow">
@@ -144,7 +142,6 @@ export function TransactionCompletionVisualSmokeShell({ config }: { config: AptC
           cashAcceptanceReady
           bridge={bridge}
           developmentFixtureLocalCashTenderId={terminalCashTenderId}
-          autoAdvanceAfterCashReceived={scenario.autoAdvance}
         />
       </div>
     </main>
@@ -219,7 +216,6 @@ export function createTransactionCompletionVisualSmokeBridge(scenario: Transacti
   return {
     health: async (correlationId) => success("localJournal.health", correlationId, {
       healthy: true,
-      enabled: true,
       databasePath: "D:\\Temp\\transaction-completion-visual-smoke.db",
       cashDrawerEnabled: false,
       authorityWarning: "Development fixture; no live Central PMS, HikCentral, gate, or printer call is executed.",
@@ -349,6 +345,7 @@ function fiscalWithStatus(
     fiscalDocumentNumber: status === "Recorded" ? "SI-000001" : null,
     fiscalNumberAssignedAt: status === "Recorded" ? now : null,
     semanticHashSourceVersion: "v1",
+    exitAuthorizationIssued: status === "Recorded",
     recordedAt: status === "Recorded" ? now : null,
     nextRetryAt: status === "RetryPending" ? now : null,
     lastSafeHttpStatus: safeCode ? 409 : null,

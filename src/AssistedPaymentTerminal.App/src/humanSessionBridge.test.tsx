@@ -243,9 +243,9 @@ describe("APT human-session presentation boundary", () => {
     };
     render(<HumanSessionPanel state={state} bridge={bridgeStub()} onStateChange={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Synthetic Cashier" })).toBeInTheDocument();
-    expect(screen.getByText("Authentication locked for new cash")).toBeInTheDocument();
-    expect(screen.getByText(/Physical cash custody remains open/)).toBeInTheDocument();
+    expect(screen.getByText("Synthetic Cashier")).toBeInTheDocument();
+    expect(screen.getByTestId("cashier-header-shift")).toHaveTextContent("OPEN");
+    expect(screen.getByTestId("cashier-header-custody")).toHaveTextContent("OPEN");
     expect(document.body).not.toHaveTextContent(cashierGuid);
     expect(document.body).not.toHaveTextContent(sessionGuid);
     expect(screen.queryByText(/permission/i)).not.toBeInTheDocument();
@@ -280,9 +280,8 @@ describe("APT human-session presentation boundary", () => {
 
     await waitFor(() => expect(onStateChange).toHaveBeenCalledWith(blocked));
     rerender(<HumanSessionPanel state={blocked} bridge={bridgeStub()} onStateChange={onStateChange} />);
-    expect(screen.getByRole("alert")).toHaveTextContent("Sign out unavailable");
     expect(screen.getByRole("alert")).toHaveTextContent("Sign out is unavailable while you have open cash custody.");
-    expect(screen.getByText("Own custody").parentElement).toHaveTextContent("Open");
+    expect(screen.getByTestId("cashier-header-custody")).toHaveTextContent("OPEN");
   });
 
   it("automatically keeps active online authority current at the bounded validation cadence", async () => {
@@ -298,7 +297,8 @@ describe("APT human-session presentation boundary", () => {
     await validationTimer.run();
 
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Online cashier authority current")).toBeInTheDocument();
+    expect(screen.getByTestId("cashier-header-shift")).toHaveTextContent("OPEN");
+    expect(screen.getByTestId("cashier-header-custody")).toHaveTextContent("OPEN");
     expect(screen.getByTestId("apt-terminal-shell")).toHaveAttribute("data-app-ready", "true");
   });
 
@@ -313,7 +313,7 @@ describe("APT human-session presentation boundary", () => {
     };
     const { rerender } = render(<HumanSessionPanel state={noShiftAuthority} bridge={bridgeStub()} onStateChange={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Open or resume own shift" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open Shift" })).toBeDisabled();
 
     const noCustodyAuthority = {
       ...authenticatedState(),
@@ -323,7 +323,32 @@ describe("APT human-session presentation boundary", () => {
     };
     rerender(<HumanSessionPanel state={noCustodyAuthority} bridge={bridgeStub()} onStateChange={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Open or resume own custody" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open Cash Custody" })).toBeDisabled();
+  });
+
+  it("closes only owned custody before allowing the owned shift to close", async () => {
+    const custodyClosed = { ...authenticatedState(), activeCashCustodySession: null };
+    const shiftClosed = { ...custodyClosed, activeShift: null };
+    const closeOwnCustody = vi.fn(async () => successResult("humanSession.closeOwnCustody", custodyClosed));
+    const closeOwnShift = vi.fn(async () => successResult("humanSession.closeOwnShift", shiftClosed));
+    const onStateChange = vi.fn();
+    const bridge = bridgeStub({ closeOwnCustody, closeOwnShift });
+    const { rerender } = render(<HumanSessionPanel state={authenticatedState()} bridge={bridge} onStateChange={onStateChange} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+    expect(screen.getByRole("button", { name: "Close Cashier Shift" })).toBeDisabled();
+    await userEvent.clear(screen.getByLabelText("Actual Closing Cash"));
+    await userEvent.type(screen.getByLabelText("Actual Closing Cash"), "100.00");
+    await userEvent.click(screen.getByRole("button", { name: "Close Cash Custody" }));
+
+    await waitFor(() => expect(closeOwnCustody).toHaveBeenCalledWith(expect.any(String), 100));
+    expect(onStateChange).toHaveBeenCalledWith(custodyClosed);
+    rerender(<HumanSessionPanel state={custodyClosed} bridge={bridge} onStateChange={onStateChange} />);
+    expect(screen.getByRole("button", { name: "Close Cashier Shift" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close Cashier Shift" }));
+    await waitFor(() => expect(closeOwnShift).toHaveBeenCalledTimes(1));
+    expect(onStateChange).toHaveBeenCalledWith(shiftClosed);
   });
 
   it("recognizes an authenticated owned open shift and enables custody without a manual refresh", () => {
@@ -334,9 +359,9 @@ describe("APT human-session presentation boundary", () => {
 
     render(<HumanSessionPanel state={state} bridge={bridgeStub()} onStateChange={vi.fn()} />);
 
-    expect(screen.getByText("Own shift").parentElement).toHaveTextContent("Open");
-    expect(screen.getByRole("button", { name: "Own shift resumed" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Open or resume own custody" })).toBeEnabled();
+    expect(screen.getByTestId("cashier-header-shift")).toHaveTextContent("OPEN");
+    expect(screen.getByTestId("cashier-header-custody")).toHaveTextContent("CLOSED");
+    expect(screen.getByRole("button", { name: "Open Cash Custody" })).toBeEnabled();
   });
 
   it("does not let mock Central PMS mode bypass the host without an explicit loopback fixture flag", () => {
@@ -442,6 +467,8 @@ function bridgeStub(overrides: Partial<HumanSessionBridge> = {}): HumanSessionBr
     logout: result,
     openOrResumeShift: result,
     openOrResumeCustody: result,
+    closeOwnCustody: result,
+    closeOwnShift: result,
     authorizeCash: result,
     ...overrides,
   };

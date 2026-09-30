@@ -59,13 +59,13 @@ describe("TransactionCompletionVisualSmokeShell", () => {
     expect(screen.queryByRole("button", { name: "Available" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "ExitAuthorization pending" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "ExitAuthorization available" })).not.toBeInTheDocument();
-    expect(screen.getByText(/no APT-usable Central PMS ExitAuthorization readback contract is present/i)).toBeInTheDocument();
+    expect(screen.getByText(/ExitAuthorization is shown only from authoritative Central PMS fiscal readback/i)).toBeInTheDocument();
   });
 
   it("uses the production cash and state-machine panels from a CASH_RECEIVED boundary", async () => {
     render(<TransactionCompletionVisualSmokeShell config={mode1Config()} />);
 
-    expect(await screen.findByLabelText("Non-live cash custody capture")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Cash custody capture")).toBeInTheDocument();
     expect(screen.getByText("Local cash custody: cash received locally.")).toBeInTheDocument();
     expect(screen.getByLabelText("Cashier transaction state")).toBeInTheDocument();
     expect(screen.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Not Submitted");
@@ -73,16 +73,15 @@ describe("TransactionCompletionVisualSmokeShell", () => {
     expect(screen.queryByText("CASH_RECEIVED has not occurred.")).not.toBeInTheDocument();
   });
 
-  it("keeps receipt-available completion blocked by the missing ExitAuthorization readback contract", async () => {
+  it("marks receipt-available completion complete when authoritative fiscal readback includes ExitAuthorization", async () => {
     render(<TransactionCompletionVisualSmokeShell config={mode1Config()} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Receipt available" }));
 
     const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
     await waitFor(() => expect(statePanel.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available"));
-    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Requires Support");
-    expect(statePanel.getByText("Exit Authorization Readback Contract Missing")).toBeInTheDocument();
-    expect(document.body).not.toHaveTextContent("Transaction complete");
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Complete");
+    expect(statePanel.getByText("Exit Authorization Issued")).toBeInTheDocument();
   });
 
   it("maps payment-finality pending as accepted submission and transaction in progress", async () => {

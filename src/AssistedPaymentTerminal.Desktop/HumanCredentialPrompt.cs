@@ -7,8 +7,14 @@ namespace AssistedPaymentTerminal.Desktop;
 public enum HumanCredentialOperation
 {
     Login,
-    Reauthenticate
+    Reauthenticate,
+    ChangePassword
 }
+
+public sealed record HumanPasswordChangeCredentials(
+    string CurrentPassword,
+    string NewPassword,
+    string TotpCode);
 
 public sealed record HumanCredentialAttempt(
     Guid AttemptReference,
@@ -19,6 +25,9 @@ public sealed record HumanCredentialAttempt(
 public sealed class ExplicitHumanCredentialSubmission : IDisposable
 {
     private string? _credentialValue;
+    private string? _newCredentialValue;
+    private string? _confirmedCredentialValue;
+    private string? _totpCode;
     private int _consumed;
 
     internal ExplicitHumanCredentialSubmission(
@@ -26,13 +35,19 @@ public sealed class ExplicitHumanCredentialSubmission : IDisposable
         HumanCredentialOperation operation,
         long authorityVersion,
         string hostCorrelationId,
-        string credentialValue)
+        string credentialValue,
+        string? newCredentialValue = null,
+        string? confirmedCredentialValue = null,
+        string? totpCode = null)
     {
         AttemptReference = attemptReference;
         Operation = operation;
         AuthorityVersion = authorityVersion;
         HostCorrelationId = hostCorrelationId;
         _credentialValue = credentialValue;
+        _newCredentialValue = newCredentialValue;
+        _confirmedCredentialValue = confirmedCredentialValue;
+        _totpCode = totpCode;
     }
 
     public Guid AttemptReference { get; }
@@ -55,9 +70,37 @@ public sealed class ExplicitHumanCredentialSubmission : IDisposable
         return credentialValue.Length != 0;
     }
 
+    internal bool TryConsumePasswordChange(long authorityVersion, out HumanPasswordChangeCredentials? credentials)
+    {
+        credentials = null;
+        if (Operation != HumanCredentialOperation.ChangePassword
+            || authorityVersion != AuthorityVersion
+            || Interlocked.Exchange(ref _consumed, 1) != 0)
+        {
+            Dispose();
+            return false;
+        }
+
+        var current = Interlocked.Exchange(ref _credentialValue, null) ?? string.Empty;
+        var replacement = Interlocked.Exchange(ref _newCredentialValue, null) ?? string.Empty;
+        var confirmation = Interlocked.Exchange(ref _confirmedCredentialValue, null) ?? string.Empty;
+        var totp = Interlocked.Exchange(ref _totpCode, null) ?? string.Empty;
+        if (current.Length == 0 || replacement.Length == 0 || confirmation.Length == 0 || totp.Length == 0
+            || !string.Equals(replacement, confirmation, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        credentials = new HumanPasswordChangeCredentials(current, replacement, totp);
+        return true;
+    }
+
     public void Dispose()
     {
         Interlocked.Exchange(ref _credentialValue, null);
+        Interlocked.Exchange(ref _newCredentialValue, null);
+        Interlocked.Exchange(ref _confirmedCredentialValue, null);
+        Interlocked.Exchange(ref _totpCode, null);
         Interlocked.Exchange(ref _consumed, 1);
     }
 }
@@ -72,7 +115,20 @@ public sealed record HumanCredentialPromptResult(
     Guid AttemptReference,
     bool Accepted,
     string? Password,
-    string SubmitTrigger);
+    string SubmitTrigger,
+    string? NewPassword,
+    string? ConfirmPassword,
+    string? TotpCode)
+{
+    public HumanCredentialPromptResult(
+        Guid attemptReference,
+        bool accepted,
+        string? password,
+        string submitTrigger)
+        : this(attemptReference, accepted, password, submitTrigger, null, null, null)
+    {
+    }
+}
 
 public interface IHumanCredentialPrompt
 {
@@ -145,7 +201,10 @@ public sealed class HumanCredentialAttemptGate
                 attempt.Operation,
                 attempt.AuthorityVersion,
                 hostCorrelationId,
-                result.Password);
+                result.Password,
+                result.NewPassword,
+                result.ConfirmPassword,
+                result.TotpCode);
         }
     }
 
@@ -256,11 +315,34 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
             Margin = new Thickness(0, 6, 0, 16),
             MinWidth = 320
         };
-        AutomationProperties.SetName(passwordBox, "Cashier password");
+        var newPasswordBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 12), MinWidth = 320 };
+        var confirmPasswordBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 12), MinWidth = 320 };
+        var totpBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 16), MinWidth = 160, MaxLength = 12 };
+        AutomationProperties.SetName(passwordBox, request.Operation == HumanCredentialOperation.ChangePassword ? "Current temporary password" : "Cashier password");
+        AutomationProperties.SetName(newPasswordBox, "New password");
+        AutomationProperties.SetName(confirmPasswordBox, "Confirm new password");
+        AutomationProperties.SetName(totpBox, "Authenticator code");
+
+        var isPasswordChange = request.Operation == HumanCredentialOperation.ChangePassword;
+        var acceptButtonContent = isPasswordChange
+            ? "Change password and sign in"
+            : request.Operation == HumanCredentialOperation.Login
+                ? "Sign in"
+                : "Reauthenticate";
+        var promptText = isPasswordChange
+            ? "Change the temporary password before cashier authority can be established. Central PMS validates the password policy and authenticator code."
+            : request.Operation == HumanCredentialOperation.Login
+                ? "Enter the cashier password to sign in to Central PMS."
+                : "Enter the cashier password for fresh Central PMS authentication.";
+        var dialogTitle = isPasswordChange
+            ? "Change temporary password"
+            : request.Operation == HumanCredentialOperation.Login
+                ? "Cashier sign in"
+                : "Fresh authentication";
 
         var acceptButton = new Button
         {
-            Content = request.Operation == HumanCredentialOperation.Login ? "Sign in" : "Reauthenticate",
+            Content = acceptButtonContent,
             IsDefault = true,
             IsEnabled = false,
             MinWidth = 120,
@@ -284,9 +366,7 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
         var content = new StackPanel { Margin = new Thickness(24) };
         content.Children.Add(new TextBlock
         {
-            Text = request.Operation == HumanCredentialOperation.Login
-                ? "Enter the cashier password to sign in to Central PMS."
-                : "Enter the cashier password for fresh Central PMS authentication.",
+            Text = promptText,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 12)
         });
@@ -299,14 +379,28 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
                 Margin = new Thickness(0, 0, 0, 10)
             });
         }
-        var label = new Label { Content = "Password", Target = passwordBox, Padding = new Thickness(0) };
+        var label = new Label
+        {
+            Content = request.Operation == HumanCredentialOperation.ChangePassword ? "Current temporary password" : "Password",
+            Target = passwordBox,
+            Padding = new Thickness(0)
+        };
         content.Children.Add(label);
         content.Children.Add(passwordBox);
+        if (request.Operation == HumanCredentialOperation.ChangePassword)
+        {
+            content.Children.Add(new Label { Content = "New password", Target = newPasswordBox, Padding = new Thickness(0) });
+            content.Children.Add(newPasswordBox);
+            content.Children.Add(new Label { Content = "Confirm new password", Target = confirmPasswordBox, Padding = new Thickness(0) });
+            content.Children.Add(confirmPasswordBox);
+            content.Children.Add(new Label { Content = "Authenticator code", Target = totpBox, Padding = new Thickness(0) });
+            content.Children.Add(totpBox);
+        }
         content.Children.Add(buttons);
 
         var dialog = new Window
         {
-            Title = request.Operation == HumanCredentialOperation.Login ? "Cashier sign in" : "Fresh authentication",
+            Title = dialogTitle,
             Content = content,
             Width = 430,
             SizeToContent = SizeToContent.Height,
@@ -329,13 +423,22 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
         dialog.Loaded += (_, _) =>
         {
             passwordBox.Clear();
+            newPasswordBox.Clear();
+            confirmPasswordBox.Clear();
+            totpBox.Clear();
             enteredAfterPresentation = false;
             acceptButton.IsEnabled = false;
             passwordBox.Focus();
         };
-        passwordBox.PasswordChanged += (_, _) =>
+        void UpdateCredentialState()
         {
-            if (!dialog.IsLoaded || passwordBox.SecurePassword.Length == 0)
+            var complete = passwordBox.SecurePassword.Length > 0
+                && (request.Operation != HumanCredentialOperation.ChangePassword
+                    || (newPasswordBox.SecurePassword.Length > 0
+                        && confirmPasswordBox.SecurePassword.Length > 0
+                        && totpBox.SecurePassword.Length > 0
+                        && string.Equals(newPasswordBox.Password, confirmPasswordBox.Password, StringComparison.Ordinal)));
+            if (!dialog.IsLoaded || !complete)
             {
                 acceptButton.IsEnabled = false;
                 return;
@@ -354,7 +457,11 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
             }
             enteredAfterPresentation = true;
             acceptButton.IsEnabled = true;
-        };
+        }
+        passwordBox.PasswordChanged += (_, _) => UpdateCredentialState();
+        newPasswordBox.PasswordChanged += (_, _) => UpdateCredentialState();
+        confirmPasswordBox.PasswordChanged += (_, _) => UpdateCredentialState();
+        totpBox.PasswordChanged += (_, _) => UpdateCredentialState();
         acceptButton.Click += (_, _) =>
         {
             if (!enteredAfterPresentation || passwordBox.SecurePassword.Length == 0)
@@ -381,11 +488,21 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
         try
         {
             dialog.ShowDialog();
-            return new HumanCredentialPromptResult(request.AttemptReference, accepted, submittedCredential, submitTrigger);
+            return new HumanCredentialPromptResult(
+                request.AttemptReference,
+                accepted,
+                submittedCredential,
+                submitTrigger,
+                accepted && request.Operation == HumanCredentialOperation.ChangePassword ? newPasswordBox.Password : null,
+                accepted && request.Operation == HumanCredentialOperation.ChangePassword ? confirmPasswordBox.Password : null,
+                accepted && request.Operation == HumanCredentialOperation.ChangePassword ? totpBox.Password : null);
         }
         finally
         {
             passwordBox.Clear();
+            newPasswordBox.Clear();
+            confirmPasswordBox.Clear();
+            totpBox.Clear();
             lock (_sync)
             {
                 if (_activeAttemptReference == request.AttemptReference)

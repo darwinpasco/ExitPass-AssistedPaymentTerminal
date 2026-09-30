@@ -22,6 +22,16 @@ public sealed class CashCustodySession
 
     public DateTimeOffset OpenedAt { get; set; }
 
+    public decimal? ExpectedClosingCashAmount { get; set; }
+
+    public decimal? ClosingCashAmount { get; set; }
+
+    public decimal? VarianceAmount { get; set; }
+
+    public DateTimeOffset? ClosedAt { get; set; }
+
+    public string? ClosedByAuthenticatedCashierSessionReference { get; set; }
+
     public CashCustodySessionStatus Status { get; set; }
 
     public ICollection<CashTender> CashTenders { get; } = new List<CashTender>();

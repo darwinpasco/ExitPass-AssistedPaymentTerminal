@@ -129,7 +129,6 @@ export function PayableBasisVisualSmokeShell({
   const smokeConfig = useMemo<AptConfig>(
     () => ({
       ...config,
-      nonLiveCashCaptureEnabled: true,
       centralPmsConnectionMode: "mock",
       centralPmsCashSubmissionEnabled: false,
       centralPmsFiscalIssuanceEnabled: false,
@@ -290,7 +289,6 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
         correlationId,
         payload: {
           healthy: true,
-          enabled: true,
           databasePath: "controlled-payable-basis-visual-smoke.db",
           cashDrawerEnabled: false,
           authorityWarning: "Development-only payable-basis visual smoke fixture. No live Central PMS, printer, HikCentral, payment, fiscal, receipt, gate, or cash-drawer command is executed.",

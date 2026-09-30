@@ -6,11 +6,8 @@ import type {
   StatutoryDiscountDecisionSubmitRequest,
   StatutoryDiscountWorkflowState,
   StatutoryEntitlementType,
-  StatutoryOrdinanceAvailabilityResponse,
-  StatutoryOrdinanceAvailabilityViewState,
 } from "./api/centralPmsTypes";
 import { createCorrelationId } from "./correlation";
-import { cashierSafeSupportReference } from "./cashierSafeReferences";
 import { containsManualStatutoryIdMask, maskStatutoryId } from "./statutoryIdMasking";
 import type { TerminalContext } from "./terminalContext";
 import { StatutoryEvidencePanel } from "./StatutoryEvidencePanel";
@@ -23,8 +20,7 @@ export type StatutoryDiscountPanelProps = {
   client: CentralPmsClient;
   context: TerminalContext;
   state: StatutoryDiscountWorkflowState;
-  ordinanceAvailability: StatutoryOrdinanceAvailabilityViewState;
-  onRetryAvailability: () => void;
+  availableEntitlements: readonly StatutoryEntitlementType[];
   onStateChange: (next: StatutoryDiscountWorkflowState) => void;
   onAppliedBasisReady: (decisionCommandId: string, response: StatutoryDiscountDecisionResponse, nextState: StatutoryDiscountWorkflowState) => Promise<void>;
   evidenceBridge?: StatutoryEvidenceBridge;
@@ -40,7 +36,7 @@ const defaultDraft = {
   attestationNotes: "",
 };
 
-export function StatutoryDiscountPanel({ basis, client, context, state, ordinanceAvailability, onRetryAvailability, onStateChange, onAppliedBasisReady, evidenceBridge = defaultEvidenceBridge }: StatutoryDiscountPanelProps) {
+export function StatutoryDiscountPanel({ basis, client, context, state, availableEntitlements, onStateChange, onAppliedBasisReady, evidenceBridge = defaultEvidenceBridge }: StatutoryDiscountPanelProps) {
   const [draft, setDraft] = useState(() => ({
     ...defaultDraft,
     entitlementType: state.entitlementType ?? defaultDraft.entitlementType,
@@ -59,16 +55,9 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
   const decisionId = state.statutoryDiscountDecisionCommandId;
   const applicationId = state.statutoryDiscountPayableBasisApplicationCommandId;
   const action = state.payableBasisReadinessAction;
-  const availableEntitlements = ordinanceAvailability.status === "ready"
-    ? (["SENIOR_CITIZEN", "PWD"] as const).filter((entitlementType) => availabilityFor(ordinanceAvailability, entitlementType).statutoryRequestAllowed)
-    : [];
   const selectedEntitlement = asEntitlementType(draft.entitlementType);
-  const selectedAvailability = selectedEntitlement && ordinanceAvailability.status === "ready"
-    ? availabilityFor(ordinanceAvailability, selectedEntitlement)
-    : null;
-  const selectedEntitlementAllowed = selectedAvailability?.classification === "AVAILABLE" && selectedAvailability.statutoryRequestAllowed;
+  const selectedEntitlementAllowed = Boolean(selectedEntitlement && availableEntitlements.includes(selectedEntitlement));
   const entitlementOptions = active && selectedEntitlement ? [selectedEntitlement] : availableEntitlements;
-  const retryAvailable = ordinanceAvailability.status === "ready" && (ordinanceAvailability.seniorCitizen.retryable || ordinanceAvailability.pwd.retryable);
   const maskedIdFromRawInput = maskStatutoryId(rawIdInput);
   const rawIdHasManualMask = containsManualStatutoryIdMask(rawIdInput);
   const maskedIdForSubmission = rawIdInput.trim() ? maskedIdFromRawInput : draft.maskedIdReference.trim();
@@ -102,7 +91,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
 
   function startDraft() {
     if (!selectedEntitlementAllowed) {
-      setMessage("Central PMS has not allowed a statutory request for the selected entitlement at this Site.");
+      setMessage("The selected statutory entitlement is not configured for this Site.");
       return;
     }
     const next = { status: "draft" as const, ...currentStateEvidence(state), ...draft, updatedAt: new Date().toISOString() };
@@ -123,7 +112,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
 
   async function submitDecision(applyPayableBasis: boolean) {
     if (!selectedEntitlementAllowed) {
-      setMessage("Authoritative ordinance coverage is required before a statutory request or application can be submitted.");
+      setMessage("The selected statutory entitlement is not configured for this Site.");
       return;
     }
     if (!client.submitStatutoryDiscountDecision) {
@@ -221,26 +210,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
           ? "Statutory payable basis is ready for Continue to Cash after immediate Central PMS revalidation."
           : "Statutory cash remains blocked until approval, APPLIED payable basis, amount acknowledgement, Central PMS readiness, local prerequisites, and immediate revalidation all pass."}
       </p>
-      <section className="ordinance-availability" aria-label="Statutory ordinance availability" data-testid="statutory-ordinance-availability">
-        <h4>Site ordinance availability</h4>
-        {ordinanceAvailability.status === "idle" && <p>Resolve a parking session before checking statutory parking coverage.</p>}
-        {ordinanceAvailability.status === "loading" && <p role="status">Checking authoritative Senior Citizen and PWD coverage for this Site...</p>}
-        {ordinanceAvailability.status === "ready" && (
-          <>
-            {ordinanceAvailability.restoredRefresh && <p>Recovered local state was advisory only. Central PMS was checked again after restart.</p>}
-            <dl className="central-pms-details ordinance-coverage-grid">
-              <AvailabilityRow label="Senior Citizen" response={ordinanceAvailability.seniorCitizen} testId="senior-citizen-ordinance-availability" />
-              <AvailabilityRow label="PWD" response={ordinanceAvailability.pwd} testId="pwd-ordinance-availability" />
-            </dl>
-            <p data-testid="ordinary-payment-preserved">
-              {ordinanceAvailability.seniorCitizen.ordinaryPaymentPreserved && ordinanceAvailability.pwd.ordinaryPaymentPreserved
-                ? "Ordinary payment remains available subject to its independent readiness checks."
-                : "Ordinary payment readiness must be resolved again with Central PMS."}
-            </p>
-            {retryAvailable && <button type="button" className="secondary-action" onClick={onRetryAvailability}>Retry ordinance availability</button>}
-          </>
-        )}
-      </section>
       {!active && (
         <div className="statutory-draft-actions">
           {availableEntitlements.length > 0 ? (
@@ -254,8 +223,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
               <p>No statutory request is active for this payable basis.</p>
               <button type="button" className="secondary-action" onClick={startDraft} disabled={!selectedEntitlementAllowed}>Start statutory request</button>
             </>
-          ) : ordinanceAvailability.status === "ready" ? (
-            <p data-testid="statutory-request-unavailable">No statutory request option is available for this Site. Ordinary payment remains separate.</p>
           ) : null}
         </div>
       )}
@@ -353,29 +320,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, ordinanc
   );
 }
 
-function AvailabilityRow({ label, response, testId }: { label: string; response: StatutoryOrdinanceAvailabilityResponse; testId: string }) {
-  const supportReference = cashierSafeSupportReference(response.supportReference);
-  return (
-    <div className="ordinance-coverage-row" data-testid={testId}>
-      <dt>{label}</dt>
-      <dd>
-        <strong>{friendly(response.classification)}</strong>
-        <span>{response.safeMessage}</span>
-        <span>Evaluated: {formatDate(response.evaluatedAt)}</span>
-        {supportReference && <span>Support reference: {supportReference}</span>}
-        <span>Retryable: {response.retryable ? "Yes" : "No"}</span>
-      </dd>
-    </div>
-  );
-}
-
-function availabilityFor(
-  availability: Extract<StatutoryOrdinanceAvailabilityViewState, { status: "ready" }>,
-  entitlementType: StatutoryEntitlementType,
-): StatutoryOrdinanceAvailabilityResponse {
-  return entitlementType === "SENIOR_CITIZEN" ? availability.seniorCitizen : availability.pwd;
-}
-
 function asEntitlementType(value: string): StatutoryEntitlementType | null {
   return value === "SENIOR_CITIZEN" || value === "PWD" ? value : null;
 }
@@ -384,11 +328,6 @@ function entitlementLabel(value: StatutoryEntitlementType): string {
   return value === "SENIOR_CITIZEN" ? "Senior citizen" : "Person with disability";
 }
 
-function formatDate(value?: string | null): string {
-  if (!value) return "Unavailable";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unavailable" : date.toLocaleString();
-}
 
 function buildDecisionRequest({
   basis,

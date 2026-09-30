@@ -53,6 +53,32 @@ internal static class TestRequests
             OpeningCashAmount: 1_000m,
             OpenedAt: DateTimeOffset.Parse("2026-07-15T00:00:00Z"));
 
+    public static CloseCashCustodySessionRequest CloseSession(
+        Guid cashCustodySessionId,
+        decimal closingCashAmount = 1_000m) =>
+        new(
+            CashCustodySessionId: cashCustodySessionId,
+            CashierId: "cashier-001",
+            AuthenticatedCashierSessionReference: "auth-session-close-001",
+            CashierShiftId: "shift-001",
+            TerminalId: "terminal-001",
+            SiteId: "11111111-1111-4111-8111-111111111111",
+            SiteGroupId: "22222222-2222-4222-8222-222222222222",
+            PosServerId: "pos-server-001",
+            ClosingCashAmount: closingCashAmount,
+            ClosedAt: DateTimeOffset.Parse("2026-07-15T08:00:00Z"));
+
+    public static CloseCashierShiftRequest CloseShift() =>
+        new(
+            CashierShiftId: "shift-001",
+            CashierId: "cashier-001",
+            AuthenticatedCashierSessionReference: "auth-session-close-001",
+            TerminalId: "terminal-001",
+            SiteId: "11111111-1111-4111-8111-111111111111",
+            SiteGroupId: "22222222-2222-4222-8222-222222222222",
+            PosServerId: "pos-server-001",
+            ClosedAt: DateTimeOffset.Parse("2026-07-15T08:01:00Z"));
+
     public static StartCashTenderRequest StartTender(
         Guid cashCustodySessionId,
         string parkingSessionId = "33333333-3333-4333-8333-333333333333",

@@ -152,6 +152,7 @@ Generated-client publication remains pending. This slice does not copy Central P
 ## Current Limitations
 
 - Full governed supervisor custody handover remains fail closed pending the owner-policy resolution for DR-08/DR-09.
+- An owning cashier with current online authority may close their own custody after recording closing cash and variance evidence, then close their own shift. Another cashier cannot perform that recovery or inherit the custody.
 - Physical printer and cash-drawer certification remain Controlled-UAT/hardware work; cash drawer capability remains optional and disabled by default.
 - No offline human login or cached authorization is available.
 - Mode 2 continuity behavior is refused at startup.

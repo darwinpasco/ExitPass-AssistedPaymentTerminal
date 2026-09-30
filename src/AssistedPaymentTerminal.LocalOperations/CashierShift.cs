@@ -20,5 +20,7 @@ public sealed class CashierShift
 
     public DateTimeOffset? ClosedAt { get; set; }
 
+    public string? ClosedByAuthenticatedCashierSessionReference { get; set; }
+
     public CashierShiftStatus Status { get; set; }
 }

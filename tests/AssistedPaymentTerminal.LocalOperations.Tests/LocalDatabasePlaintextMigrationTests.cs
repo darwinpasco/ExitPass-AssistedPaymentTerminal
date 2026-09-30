@@ -742,6 +742,12 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
             DROP TABLE terminal_cash_payable_basis_states;
             DROP TABLE cashier_shifts;
 
+            ALTER TABLE cash_custody_sessions DROP COLUMN ExpectedClosingCashAmount;
+            ALTER TABLE cash_custody_sessions DROP COLUMN ClosingCashAmount;
+            ALTER TABLE cash_custody_sessions DROP COLUMN VarianceAmount;
+            ALTER TABLE cash_custody_sessions DROP COLUMN ClosedAt;
+            ALTER TABLE cash_custody_sessions DROP COLUMN ClosedByAuthenticatedCashierSessionReference;
+
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountDecisionCommandId;
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountPayableBasisApplicationCommandId;
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountValidationId;
@@ -767,6 +773,8 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
             ALTER TABLE terminal_cash_receipt_retrieval_commands DROP COLUMN LastRetryable;
             ALTER TABLE terminal_cash_receipt_retrieval_attempts DROP COLUMN CentralPmsCorrelationId;
             ALTER TABLE terminal_cash_receipt_retrieval_attempts DROP COLUMN Retryable;
+
+            ALTER TABLE terminal_cash_fiscal_outbox_commands DROP COLUMN ExitAuthorizationIssued;
             """);
     }
 
