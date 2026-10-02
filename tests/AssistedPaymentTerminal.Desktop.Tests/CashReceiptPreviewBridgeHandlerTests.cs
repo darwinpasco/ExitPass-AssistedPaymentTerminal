@@ -57,18 +57,47 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         Assert.False(preview.GetProperty("hasPlaceholders").GetBoolean());
         Assert.Equal("Complete", preview.GetProperty("configurationCompleteness").GetString());
         Assert.Equal(receipt.AuthoritativePayloadHash, preview.GetProperty("authoritativePayloadHash").GetString());
-        var serialized = preview.GetProperty("sections").GetRawText();
-        Assert.Contains("GOVERNED REGISTERED BUSINESS NAME", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED TIN", serialized, StringComparison.Ordinal);
+        var serialized = preview.GetProperty("canonicalPrintableText").GetString()!;
+        Assert.Contains("ExitPass Parking Corporation", serialized, StringComparison.Ordinal);
+        Assert.Contains("VAT REG TIN", serialized, StringComparison.Ordinal);
+        Assert.Contains("123-456-789", serialized, StringComparison.Ordinal);
         Assert.Contains("GOVERNED PLATE NUMBER", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION NO.", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED PTU NO.", serialized, StringComparison.Ordinal);
-        Assert.Contains("GOVERNED PTU DATE ISSUED", serialized, StringComparison.Ordinal);
+        Assert.Contains("ACCR. NO.", serialized, StringComparison.Ordinal);
+        Assert.Contains("ACCR-0001", serialized, StringComparison.Ordinal);
+        Assert.Contains("PTU-0001", serialized, StringComparison.Ordinal);
+        Assert.Contains("GOVERNED SUPPLIER", serialized, StringComparison.Ordinal);
         Assert.Contains("PHP 0.00", serialized, StringComparison.Ordinal);
+        var canonicalLines = serialized.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        Assert.All(canonicalLines, line => Assert.True(line.Length <= 35, $"Canonical preview line exceeds 35 columns: '{line}'"));
+        Assert.Contains("Entry Time         2026-09-29 08:42", serialized, StringComparison.Ordinal);
+        Assert.Contains("Payment            2026-09-30 22:39", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("PHT", serialized, StringComparison.Ordinal);
+        Assert.Equal(1, canonicalLines.Count(line => line.Contains("THANK YOU FOR CHOOSING OUR SERVICE", StringComparison.Ordinal)));
         Assert.DoesNotContain("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("rawValue", serialized, StringComparison.Ordinal);
+        Assert.Equal("GOVERNED TICKET", preview.GetProperty("aptTicketNumber").GetString());
+        Assert.Equal(
+            AptTicketQrCode.CreateDataUrl("GOVERNED TICKET"),
+            preview.GetProperty("aptTicketQrCodeDataUrl").GetString());
+    }
+
+    [Fact]
+    public async Task PersistedOriginalPresentationVersionIsAccepted()
+    {
+        using var database = ReceiptBridgeTestDatabase.Create();
+        var receipt = await StoreAvailableReceiptAsync(database, complete: true);
+        await MutateReceiptAsync(database, receipt.TerminalCashTenderId, command =>
+            command.PresentationVersion = ReceiptPreviewContract.PersistedOriginalPresentationVersion);
+        var handler = database.CreateHandler(new ScriptedCentralPmsReceiptClient(), receiptPreviewEnabled: true);
+
+        using var response = await SendPreviewAsync(handler, receipt.TerminalCashTenderId, "corr-persisted-original");
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        var preview = response.RootElement.GetProperty("payload").GetProperty("preview");
+        Assert.Equal(
+            ReceiptPreviewContract.PersistedOriginalPresentationVersion,
+            preview.GetProperty("presentationVersion").GetString());
+        Assert.Contains("SALES INVOICE", preview.GetProperty("canonicalPrintableText").GetString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -338,7 +367,7 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
         {
             return new
             {
-                canonicalText = CanonicalPrintableText,
+                canonicalText = string.Empty,
                 presentation = new
                 {
                     sections = new[]
@@ -408,72 +437,77 @@ public sealed class CashReceiptPreviewBridgeHandlerTests
 
     internal static string CanonicalPrintableText { get; } = string.Join("\r\n",
     [
-        "          ExitPass Parking Corporation",
-        "             123 Sample Address",
+        " ExitPass Parking Corporation",
+        "      123 Sample Address",
         "",
-        "VAT REG TIN                      123-456-789",
-        "MIN                                  MIN-001",
-        "S/N                               POS-SN-001",
-        "Branch / Site               PITX Level 3",
-        "Parking Location            PITX Level 3",
-        "------------------------------------------------",
-        "                 SALES INVOICE",
-        "------------------------------------------------",
-        "                    ORIGINAL",
+        "VAT REG TIN            123-456-789",
+        "MIN                        MIN-001",
+        "S/N                     POS-SN-001",
+        "Branch / Site          PITX Level 3",
+        "Parking Location       PITX Level 3",
+        "--------------------------------",
+        "         SALES INVOICE",
+        "--------------------------------",
+        "            ORIGINAL",
         "",
-        "SI No                           SI-000001",
-        "Issued Date              2026-07-15 08:05",
-        "------------------------------------------------",
-        "                PARKING DETAILS",
-        "------------------------------------------------",
-        "Ticket Number              GOVERNED TICKET",
-        "Plate Number          GOVERNED PLATE NUMBER",
-        "Entry Time             GOVERNED ENTRY TIME",
-        "Payment              GOVERNED PAYMENT TIME",
-        "Duration                 GOVERNED DURATION",
-        "------------------------------------------------",
-        "                     ITEMS",
-        "------------------------------------------------",
-        "# Description      Qty        Unit       Amount",
-        " 1 Parking fee      1  PHP 125.00   PHP 125.00",
-        "Subtotal                         PHP 125.00",
-        "------------------------------------------------",
-        "                   DISCOUNTS",
-        "------------------------------------------------",
-        "Discount Reason                        NONE",
-        "Discount Amount                    PHP 0.00",
-        "------------------------------------------------",
-        "                 VAT BREAKDOWN",
-        "------------------------------------------------",
-        "VATable Sales                    PHP 125.00",
-        "VAT Amount                         PHP 0.00",
-        "VAT Exempt Sales                   PHP 0.00",
-        "Zero Rated Sales                   PHP 0.00",
-        "Total Amount                     PHP 125.00",
-        "------------------------------------------------",
-        "                PAYMENT DETAILS",
-        "------------------------------------------------",
-        "CASH                         PHP 150.00",
-        "Total Paid                       PHP 150.00",
-        "Change                            PHP 25.00",
-        "------------------------------------------------",
-        "        THIS SERVES AS YOUR SALES INVOICE",
-        "------------------------------------------------",
-        "              Customer Information",
-        "------------------------------------------------",
-        "NAME                        Juan Dela Cruz",
-        "ADDRESS                 123 Sample Street",
-        "TIN                      123-456-789-000",
-        "BUS. STYLE                         Retail",
-        "------------------------------------------------",
-        "       POS SOFTWARE SUPPLIER / DEVELOPER",
-        "------------------------------------------------",
-        "               GOVERNED SUPPLIER",
-        "TIN                         SUPPLIER-TIN",
-        "ACCR. NO.                    ACCR-0001",
-        "PTU                           PTU-0001",
-        "        THANK YOU FOR CHOOSING OUR SERVICE",
-        "                NOTHING FOLLOWS",
+        "SI No                     SI-000001",
+        "Issued Date        2026-09-30 22:40",
+        "--------------------------------",
+        "        PARKING DETAILS",
+        "--------------------------------",
+        "Ticket Number       GOVERNED TICKET",
+        "Plate Number",
+        "              GOVERNED PLATE NUMBER",
+        "Entry Time         2026-09-29 08:42",
+        "Payment            2026-09-30 22:39",
+        "Duration          GOVERNED DURATION",
+        "--------------------------------",
+        "             ITEMS",
+        "--------------------------------",
+        "Item                             1",
+        "Description           Parking fee",
+        "Quantity                         1",
+        "Unit Amount              PHP 125.00",
+        "Amount                   PHP 125.00",
+        "Subtotal                 PHP 125.00",
+        "--------------------------------",
+        "           DISCOUNTS",
+        "--------------------------------",
+        "Discount Reason                NONE",
+        "Discount Amount            PHP 0.00",
+        "--------------------------------",
+        "          VAT BREAKDOWN",
+        "--------------------------------",
+        "VATable Sales            PHP 125.00",
+        "VAT Amount                 PHP 0.00",
+        "VAT Exempt Sales           PHP 0.00",
+        "Zero Rated Sales           PHP 0.00",
+        "--------------------------------",
+        "        PAYMENT DETAILS",
+        "--------------------------------",
+        "Type                           CASH",
+        "Amount                   PHP 150.00",
+        "Total Paid               PHP 150.00",
+        "Change                    PHP 25.00",
+        "--------------------------------",
+        "THIS SERVES AS YOUR SALES INVOICE",
+        "Print Date         2026-09-30 22:40",
+        "--------------------------------",
+        "      Customer Information",
+        "--------------------------------",
+        "NAME                Juan Dela Cruz",
+        "ADDRESS           123 Sample Street",
+        "TIN              123-456-789-000",
+        "BUS. STYLE                 Retail",
+        "--------------------------------",
+        "POS SOFTWARE SUPPLIER / DEVELOPER",
+        "--------------------------------",
+        "        GOVERNED SUPPLIER",
+        "TIN                   SUPPLIER-TIN",
+        "ACCR. NO.                ACCR-0001",
+        "PTU                       PTU-0001",
+        "THANK YOU FOR CHOOSING OUR SERVICE",
+        "    ===== NOTHING FOLLOWS =====",
         ""
     ]);
 

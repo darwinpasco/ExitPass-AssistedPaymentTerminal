@@ -234,6 +234,74 @@ public sealed class TerminalCashFiscalOutboxTests
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task ReportingPeriodConfigurationFailurePerformsAuthoritativeReadbackWithoutAnotherPost()
+    {
+        using var database = TestDatabase.Create();
+        var command = await CreateFiscalCommandAsync(database);
+        var firstClient = new ScriptedCentralPmsFiscalClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashFiscalResult<TerminalCashFiscalIssuanceResponse>.Recorded(
+            ReportingPeriodUnavailable(command),
+            200));
+        var rejected = await new TerminalCashFiscalSubmissionService(firstClient, database.Options)
+            .SubmitOrReadbackFiscalAsync(command.Id);
+        Assert.Equal(TerminalCashFiscalCommandStatus.Rejected, rejected.Status);
+
+        await using var beforeContext = database.CreateService().CreateDbContext();
+        var cashReceivedCount = await beforeContext.CashTenderEvents
+            .CountAsync(value => value.EventType == CashTenderEventType.CashReceived);
+        var paymentCommandCount = await beforeContext.TerminalCashPaymentOutboxCommands.CountAsync();
+
+        var readbackClient = new ScriptedCentralPmsFiscalClient();
+        readbackClient.EnqueueReadback(CentralPmsTerminalCashFiscalResult<TerminalCashFiscalIssuanceResponse>.Recorded(
+            Recorded(command),
+            200));
+
+        var result = await new TerminalCashFiscalSubmissionService(readbackClient, database.Options)
+            .SubmitOrReadbackFiscalAsync(command.Id);
+
+        Assert.Equal(TerminalCashFiscalCommandStatus.Recorded, result.Status);
+        Assert.Equal([TerminalCashFiscalOperationType.Readback], readbackClient.Operations);
+        Assert.Empty(readbackClient.SubmittedIdempotencyKeys);
+        await using var afterContext = database.CreateService().CreateDbContext();
+        Assert.Equal(cashReceivedCount, await afterContext.CashTenderEvents
+            .CountAsync(value => value.EventType == CashTenderEventType.CashReceived));
+        Assert.Equal(paymentCommandCount, await afterContext.TerminalCashPaymentOutboxCommands.CountAsync());
+        Assert.Equal(2, await afterContext.TerminalCashFiscalAttempts.CountAsync(value => value.LocalFiscalCommandId == command.Id));
+        Assert.Single(await afterContext.TerminalCashReceiptRetrievalCommands
+            .Where(value => value.TerminalCashTenderId == command.TerminalCashTenderId)
+            .ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task UnresolvedReportingPeriodConfigurationFailureRemainsRejectedAndNeverPosts()
+    {
+        using var database = TestDatabase.Create();
+        var command = await CreateFiscalCommandAsync(database);
+        var firstClient = new ScriptedCentralPmsFiscalClient();
+        firstClient.EnqueueSubmit(CentralPmsTerminalCashFiscalResult<TerminalCashFiscalIssuanceResponse>.Recorded(
+            ReportingPeriodUnavailable(command),
+            200));
+        await new TerminalCashFiscalSubmissionService(firstClient, database.Options)
+            .SubmitOrReadbackFiscalAsync(command.Id);
+
+        var readbackClient = new ScriptedCentralPmsFiscalClient();
+        readbackClient.EnqueueReadback(CentralPmsTerminalCashFiscalResult<TerminalCashFiscalIssuanceResponse>.NotFound(
+            404,
+            "TERMINAL_CASH_FISCAL_ISSUANCE_NOT_FOUND"));
+
+        var result = await new TerminalCashFiscalSubmissionService(readbackClient, database.Options)
+            .SubmitOrReadbackFiscalAsync(command.Id);
+
+        Assert.Equal(TerminalCashFiscalCommandStatus.Rejected, result.Status);
+        Assert.Equal("FISCAL_ISSUANCE_FAILED_CONFIGURATION", result.FiscalIssuanceState);
+        Assert.Equal("fiscal_reporting_period_unavailable", result.LastSafeErrorCode);
+        Assert.Equal([TerminalCashFiscalOperationType.Readback], readbackClient.Operations);
+        Assert.Empty(readbackClient.SubmittedIdempotencyKeys);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task Http5xxPersistsRetryPending()
     {
         using var database = TestDatabase.Create();
@@ -409,6 +477,28 @@ public sealed class TerminalCashFiscalOutboxTests
             null,
             true,
             true,
+            false);
+
+    private static TerminalCashFiscalIssuanceResponse ReportingPeriodUnavailable(
+        TerminalCashFiscalOutboxCommand command) =>
+        new(
+            command.TerminalCashTenderId,
+            command.CanonicalPaymentAttemptId,
+            command.CanonicalPaymentConfirmationId,
+            Guid.Parse("77777777-7777-4777-8777-777777777777"),
+            "FISCAL_ISSUANCE_FAILED_CONFIGURATION",
+            "FAILED_CONFIGURATION",
+            null,
+            null,
+            null,
+            null,
+            DateTimeOffset.Parse("2026-09-30T14:39:48Z"),
+            DateTimeOffset.Parse("2026-09-30T14:39:49Z"),
+            Guid.Parse(command.FiscalCorrelationId),
+            "fiscal_reporting_period_unavailable",
+            "retry_after_configuration_correction",
+            true,
+            false,
             false);
 }
 

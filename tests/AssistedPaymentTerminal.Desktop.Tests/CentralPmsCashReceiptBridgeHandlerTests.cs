@@ -390,6 +390,7 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
         bool receiptPrintingEnabled = false,
         string? receiptPrinterName = null,
         IReceiptPrinter? receiptPrinter = null,
+        ICentralPmsTerminalCashReceiptReprintClient? receiptReprintClient = null,
         string? siteTimeZoneId = null,
         Func<DateTimeOffset>? utcNow = null)
     {
@@ -414,6 +415,7 @@ internal sealed class ReceiptBridgeTestDatabase : IDisposable
             receiptPrintingEnabled: receiptPrintingEnabled,
             receiptPrinterName: receiptPrinterName,
             receiptPrinter: receiptPrinter,
+            receiptReprintClient: receiptReprintClient,
             siteTimeZoneId: siteTimeZoneId,
             utcNow: utcNow);
     }

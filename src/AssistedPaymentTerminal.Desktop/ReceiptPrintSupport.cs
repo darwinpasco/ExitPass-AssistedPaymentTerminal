@@ -1,6 +1,8 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Printing;
-using System.Globalization;
+using System.Drawing.Text;
+using System.IO;
 using AssistedPaymentTerminal.LocalOperations;
 
 namespace AssistedPaymentTerminal.Desktop;
@@ -16,7 +18,9 @@ public sealed record ReceiptPrintDocument(
     DateTimeOffset? ReprintedAt,
     string? ReprintMarker,
     ReceiptPreviewPaperProfile PaperProfile,
-    IReadOnlyList<string> Lines);
+    IReadOnlyList<string> Lines,
+    string AptTicketNumber,
+    string AptTicketQrCodeDataUrl);
 
 public sealed record ReceiptPrinterAvailability(
     bool Available,
@@ -55,27 +59,25 @@ public static class ReceiptPrintDocumentBuilder
         ReceiptPreviewDocument preview,
         TerminalCashReceiptPrintClassification classification,
         int copySequence,
-        DateTimeOffset? reprintAcceptedAt = null,
-        TimeZoneInfo? siteTimeZone = null)
+        string canonicalText,
+        DateTimeOffset? reprintAcceptedAt = null)
     {
-        const int lineWidth = 48;
-        var separator = new string('-', lineWidth);
-        var lines = new List<string>();
-        string? reprintMarker = null;
-
-        if (classification == TerminalCashReceiptPrintClassification.Reprint)
+        if (string.IsNullOrWhiteSpace(canonicalText) || canonicalText.Contains('\0'))
         {
-            if (reprintAcceptedAt is null)
-            {
-                throw new InvalidOperationException("Reprint output requires the accepted reprint timestamp.");
-            }
-
-            reprintMarker = $"REPRINTED: {FormatLocalReprintTimestamp(reprintAcceptedAt.Value, siteTimeZone ?? TimeZoneInfo.Local)}";
-            lines.Add(reprintMarker);
-            lines.Add(separator);
+            throw new InvalidOperationException("Canonical Sales Invoice text is required for printing.");
         }
 
-        lines.AddRange(CanonicalLines(preview.CanonicalPrintableText));
+        if (classification == TerminalCashReceiptPrintClassification.Reprint && reprintAcceptedAt is null)
+        {
+            throw new InvalidOperationException("Governed reprint evidence is required for reprint output.");
+        }
+
+        var lines = CanonicalLines(canonicalText);
+        if (!lines.Any(IsNothingFollowsLine))
+            throw new InvalidOperationException("Canonical Sales Invoice text must contain the closing marker.");
+        if (string.IsNullOrWhiteSpace(preview.AptTicketNumber)
+            || string.IsNullOrWhiteSpace(preview.AptTicketQrCodeDataUrl))
+            throw new InvalidOperationException("The governed APT ticket QR code is required for printing.");
 
         return new ReceiptPrintDocument(
             preview.TerminalCashTenderId,
@@ -86,15 +88,11 @@ public static class ReceiptPrintDocumentBuilder
             classification,
             copySequence,
             reprintAcceptedAt,
-            reprintMarker,
+            ReprintMarker: null,
             preview.PaperProfile,
-            lines);
-    }
-
-    private static string FormatLocalReprintTimestamp(DateTimeOffset timestamp, TimeZoneInfo siteTimeZone)
-    {
-        var local = TimeZoneInfo.ConvertTime(timestamp, siteTimeZone);
-        return local.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            lines,
+            preview.AptTicketNumber,
+            preview.AptTicketQrCodeDataUrl);
     }
 
     private static IReadOnlyList<string> CanonicalLines(string canonicalText)
@@ -108,10 +106,15 @@ public static class ReceiptPrintDocumentBuilder
 
         return lines;
     }
+
+    internal static bool IsNothingFollowsLine(string line) =>
+        line.Contains("NOTHING FOLLOWS", StringComparison.Ordinal);
 }
 
 public sealed class WindowsReceiptPrinter : IReceiptPrinter
 {
+    internal const float PhysicalPrintFontScale = 1.0f;
+
     public Task<ReceiptPrinterAvailability> CheckAvailabilityAsync(
         string configuredPrinterName,
         CancellationToken cancellationToken = default)
@@ -167,9 +170,12 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
         {
             using var printDocument = new PrintDocument();
             printDocument.PrinterSettings.PrinterName = configuredPrinterName.Trim();
-            printDocument.DocumentName = $"ExitPass Sales Invoice {document.FiscalDocumentNumber}";
+            printDocument.DocumentName = $"ExitPass Sales Invoice {document.FiscalDocumentNumber} {document.Classification} #{document.CopySequence}";
+            printDocument.OriginAtMargins = true;
+            printDocument.DefaultPageSettings.Margins = ReceiptMargins();
+            printDocument.PrintController = new StandardPrintController();
+            ConfigureSingleThermalPage(printDocument, document);
 
-            var lineIndex = 0;
             printDocument.PrintPage += (_, args) =>
             {
                 if (args.Graphics is null)
@@ -178,18 +184,43 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
                     return;
                 }
 
-                using var font = new Font("Consolas", document.PaperProfile.PaperWidthMm == 80 ? 9.0f : 8.0f);
+                args.Graphics.PageUnit = GraphicsUnit.Pixel;
+                var contentBounds = ResolvePrintableBounds(
+                    args.MarginBounds,
+                    args.PageSettings.PrintableArea,
+                    args.Graphics.DpiX,
+                    args.Graphics.DpiY);
+                using var format = CreateCanonicalTextFormat();
+                var layout = CreatePhysicalLayout(args.Graphics, document.Lines, contentBounds.Width, format);
+                using var font = new Font("Consolas", layout.FontSizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
+                using var qrStream = new MemoryStream(AptTicketQrCode.DecodeDataUrl(document.AptTicketQrCodeDataUrl), writable: false);
+                using var qrImage = Image.FromStream(qrStream);
                 var lineHeight = font.GetHeight(args.Graphics);
-                var y = (float)args.MarginBounds.Top;
+                var y = contentBounds.Top;
+                var textBlockWidth = MeasureTextBlockWidth(args.Graphics, layout.Lines, font, format);
+                var x = contentBounds.Left + Math.Max(0, (contentBounds.Width - textBlockWidth) / 2);
+                args.Graphics.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
+                var qrPrinted = false;
 
-                while (lineIndex < document.Lines.Count && y + lineHeight < args.MarginBounds.Bottom)
+                for (var lineIndex = 0; lineIndex < layout.Lines.Count; lineIndex++)
                 {
-                    args.Graphics.DrawString(document.Lines[lineIndex], font, Brushes.Black, args.MarginBounds.Left, y);
+                    var line = layout.Lines[lineIndex];
+                    if (!qrPrinted && lineIndex == layout.QrInsertionLineIndex)
+                    {
+                        var qrSize = ResolveQrSize(contentBounds.Width, args.Graphics.DpiX);
+                        var qrX = contentBounds.Left + ((contentBounds.Width - qrSize) / 2);
+                        args.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+                        args.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                        args.Graphics.DrawImage(qrImage, qrX, y, qrSize, qrSize);
+                        y += qrSize + (lineHeight * 0.5f);
+                        qrPrinted = true;
+                    }
+
+                    args.Graphics.DrawString(line, font, Brushes.Black, x, y, format);
                     y += lineHeight;
-                    lineIndex++;
                 }
 
-                args.HasMorePages = lineIndex < document.Lines.Count;
+                args.HasMorePages = false;
             };
 
             printDocument.Print();
@@ -210,7 +241,235 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
                 "Sales Invoice submission to the Windows printer failed.");
         }
     }
+
+    internal static void ConfigureSingleThermalPage(PrintDocument printDocument, ReceiptPrintDocument document)
+    {
+        var pageSettings = printDocument.DefaultPageSettings;
+        var margins = ReceiptMargins();
+        pageSettings.Margins = margins;
+
+        using var graphics = printDocument.PrinterSettings.CreateMeasurementGraphics();
+        graphics.PageUnit = GraphicsUnit.Pixel;
+        var printableWidthHundredths = Math.Min(
+            pageSettings.PrintableArea.Width,
+            Math.Max(1, pageSettings.PaperSize.Width - margins.Left - margins.Right));
+        var contentWidth = HundredthsToPixels(
+            Math.Max(1, printableWidthHundredths - (2 * ThermalSafetyInset)),
+            graphics.DpiX);
+        using var format = CreateCanonicalTextFormat();
+        var layout = CreatePhysicalLayout(graphics, document.Lines, contentWidth, format);
+        using var font = new Font("Consolas", layout.FontSizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
+        var requiredHeight = CalculateRequiredContentHeight(
+            graphics,
+            layout.Lines.Count,
+            font,
+            ResolveQrSize(contentWidth, graphics.DpiX));
+        var requiredHeightHundredths = PixelsToHundredths(requiredHeight, graphics.DpiY);
+        var paperHeight = (int)Math.Ceiling(
+            requiredHeightHundredths + margins.Top + margins.Bottom + (2 * ThermalSafetyInset));
+
+        pageSettings.PaperSize = new PaperSize(
+            "ExitPass Receipt",
+            pageSettings.PaperSize.Width,
+            Math.Max(paperHeight, margins.Top + margins.Bottom + 1));
+        pageSettings.Margins = margins;
+    }
+
+    internal static Font CreateFittingMonospaceFont(
+        Graphics graphics,
+        IReadOnlyList<string> lines,
+        float availableWidth,
+        StringFormat? format = null)
+    {
+        var ownsFormat = format is null;
+        format ??= CreateCanonicalTextFormat();
+
+        try
+        {
+            for (var size = 14.0f; size >= 4.0f; size -= 0.05f)
+            {
+                var candidate = new Font("Consolas", size, FontStyle.Regular, GraphicsUnit.Point);
+                if (MeasureTextBlockWidth(graphics, lines, candidate, format) <= availableWidth)
+                {
+                    return candidate;
+                }
+
+                candidate.Dispose();
+            }
+
+            return new Font("Consolas", 4.0f, FontStyle.Regular, GraphicsUnit.Point);
+        }
+        finally
+        {
+            if (ownsFormat)
+            {
+                format.Dispose();
+            }
+        }
+    }
+
+    internal static ReceiptPhysicalLayout CreatePhysicalLayout(
+        Graphics graphics,
+        IReadOnlyList<string> canonicalLines,
+        float availableWidth,
+        StringFormat? format = null)
+    {
+        var ownsFormat = format is null;
+        format ??= CreateCanonicalTextFormat();
+
+        try
+        {
+            using var fittingFont = CreateFittingMonospaceFont(graphics, canonicalLines, availableWidth, format);
+            var enlargedSize = Math.Min(14.0f, fittingFont.SizeInPoints * PhysicalPrintFontScale);
+            using var enlargedFont = new Font("Consolas", enlargedSize, FontStyle.Regular, GraphicsUnit.Point);
+            var physicalLines = new List<string>();
+            var qrInsertionLineIndex = -1;
+            foreach (var canonicalLine in canonicalLines)
+            {
+                if (qrInsertionLineIndex < 0 && ReceiptPrintDocumentBuilder.IsNothingFollowsLine(canonicalLine))
+                {
+                    qrInsertionLineIndex = physicalLines.Count;
+                }
+
+                physicalLines.AddRange(WrapPhysicalLine(graphics, canonicalLine, enlargedFont, availableWidth, format));
+            }
+
+            return new ReceiptPhysicalLayout(enlargedSize, physicalLines, qrInsertionLineIndex);
+        }
+        finally
+        {
+            if (ownsFormat)
+            {
+                format.Dispose();
+            }
+        }
+    }
+
+    internal static IReadOnlyList<string> WrapPhysicalLine(
+        Graphics graphics,
+        string line,
+        Font font,
+        float availableWidth,
+        StringFormat format)
+    {
+        if (line.Length == 0)
+        {
+            return [string.Empty];
+        }
+
+        var wrapped = new List<string>();
+        var offset = 0;
+        while (offset < line.Length)
+        {
+            var remaining = line[offset..];
+            if (MeasureLineWidth(graphics, remaining, font, format) <= availableWidth)
+            {
+                wrapped.Add(remaining);
+                break;
+            }
+
+            var fittingLength = FindLargestFittingPrefix(
+                graphics,
+                remaining,
+                font,
+                availableWidth,
+                format);
+            wrapped.Add(remaining[..fittingLength]);
+            offset += fittingLength;
+        }
+
+        return wrapped;
+    }
+
+    private static int FindLargestFittingPrefix(
+        Graphics graphics,
+        string value,
+        Font font,
+        float availableWidth,
+        StringFormat format)
+    {
+        var low = 1;
+        var high = value.Length;
+        var best = 1;
+
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (MeasureLineWidth(graphics, value[..middle], font, format) <= availableWidth)
+            {
+                best = middle;
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return best;
+    }
+
+    private const float ThermalSafetyInset = 1f;
+
+    internal static Margins ReceiptMargins() => new(5, 5, 5, 5);
+
+    internal static float ResolveQrSize(float printableWidth, float dpi = 100f) =>
+        Math.Min(printableWidth * 0.56f, dpi * 1.1f);
+
+    internal static RectangleF ResolvePrintableBounds(
+        Rectangle marginBounds,
+        RectangleF printableArea,
+        float dpiX = 100f,
+        float dpiY = 100f)
+    {
+        var width = Math.Min(marginBounds.Width, printableArea.Width);
+        var height = Math.Min(marginBounds.Height, printableArea.Height);
+        return new RectangleF(
+            HundredthsToPixels(ThermalSafetyInset, dpiX),
+            HundredthsToPixels(ThermalSafetyInset, dpiY),
+            HundredthsToPixels(Math.Max(1, width - (2 * ThermalSafetyInset)), dpiX),
+            HundredthsToPixels(Math.Max(1, height - (2 * ThermalSafetyInset)), dpiY));
+    }
+
+    internal static float CalculateRequiredContentHeight(
+        Graphics graphics,
+        int lineCount,
+        Font font,
+        float qrSize) =>
+        (Math.Max(0, lineCount) * font.GetHeight(graphics)) + qrSize + (font.GetHeight(graphics) * 0.5f);
+
+    internal static float HundredthsToPixels(float hundredthsOfAnInch, float dpi) =>
+        hundredthsOfAnInch * dpi / 100f;
+
+    internal static float PixelsToHundredths(float pixels, float dpi) =>
+        pixels * 100f / dpi;
+
+    internal static StringFormat CreateCanonicalTextFormat()
+    {
+        var format = (StringFormat)StringFormat.GenericTypographic.Clone();
+        format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces;
+        return format;
+    }
+
+    internal static float MeasureTextBlockWidth(
+        Graphics graphics,
+        IReadOnlyList<string> lines,
+        Font font,
+        StringFormat format)
+    {
+        return lines.Count == 0
+            ? 0
+            : lines.Max(line => MeasureLineWidth(graphics, line, font, format));
+    }
+
+    private static float MeasureLineWidth(Graphics graphics, string line, Font font, StringFormat format) =>
+        graphics.MeasureString(line, font, int.MaxValue, format).Width;
 }
+
+internal sealed record ReceiptPhysicalLayout(
+    float FontSizeInPoints,
+    IReadOnlyList<string> Lines,
+    int QrInsertionLineIndex);
 
 public enum ControlledReceiptPrinterMode
 {

@@ -68,15 +68,16 @@ static async Task RunAutomatedProofAsync(string databasePath)
     var complete = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: true, paperWidthMm: "57").ConfigureAwait(false);
     Require(complete.GetProperty("ok").GetBoolean(), "Complete authoritative preview did not succeed.");
     var completePreview = complete.GetProperty("payload").GetProperty("preview");
-    var completeSections = completePreview.GetProperty("sections").GetRawText();
+    var completeCanonicalText = completePreview.GetProperty("canonicalPrintableText").GetString()
+        ?? throw new InvalidOperationException("Complete authoritative fixture omitted canonical printable text.");
     Require(!completePreview.GetProperty("hasPlaceholders").GetBoolean(), "Complete authoritative fixture still reported placeholders.");
     Require(completePreview.GetProperty("configurationCompleteness").GetString() == "Complete", "Complete authoritative fixture did not report complete configuration.");
-    Require(completeSections.Contains("GOVERNED REGISTERED BUSINESS NAME", StringComparison.Ordinal), "Actual governed registered business value was not displayed.");
-    Require(completeSections.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", StringComparison.Ordinal), "Actual BIR accreditation issued date was not displayed.");
-    Require(completeSections.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", StringComparison.Ordinal), "Actual BIR accreditation valid-until date was not displayed.");
-    Require(completeSections.Contains("GOVERNED PTU DATE ISSUED", StringComparison.Ordinal), "Actual PTU issued date was not displayed.");
-    Require(!completeSections.Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Placeholder was shown alongside actual registered business value.");
-    Require(!completeSections.Contains("[BIR ACCREDITATION VALID UNTIL]", StringComparison.Ordinal), "BIR validity placeholder was shown alongside actual value.");
+    Require(completeCanonicalText.Contains("GOVERNED REGISTERED BUSINESS NAME", StringComparison.Ordinal), "Actual governed registered business value was not displayed.");
+    Require(completeCanonicalText.Contains("GOVERNED BIR ACCREDITATION DATE ISSUED", StringComparison.Ordinal), "Actual BIR accreditation issued date was not displayed.");
+    Require(completeCanonicalText.Contains("GOVERNED BIR ACCREDITATION VALID UNTIL", StringComparison.Ordinal), "Actual BIR accreditation valid-until date was not displayed.");
+    Require(completeCanonicalText.Contains("GOVERNED PTU DATE ISSUED", StringComparison.Ordinal), "Actual PTU issued date was not displayed.");
+    Require(!completeCanonicalText.Contains("[REGISTERED BUSINESS NAME]", StringComparison.Ordinal), "Placeholder was shown alongside actual registered business value.");
+    Require(!completeCanonicalText.Contains("[BIR ACCREDITATION VALID UNTIL]", StringComparison.Ordinal), "BIR validity placeholder was shown alongside actual value.");
 
     var hash = completePreview.GetProperty("authoritativePayloadHash").GetString();
     foreach (var width in new string?[] { "57", "58", "80", "99" })
@@ -87,7 +88,7 @@ static async Task RunAutomatedProofAsync(string databasePath)
         var expectedWidth = width == "58" ? 58 : width == "80" ? 80 : 57;
         Require(payload.GetProperty("paperProfile").GetProperty("paperWidthMm").GetInt32() == expectedWidth, $"Width {width ?? "missing"} did not select the expected profile.");
         Require(payload.GetProperty("preview").GetProperty("authoritativePayloadHash").GetString() == hash, "Paper-width selection changed the authoritative payload hash.");
-        Require(payload.GetProperty("preview").GetProperty("sections").GetRawText() == completeSections, "Paper-width selection altered receipt facts.");
+        Require(payload.GetProperty("preview").GetProperty("canonicalPrintableText").GetString() == completeCanonicalText, "Paper-width selection altered canonical receipt text.");
     }
 
     var reopened = await PreviewAsync(databasePath, completeTenderId, receiptPreviewEnabled: true, paperWidthMm: "57").ConfigureAwait(false);
@@ -528,7 +529,30 @@ internal static class PreviewCanonicalFixture
         },
         JsonOptions);
 
-    private const string CanonicalPrintableText = "SALES INVOICE\r\nORIGINAL\r\nSI No                           SI-000001\r\n";
+    private const string CanonicalPrintableText =
+        "GOVERNED REGISTERED BUSINESS NAME\r\n" +
+        "GOVERNED REGISTERED BUSINESS ADDRESS\r\n" +
+        "TIN: GOVERNED TIN\r\n" +
+        "MIN: GOVERNED MACHINE IDENTIFICATION NUMBER\r\n" +
+        "S/N: GOVERNED POS SERIAL NUMBER\r\n" +
+        "Branch / Site: GOVERNED SITE\r\n" +
+        "Parking Location: GOVERNED PARKING LOCATION\r\n" +
+        "SALES INVOICE\r\n" +
+        "ORIGINAL\r\n" +
+        "SI No: SI-000001\r\n" +
+        "Ticket Number: GOVERNED TICKET\r\n" +
+        "Plate Number: GOVERNED PLATE NUMBER\r\n" +
+        "Entry Time: GOVERNED ENTRY TIME\r\n" +
+        "Payment: GOVERNED PAYMENT TIME\r\n" +
+        "Parking Duration: GOVERNED DURATION\r\n" +
+        "Payment Method: CASH\r\n" +
+        "GOVERNED BIR ACCREDITATION NO.\r\n" +
+        "GOVERNED BIR ACCREDITATION DATE ISSUED\r\n" +
+        "GOVERNED BIR ACCREDITATION VALID UNTIL\r\n" +
+        "GOVERNED PTU NO.\r\n" +
+        "GOVERNED PTU DATE ISSUED\r\n" +
+        "THANK YOU FOR CHOOSING OUR SERVICE\r\n" +
+        "NOTHING FOLLOWS\r\n";
 
     private static object[] CompleteSections() =>
     [

@@ -91,7 +91,7 @@ export const receiptVisualSmokeScenarios: ReceiptVisualSmokeScenario[] = [
     terminalCashTenderId: "eeeeeeee-eeee-4eee-8eee-eeeeeeee3002",
     ticketReference: "VISUAL-PRINT-REPRINT",
     parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3002",
-    expectedReceiptPosture: "After an original accepted print, later cashier prints show REPRINTED with the accepted reprint timestamp above SALES INVOICE.",
+    expectedReceiptPosture: "After an original accepted print, later cashier prints use the governed POS canonical REPRINT presentation.",
   },
   {
     id: "printer-unavailable",

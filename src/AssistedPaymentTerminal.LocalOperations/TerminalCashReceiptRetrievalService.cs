@@ -1,10 +1,19 @@
 using Microsoft.EntityFrameworkCore;
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed class TerminalCashReceiptRetrievalService
 {
+    private const string DynamicCanonicalTextPresentationVersion = "digital-sales-invoice-presentation-json-v1";
+    private const string PersistedOriginalCanonicalTextPresentationVersion =
+        "digital-sales-invoice-presentation-json-v2-persisted-original";
+    private const string PersistedOriginalCanonicalTextAuthority =
+        "persisted_original_electronic_journal";
+
     private static readonly string[] RecordedFiscalStates =
     [
         "FISCAL_ISSUANCE_RECORDED",
@@ -355,7 +364,13 @@ public sealed class TerminalCashReceiptRetrievalService
 
         var authoritativePayload = TerminalCashReceiptPayloadFactory.Serialize(payload.AuthoritativePresentation);
         var authoritativePayloadHash = TerminalCashReceiptPayloadFactory.ComputeHash(authoritativePayload);
-        if (!PresentationCanReplaceExisting(command, authoritativePayloadHash, payload.SemanticRequestHash))
+        if (!PresentationCanReplaceExisting(
+                command,
+                authoritativePayload,
+                authoritativePayloadHash,
+                payload.SemanticRequestHash,
+                payload.PresentationVersion,
+                payload.TemplateVersion))
         {
             command.Status = TerminalCashReceiptRetrievalStatus.Inconsistent;
             command.ResultClassification = "PRESENTATION_INTEGRITY_MISMATCH";
@@ -390,18 +405,157 @@ public sealed class TerminalCashReceiptRetrievalService
 
     private static bool PresentationCanReplaceExisting(
         TerminalCashReceiptRetrievalCommand command,
+        string newPayload,
         string newPayloadHash,
-        string? newSemanticRequestHash)
+        string? newSemanticRequestHash,
+        string? newPresentationVersion,
+        string? newTemplateVersion)
     {
         if (!string.IsNullOrWhiteSpace(command.AuthoritativePayloadHash) &&
             !string.Equals(command.AuthoritativePayloadHash, newPayloadHash, StringComparison.Ordinal))
         {
-            return false;
+            return IsCanonicalTextCompletion(
+                command,
+                newPayload,
+                newSemanticRequestHash,
+                newPresentationVersion,
+                newTemplateVersion) ||
+                IsPersistedOriginalCanonicalTextUpgrade(
+                    command,
+                    newPayload,
+                    newSemanticRequestHash,
+                    newPresentationVersion,
+                    newTemplateVersion);
         }
 
         return string.IsNullOrWhiteSpace(command.SemanticRequestHash)
             || string.IsNullOrWhiteSpace(newSemanticRequestHash)
             || string.Equals(command.SemanticRequestHash, newSemanticRequestHash, StringComparison.Ordinal);
+    }
+
+    private static bool IsPersistedOriginalCanonicalTextUpgrade(
+        TerminalCashReceiptRetrievalCommand command,
+        string newPayload,
+        string? newSemanticRequestHash,
+        string? newPresentationVersion,
+        string? newTemplateVersion)
+    {
+        if (string.IsNullOrWhiteSpace(command.AuthoritativePresentationJson) ||
+            !string.Equals(command.PresentationVersion, DynamicCanonicalTextPresentationVersion, StringComparison.Ordinal) ||
+            !string.Equals(newPresentationVersion, PersistedOriginalCanonicalTextPresentationVersion, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(command.SemanticRequestHash) ||
+            string.IsNullOrWhiteSpace(newSemanticRequestHash) ||
+            !string.Equals(command.SemanticRequestHash, newSemanticRequestHash, StringComparison.Ordinal) ||
+            !string.Equals(command.TemplateVersion, newTemplateVersion, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var existingDocument = JsonDocument.Parse(command.AuthoritativePresentationJson);
+            using var replacementDocument = JsonDocument.Parse(newPayload);
+            var replacement = replacementDocument.RootElement;
+            if (!TryGetPersistedOriginalCanonicalText(replacement, out var canonicalText) ||
+                !HasMatchingCanonicalTextHash(replacement, canonicalText))
+            {
+                return false;
+            }
+
+            return HaveEquivalentPersistedOriginalFacts(existingDocument.RootElement, replacement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetPersistedOriginalCanonicalText(JsonElement payload, out string canonicalText)
+    {
+        canonicalText = string.Empty;
+        return payload.ValueKind == JsonValueKind.Object &&
+               payload.TryGetProperty("canonicalTextAuthority", out var authority) &&
+               authority.ValueKind == JsonValueKind.String &&
+               string.Equals(authority.GetString(), PersistedOriginalCanonicalTextAuthority, StringComparison.Ordinal) &&
+               payload.TryGetProperty("canonicalText", out var canonicalTextElement) &&
+               canonicalTextElement.ValueKind == JsonValueKind.String &&
+               !string.IsNullOrWhiteSpace(canonicalText = canonicalTextElement.GetString() ?? string.Empty);
+    }
+
+    private static bool HasMatchingCanonicalTextHash(JsonElement payload, string canonicalText)
+    {
+        if (!payload.TryGetProperty("canonicalTextHash", out var canonicalTextHash) ||
+            canonicalTextHash.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalText));
+        var expected = $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
+        return string.Equals(canonicalTextHash.GetString(), expected, StringComparison.Ordinal);
+    }
+
+    private static bool HaveEquivalentPersistedOriginalFacts(JsonElement existing, JsonElement replacement)
+    {
+        if (existing.ValueKind != JsonValueKind.Object || replacement.ValueKind != JsonValueKind.Object ||
+            !HasCanonicalText(existing.GetRawText()))
+        {
+            return false;
+        }
+
+        var ignoredProperties = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "canonicalText",
+            "canonicalTextAuthority",
+            "canonicalTextHash",
+            "presentationVersion"
+        };
+        var existingFacts = existing.EnumerateObject()
+            .Where(property => !ignoredProperties.Contains(property.Name))
+            .ToDictionary(property => property.Name, property => property.Value.GetRawText(), StringComparer.Ordinal);
+        var replacementFacts = replacement.EnumerateObject()
+            .Where(property => !ignoredProperties.Contains(property.Name))
+            .ToDictionary(property => property.Name, property => property.Value.GetRawText(), StringComparer.Ordinal);
+
+        return existingFacts.Count == replacementFacts.Count &&
+               existingFacts.All(fact =>
+                   replacementFacts.TryGetValue(fact.Key, out var replacementFact) &&
+                   string.Equals(fact.Value, replacementFact, StringComparison.Ordinal));
+    }
+
+    private static bool IsCanonicalTextCompletion(
+        TerminalCashReceiptRetrievalCommand command,
+        string newPayload,
+        string? newSemanticRequestHash,
+        string? newPresentationVersion,
+        string? newTemplateVersion)
+    {
+        if (string.IsNullOrWhiteSpace(command.AuthoritativePresentationJson) ||
+            string.IsNullOrWhiteSpace(command.SemanticRequestHash) ||
+            string.IsNullOrWhiteSpace(newSemanticRequestHash) ||
+            !string.Equals(command.SemanticRequestHash, newSemanticRequestHash, StringComparison.Ordinal) ||
+            !string.Equals(command.PresentationVersion, newPresentationVersion, StringComparison.Ordinal) ||
+            !string.Equals(command.TemplateVersion, newTemplateVersion, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !HasCanonicalText(command.AuthoritativePresentationJson) && HasCanonicalText(newPayload);
+    }
+
+    private static bool HasCanonicalText(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            return document.RootElement.TryGetProperty("canonicalText", out var canonicalText) &&
+                   canonicalText.ValueKind == JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(canonicalText.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static async Task EnsureReceiptRetrievalSchemaAsync(

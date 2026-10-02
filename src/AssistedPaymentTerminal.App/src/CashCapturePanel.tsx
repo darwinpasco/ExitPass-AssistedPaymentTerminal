@@ -17,6 +17,7 @@ import {
   type LocalJournalBridge,
   type LocalJournalHealth,
   type LocalTenderReadback,
+  type ReceiptPrintDocument,
   type SalesInvoicePrintHistory,
   type SalesInvoicePrintHistoryDetail,
 } from "./localJournalBridge";
@@ -126,6 +127,7 @@ export function CashCapturePanel({
   const [completionStatus, setCompletionStatus] = useState<CompletionStatus>({ kind: "idle" });
   const [receiptPrintHistoryOpen, setReceiptPrintHistoryOpen] = useState(false);
   const [receiptPrintHistoryFilter, setReceiptPrintHistoryFilter] = useState<"All" | "Original" | "Reprint" | "Submitted" | "Failed" | "Requires confirmation">("All");
+  const [receiptPaperWidthMm, setReceiptPaperWidthMm] = useState<57 | 58 | 80>(config.receiptPaperWidthMm);
 
   const amountTendered = Number(amountTenderedText);
   const changeDue = Number.isFinite(amountTendered) ? Math.max(0, amountTendered - amountDue) : 0;
@@ -195,6 +197,11 @@ export function CashCapturePanel({
   const receiptCommand = receiptStatus.kind === "ready" ? receiptStatus.status.command : null;
   const receiptPreviewEligible = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided";
   const receiptPrintEligible = receiptPreviewEligible && config.receiptPrintingEnabled;
+  const receiptPrintAction = getReceiptPrintAction(
+    config.receiptPrintingEnabled,
+    config.receiptPrinterName,
+    receiptPrintStatus,
+  );
   const transactionState = buildCashierTransactionState({
     localTender: existingTender,
     centralPmsStatus,
@@ -637,24 +644,9 @@ export function CashCapturePanel({
       }
     }
 
-    if (config.receiptPrintingEnabled) {
-      const printCorrelationId = createCorrelationId();
-      const printResult = await bridge.submitCentralPmsCashReceiptPrint(printCorrelationId, existingTender.id);
-      if (!printResult.ok) {
-        setReceiptPrintStatus({ kind: "error", message: printResult.error.message, correlationId: printCorrelationId });
-        setCompletionStatus({ kind: "error", message: "Sales Invoice was issued but could not be printed." });
-        return;
-      }
-
-      const printStatusResult = await bridge.getCentralPmsCashReceiptPrintStatus(createCorrelationId(), existingTender.id);
-      if (printStatusResult.ok) {
-        setReceiptPrintStatus({ kind: "ready", status: printStatusResult.payload, correlationId: printCorrelationId, lastSubmit: printResult.payload });
-      }
-    }
-
     setCompletionStatus({
       kind: "success",
-      message: config.receiptPrintingEnabled ? "Exit authorization issued. Sales Invoice sent to the printer." : "Exit authorization issued. Sales Invoice is ready to print.",
+      message: "Exit authorization issued. Sales Invoice is ready to print.",
     });
   }
 
@@ -709,7 +701,7 @@ export function CashCapturePanel({
 
     const correlationId = createCorrelationId();
     setReceiptPrintStatus({ kind: "loading", message: "Preparing Sales Invoice for printer..." });
-    const result = await bridge.submitCentralPmsCashReceiptPrint(correlationId, existingTender.id);
+    const result = await bridge.submitCentralPmsCashReceiptPrint(correlationId, existingTender.id, receiptPaperWidthMm);
 
     if (result.ok) {
       const statusResult = await bridge.getCentralPmsCashReceiptPrintStatus(createCorrelationId(), existingTender.id);
@@ -882,7 +874,7 @@ export function CashCapturePanel({
           {transactionState.fiscalDocumentNumber && <p>Sales Invoice: {transactionState.fiscalDocumentNumber}</p>}
           {completionStatus.kind === "idle" && (
             <button type="button" onClick={() => void completeTransaction()}>
-              Get Exit Authorization &amp; Print Sales Invoice
+              Get Exit Authorization &amp; Sales Invoice
             </button>
           )}
           {completionStatus.kind === "loading" && <p role="status">{completionStatus.message}</p>}
@@ -923,16 +915,21 @@ export function CashCapturePanel({
 
       <ReceiptPreviewSurface
         status={receiptPreviewStatus}
+        authoritativePrintDocument={receiptPrintStatus.kind === "ready" ? receiptPrintStatus.lastSubmit?.printDocument : undefined}
         exitAuthorizationIssued={fiscalCommand?.exitAuthorizationIssued === true}
-        configuredPaperWidthMm={config.receiptPaperWidthMm}
+        selectedPaperWidthMm={receiptPaperWidthMm}
+        onPaperWidthChange={setReceiptPaperWidthMm}
         paperWidthWarning={config.receiptPaperWidthWarning}
+        printActionLabel={receiptPrintAction.label}
+        printActionEnabled={receiptPrintAction.canPrint}
+        onPrint={() => void printReceipt()}
         onClose={() => setReceiptPreviewStatus({ kind: "idle" })}
       />
 
       <ReceiptPrintPanel
         enabled={config.receiptPrintingEnabled}
         configuredPrinterName={config.receiptPrinterName}
-        configuredPaperWidthMm={config.receiptPaperWidthMm}
+        configuredPaperWidthMm={receiptPaperWidthMm}
         receiptAvailable={receiptPreviewEligible}
         status={receiptPrintStatus}
         onPrint={() => void printReceipt()}
@@ -1682,20 +1679,10 @@ function ReceiptPrintPanel({
   status: ReceiptPrintStatus;
   onPrint: () => void;
 }) {
-  if (!enabled || !receiptAvailable) return null;
+  if (!receiptAvailable) return null;
 
-  const jobs = status.kind === "ready" ? status.status.jobs : [];
-  const latestJob = jobs.at(-1);
-  const originalAccepted = jobs.some((job) => job.status === "SubmittedToSpooler" || job.status === "Completed" || job.status === "UnknownAfterRestart");
-  const pending = latestJob?.status === "Requested" || latestJob?.status === "Preparing" || latestJob?.status === "SubmissionPending";
-  const retryable = latestJob?.retryable === true;
-  const buttonText = originalAccepted ? "Reprint Sales Invoice" : "Print Sales Invoice";
-  const canPrint =
-    status.kind !== "loading"
-    && !pending
-    && status.kind !== "error"
-    && Boolean(configuredPrinterName)
-    && (latestJob?.status !== "UnknownAfterRestart" || false);
+  const action = getReceiptPrintAction(enabled, configuredPrinterName, status);
+  const { latestJob, originalAccepted } = action;
 
   return (
     <section
@@ -1705,7 +1692,7 @@ function ReceiptPrintPanel({
     >
       <div className="central-pms-status-row">
         <h3>Sales Invoice</h3>
-        <strong>{latestJob?.statusLabel ?? (status.kind === "loading" ? status.message : "Ready to print")}</strong>
+        <strong>{latestJob?.statusLabel ?? (status.kind === "loading" ? status.message : enabled ? "Ready to print" : "Printer not configured")}</strong>
       </div>
 
       {status.kind === "error" && <p className="cash-error">{status.message}</p>}
@@ -1713,9 +1700,11 @@ function ReceiptPrintPanel({
         <p>Print result requires confirmation. The terminal will not silently resubmit this job after restart.</p>
       )}
 
-      <button className="secondary-action" type="button" disabled={!canPrint} onClick={onPrint}>
-        {retryable ? "Retry Sales Invoice Print" : buttonText}
+      <button className="primary-action" type="button" disabled={!action.canPrint} onClick={onPrint}>
+        {action.label}
       </button>
+
+      {!enabled && <p>Configure the terminal printer to enable direct Sales Invoice printing.</p>}
 
       <details className="support-details">
         <summary>Printer details</summary>
@@ -1729,13 +1718,45 @@ function ReceiptPrintPanel({
         {latestJob?.failureClassification && <p>Printer failure: {latestJob.failureClassification}</p>}
         {status.kind === "ready" && status.lastSubmit && <p>{status.lastSubmit.safeMessage}</p>}
         {status.kind === "ready" && status.lastSubmit && (
-          <article className="receipt-print-output" aria-label="Prepared print output">
-            {status.lastSubmit.printDocument.lines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+          <article
+            className={`receipt-paper receipt-paper-${configuredPaperWidthMm} receipt-print-output`}
+            aria-label="Prepared print output"
+          >
+            <CanonicalSalesInvoiceWithAptQr
+              canonicalText={status.lastSubmit.printDocument.lines.join("\n")}
+              ticketNumber={status.lastSubmit.printDocument.aptTicketNumber}
+              qrCodeDataUrl={status.lastSubmit.printDocument.aptTicketQrCodeDataUrl}
+            />
           </article>
         )}
       </details>
     </section>
   );
+}
+
+function getReceiptPrintAction(
+  enabled: boolean,
+  configuredPrinterName: string | null,
+  status: ReceiptPrintStatus,
+) {
+  const jobs = status.kind === "ready" ? status.status.jobs : [];
+  const latestJob = jobs.at(-1);
+  const originalAccepted = jobs.some((job) => job.status === "SubmittedToSpooler" || job.status === "Completed" || job.status === "UnknownAfterRestart");
+  const pending = latestJob?.status === "Requested" || latestJob?.status === "Preparing" || latestJob?.status === "SubmissionPending";
+  const retryable = latestJob?.retryable === true;
+
+  return {
+    latestJob,
+    originalAccepted,
+    label: retryable ? "Retry Sales Invoice Print" : originalAccepted ? "Reprint Sales Invoice" : "Print Sales Invoice",
+    canPrint:
+      enabled
+      && status.kind !== "loading"
+      && !pending
+      && status.kind !== "error"
+      && Boolean(configuredPrinterName)
+      && latestJob?.status !== "UnknownAfterRestart",
+  };
 }
 
 function SalesInvoicePrintHistoryPanel({
@@ -1900,15 +1921,25 @@ function SalesInvoicePrintHistoryPanel({
 
 function ReceiptPreviewSurface({
   status,
+  authoritativePrintDocument,
   exitAuthorizationIssued,
-  configuredPaperWidthMm,
+  selectedPaperWidthMm,
+  onPaperWidthChange,
   paperWidthWarning,
+  printActionLabel,
+  printActionEnabled,
+  onPrint,
   onClose,
 }: {
   status: ReceiptPreviewStatus;
+  authoritativePrintDocument?: ReceiptPrintDocument;
   exitAuthorizationIssued: boolean;
-  configuredPaperWidthMm: 57 | 58 | 80;
+  selectedPaperWidthMm: 57 | 58 | 80;
+  onPaperWidthChange: (paperWidthMm: 57 | 58 | 80) => void;
   paperWidthWarning: string | null;
+  printActionLabel: string;
+  printActionEnabled: boolean;
+  onPrint: () => void;
   onClose: () => void;
 }) {
   if (status.kind === "idle") {
@@ -1921,9 +1952,12 @@ function ReceiptPreviewSurface({
   const blockedDetail = status.kind === "blocked" ? status.detail : undefined;
   const profile = status.kind === "ready" ? status.preview.paperProfile : blockedDetail?.paperProfile;
   const command = status.kind === "ready" ? status.preview.command : blockedDetail?.command;
-  const width = profile?.paperWidthMm ?? configuredPaperWidthMm;
+  const width = selectedPaperWidthMm;
   const warning = status.kind === "ready" ? status.preview.paperWidthWarning : blockedDetail?.paperWidthWarning ?? paperWidthWarning;
   const blockedCode = placeholderBlocked ? "receipt_preview_incomplete_authoritative_payload" : status.kind === "blocked" ? status.code : "";
+  const preparedPrint = preview && authoritativePrintDocument?.fiscalDocumentId === preview.posFiscalDocumentId
+    ? authoritativePrintDocument
+    : undefined;
 
   return (
     <section className="receipt-preview-overlay" aria-label="Receipt preview">
@@ -1933,9 +1967,14 @@ function ReceiptPreviewSurface({
             <p className="eyebrow">Receipt preview</p>
             <h3>Read-only authoritative presentation</h3>
           </div>
-          <button className="secondary-action" type="button" onClick={onClose}>
-            Close preview
-          </button>
+          <div className="receipt-preview-header-actions">
+            <button className="primary-action" type="button" disabled={!printActionEnabled} onClick={onPrint}>
+              {printActionLabel}
+            </button>
+            <button className="secondary-action" type="button" onClick={onClose}>
+              Close preview
+            </button>
+          </div>
         </div>
 
         <div className="receipt-preview-primary-meta">
@@ -1945,6 +1984,19 @@ function ReceiptPreviewSurface({
           {preview && <span>Configuration completeness: {preview.configurationCompleteness}</span>}
           <span>Not printed</span>
           <span>{exitAuthorizationIssued ? "Exit Authorization: ISSUED" : "Exit authorization unavailable"}</span>
+        </div>
+        <div className="receipt-paper-width-selector" role="group" aria-label="Sales Invoice paper width">
+          {[57, 58, 80].map((paperWidthMm) => (
+            <button
+              key={paperWidthMm}
+              type="button"
+              className={paperWidthMm === selectedPaperWidthMm ? "active" : ""}
+              aria-pressed={paperWidthMm === selectedPaperWidthMm}
+              onClick={() => onPaperWidthChange(paperWidthMm as 57 | 58 | 80)}
+            >
+              {paperWidthMm} mm
+            </button>
+          ))}
         </div>
         {warning && <p className="receipt-preview-warning">{warning}</p>}
 
@@ -1994,25 +2046,43 @@ function ReceiptPreviewSurface({
               </dl>
             </details>
 
-            <article className={`receipt-paper ${preview.paperProfile.id}`} aria-label="Read-only receipt body">
-              {preview.sections.map((section) => (
-                <section className="receipt-paper-section" key={section.name}>
-                  <h4>{section.label}</h4>
-                  <dl className="receipt-paper-fields">
-                    {section.rows.map((row) => (
-                      <div key={row.key}>
-                        <dt>{row.label}</dt>
-                        <dd>{row.displayValue}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </section>
-              ))}
+            <article className={`receipt-paper receipt-paper-${selectedPaperWidthMm}`} aria-label="Read-only receipt body">
+              <CanonicalSalesInvoiceWithAptQr
+                canonicalText={preparedPrint?.lines.join("\n") ?? preview.canonicalPrintableText}
+                ticketNumber={preparedPrint?.aptTicketNumber ?? preview.aptTicketNumber}
+                qrCodeDataUrl={preparedPrint?.aptTicketQrCodeDataUrl ?? preview.aptTicketQrCodeDataUrl}
+              />
             </article>
           </>
         )}
       </div>
     </section>
+  );
+}
+
+function CanonicalSalesInvoiceWithAptQr({
+  canonicalText,
+  ticketNumber,
+  qrCodeDataUrl,
+}: {
+  canonicalText: string;
+  ticketNumber: string;
+  qrCodeDataUrl: string;
+}) {
+  const lines = canonicalText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const closingIndex = lines.findIndex((line) => line.includes("NOTHING FOLLOWS"));
+  if (closingIndex < 0) {
+    return <pre className="canonical-sales-invoice-text">{canonicalText}</pre>;
+  }
+
+  return (
+    <>
+      <pre className="canonical-sales-invoice-text">{lines.slice(0, closingIndex).join("\n")}</pre>
+      <figure className="apt-ticket-qr">
+        <img src={qrCodeDataUrl} alt={`Ticket ${ticketNumber} QR code`} />
+      </figure>
+      <pre className="canonical-sales-invoice-text">{lines.slice(closingIndex).join("\n")}</pre>
+    </>
   );
 }
 

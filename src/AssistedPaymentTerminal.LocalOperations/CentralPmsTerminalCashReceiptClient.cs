@@ -14,6 +14,98 @@ public interface ICentralPmsTerminalCashReceiptClient
         CancellationToken cancellationToken = default);
 }
 
+public interface ICentralPmsTerminalCashReceiptReprintClient
+{
+    Task<CentralPmsTerminalCashReceiptReprintResult> ReprintAsync(
+        Uri baseUri,
+        Guid terminalCashTenderId,
+        string operationKey,
+        string correlationId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record CentralPmsTerminalCashReceiptReprintResult(
+    bool Succeeded,
+    TerminalCashReceiptReprintResponse? Payload,
+    int? HttpStatus,
+    string? SafeErrorCode,
+    bool Retryable)
+{
+    public static CentralPmsTerminalCashReceiptReprintResult Success(
+        TerminalCashReceiptReprintResponse payload,
+        int httpStatus) => new(true, payload, httpStatus, null, false);
+
+    public static CentralPmsTerminalCashReceiptReprintResult Failure(
+        int? httpStatus,
+        string? safeErrorCode,
+        bool retryable) => new(false, null, httpStatus, safeErrorCode, retryable);
+}
+
+public sealed class CentralPmsTerminalCashReceiptReprintClient(HttpClient httpClient) : ICentralPmsTerminalCashReceiptReprintClient
+{
+    public async Task<CentralPmsTerminalCashReceiptReprintResult> ReprintAsync(
+        Uri baseUri,
+        Guid terminalCashTenderId,
+        string operationKey,
+        string correlationId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(baseUri, $"/v1/terminal-cash-payments/references/{terminalCashTenderId:D}/receipt-reprints"));
+            request.Headers.Accept.ParseAdd("application/json");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", operationKey);
+            request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId);
+            using var response = await httpClient.SendAsync(request, timeoutSource.Token).ConfigureAwait(false);
+            if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.Created)
+            {
+                var payload = await response.Content.ReadFromJsonAsync<TerminalCashReceiptReprintResponse>(
+                    TerminalCashPaymentPayloadFactory.JsonOptions,
+                    timeoutSource.Token).ConfigureAwait(false);
+                return payload is null
+                    ? CentralPmsTerminalCashReceiptReprintResult.Failure((int)response.StatusCode, "MALFORMED_REPRINT_RESPONSE", false)
+                    : CentralPmsTerminalCashReceiptReprintResult.Success(payload, (int)response.StatusCode);
+            }
+
+            var safeError = await ReadSafeErrorAsync(response, timeoutSource.Token).ConfigureAwait(false);
+            return CentralPmsTerminalCashReceiptReprintResult.Failure(
+                (int)response.StatusCode,
+                safeError?.ErrorCode,
+                safeError?.Retryable ?? (int)response.StatusCode >= 500);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return CentralPmsTerminalCashReceiptReprintResult.Failure(null, "TIMEOUT", true);
+        }
+        catch (HttpRequestException)
+        {
+            return CentralPmsTerminalCashReceiptReprintResult.Failure(null, "CENTRAL_PMS_UNAVAILABLE", true);
+        }
+    }
+
+    private static async Task<CentralPmsSafeError?> ReadSafeErrorAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<CentralPmsSafeError>(
+                new JsonSerializerOptions(JsonSerializerDefaults.Web),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+}
+
 public sealed class CentralPmsTerminalCashReceiptClient(HttpClient httpClient) : ICentralPmsTerminalCashReceiptClient
 {
     public async Task<CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>> RetrieveAsync(
