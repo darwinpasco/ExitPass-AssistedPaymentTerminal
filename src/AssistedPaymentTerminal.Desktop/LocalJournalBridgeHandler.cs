@@ -49,8 +49,7 @@ public sealed class LocalJournalBridgeHandler
     private readonly TerminalCashReceiptRetrievalService _receiptService;
     private readonly TerminalCashReceiptPrintJobService _printJobService;
     private readonly IReceiptPrinter _receiptPrinter;
-    private readonly TimeZoneInfo _siteTimeZone;
-    private readonly Func<DateTimeOffset> _utcNow;
+    private readonly ICentralPmsTerminalCashReceiptReprintClient _receiptReprintClient;
     private readonly IHumanCashAuthorization? _humanCashAuthorization;
     private readonly bool _allowDevelopmentSessionCommands;
 
@@ -69,6 +68,7 @@ public sealed class LocalJournalBridgeHandler
         string? receiptPrinterName = null,
         TerminalCashReceiptPrintJobService? printJobService = null,
         IReceiptPrinter? receiptPrinter = null,
+        ICentralPmsTerminalCashReceiptReprintClient? receiptReprintClient = null,
         string? siteTimeZoneId = null,
         Func<DateTimeOffset>? utcNow = null,
         IHumanCashAuthorization? humanCashAuthorization = null,
@@ -83,8 +83,8 @@ public sealed class LocalJournalBridgeHandler
         _receiptPaperSelection = ReceiptPreviewPaperProfiles.Select(receiptPaperWidthMm);
         _centralPmsBaseUrl = string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl.Trim();
         _receiptPrinterName = string.IsNullOrWhiteSpace(receiptPrinterName) ? null : receiptPrinterName.Trim();
-        _siteTimeZone = ResolveSiteTimeZone(siteTimeZoneId);
-        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _ = ResolveSiteTimeZone(siteTimeZoneId);
+        _ = utcNow;
         _humanCashAuthorization = humanCashAuthorization;
         _allowDevelopmentSessionCommands = allowDevelopmentSessionCommands;
         var localOptions = new LocalOperationsDatabaseOptions(
@@ -104,6 +104,7 @@ public sealed class LocalJournalBridgeHandler
             localOptions);
         _printJobService = printJobService ?? new TerminalCashReceiptPrintJobService(localOptions);
         _receiptPrinter = receiptPrinter ?? new WindowsReceiptPrinter();
+        _receiptReprintClient = receiptReprintClient ?? new CentralPmsTerminalCashReceiptReprintClient(new HttpClient());
     }
 
     private static TimeZoneInfo ResolveSiteTimeZone(string? siteTimeZoneId)
@@ -893,6 +894,9 @@ public sealed class LocalJournalBridgeHandler
         CancellationToken cancellationToken)
     {
         var payload = ReadPayload<CentralPmsCashReceiptPayload>(request);
+        var paperSelection = payload.PaperWidthMm is null
+            ? _receiptPaperSelection
+            : ReceiptPreviewPaperProfiles.Select(payload.PaperWidthMm.Value.ToString());
         var configuration = ReceiptPrintConfiguration();
 
         if (!_receiptPrintingEnabled)
@@ -927,7 +931,7 @@ public sealed class LocalJournalBridgeHandler
                 $"No durable receipt-retrieval record exists for local tender '{payload.LocalCashTenderId}'.");
         }
 
-        var build = ReceiptPreviewBuilder.Build(receipt, _receiptPaperSelection.Profile);
+        var build = ReceiptPreviewBuilder.Build(receipt, paperSelection.Profile);
         if (!build.Success)
         {
             return SerializeFailure(
@@ -937,8 +941,8 @@ public sealed class LocalJournalBridgeHandler
                 build.ErrorMessage!,
                 new CentralPmsCashReceiptPreviewBlockedDetail(
                     CentralPmsCashReceiptCommandSnapshot.FromEntity(receipt),
-                    _receiptPaperSelection.Profile,
-                    _receiptPaperSelection.Warning));
+                    paperSelection.Profile,
+                    paperSelection.Warning));
         }
 
         TerminalCashReceiptPrintJob job;
@@ -947,8 +951,8 @@ public sealed class LocalJournalBridgeHandler
             job = await _printJobService.RequestPrintJobAsync(
                     receipt,
                     _receiptPrinterName!,
-                    _receiptPaperSelection.Profile.PaperWidthMm,
-                    _receiptPaperSelection.Profile.Id,
+                    paperSelection.Profile.PaperWidthMm,
+                    paperSelection.Profile.Id,
                     request.CorrelationId,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
@@ -963,15 +967,6 @@ public sealed class LocalJournalBridgeHandler
         }
 
         job = await _printJobService.MarkPreparingAsync(job.Id, cancellationToken).ConfigureAwait(false);
-        var reprintAcceptedAt = job.Classification == TerminalCashReceiptPrintClassification.Reprint
-            ? _utcNow()
-            : (DateTimeOffset?)null;
-        var document = ReceiptPrintDocumentBuilder.Build(
-            build.Document!,
-            job.Classification,
-            job.CopySequence,
-            reprintAcceptedAt,
-            _siteTimeZone);
         var availability = await _receiptPrinter.CheckAvailabilityAsync(_receiptPrinterName!, cancellationToken).ConfigureAwait(false);
         if (!availability.Available)
         {
@@ -983,14 +978,60 @@ public sealed class LocalJournalBridgeHandler
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            return SerializeSuccess(
+            return SerializeFailure(
                 request.Command,
                 request.CorrelationId,
-                new CentralPmsCashReceiptPrintSubmitResponse(
-                    CentralPmsCashReceiptPrintJobSnapshot.FromEntity(job),
-                    document,
-                    availability.SafeMessage));
+                availability.FailureClassification ?? "PRINTER_UNAVAILABLE",
+                availability.SafeMessage);
         }
+
+        var canonicalText = build.Document!.CanonicalPrintableText;
+        DateTimeOffset? reprintAcceptedAt = null;
+        if (job.Classification == TerminalCashReceiptPrintClassification.Reprint)
+        {
+            if (_centralPmsBaseUrl is null || !Uri.TryCreate(_centralPmsBaseUrl, UriKind.Absolute, out var centralPmsBaseUri))
+            {
+                await _printJobService.MarkFailedAsync(
+                        job.Id,
+                        TerminalCashReceiptPrintJobStatus.PreparationFailed,
+                        "CENTRAL_PMS_CONFIGURATION_MISSING",
+                        retryable: false,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return SerializeFailure(request.Command, request.CorrelationId, "governed_reprint_unavailable", "Central PMS governed reprint is unavailable.");
+            }
+
+            var reprint = await _receiptReprintClient.ReprintAsync(
+                    centralPmsBaseUri,
+                    receipt.TerminalCashTenderId,
+                    $"apt-reprint-{job.Id:N}",
+                    request.CorrelationId,
+                    TimeSpan.FromSeconds(15),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!TryValidateGovernedReprint(reprint, receipt, out canonicalText, out reprintAcceptedAt))
+            {
+                await _printJobService.MarkFailedAsync(
+                        job.Id,
+                        TerminalCashReceiptPrintJobStatus.PreparationFailed,
+                        reprint.SafeErrorCode ?? "GOVERNED_REPRINT_FAILED",
+                        reprint.Retryable,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return SerializeFailure(
+                    request.Command,
+                    request.CorrelationId,
+                    "governed_reprint_failed",
+                    "The POS-governed Sales Invoice reprint could not be prepared safely.");
+            }
+        }
+
+        var document = ReceiptPrintDocumentBuilder.Build(
+            build.Document!,
+            job.Classification,
+            job.CopySequence,
+            canonicalText,
+            reprintAcceptedAt);
 
         var submitted = await _receiptPrinter.SubmitAsync(document, _receiptPrinterName!, cancellationToken).ConfigureAwait(false);
         var failedStatus = string.Equals(submitted.FailureClassification, "SPOOLER_OUTCOME_UNKNOWN", StringComparison.Ordinal)
@@ -1013,6 +1054,42 @@ public sealed class LocalJournalBridgeHandler
                 CentralPmsCashReceiptPrintJobSnapshot.FromEntity(job),
                 document,
                 submitted.SafeMessage));
+    }
+
+    private static bool TryValidateGovernedReprint(
+        CentralPmsTerminalCashReceiptReprintResult result,
+        TerminalCashReceiptRetrievalCommand receipt,
+        out string canonicalText,
+        out DateTimeOffset? committedAt)
+    {
+        canonicalText = string.Empty;
+        committedAt = null;
+        var payload = result.Payload;
+        if (!result.Succeeded || payload is null ||
+            payload.TerminalCashTenderId != receipt.TerminalCashTenderId ||
+            payload.PaymentAttemptId != receipt.CanonicalPaymentAttemptId ||
+            payload.PaymentConfirmationId != receipt.CanonicalPaymentConfirmationId ||
+            payload.FiscalIssuanceReferenceId != receipt.FiscalIssuanceReferenceId ||
+            payload.PosFiscalDocumentId != receipt.PosFiscalDocumentId ||
+            !string.Equals(payload.FiscalDocumentNumber, receipt.FiscalDocumentNumber, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(payload.CanonicalText) ||
+            payload.CanonicalText.Contains('\0') ||
+            payload.CanonicalText.Contains("ORIGINAL", StringComparison.Ordinal) ||
+            !payload.CanonicalText.Contains("REPRINT", StringComparison.Ordinal) ||
+            payload.Reprint.ValueKind != JsonValueKind.Object ||
+            !payload.Reprint.TryGetProperty("reprintLabelApplied", out var labelApplied) ||
+            labelApplied.ValueKind != JsonValueKind.True ||
+            !payload.Reprint.TryGetProperty("reprintStatus", out var status) ||
+            !string.Equals(status.GetString(), "committed", StringComparison.Ordinal) ||
+            !payload.Reprint.TryGetProperty("committedAt", out var committedAtElement) ||
+            !committedAtElement.TryGetDateTimeOffset(out var parsedCommittedAt))
+        {
+            return false;
+        }
+
+        canonicalText = payload.CanonicalText;
+        committedAt = parsedCommittedAt;
+        return true;
     }
 
     private static T ReadPayload<T>(LocalJournalBridgeRequest request)
@@ -1133,11 +1210,6 @@ public sealed class LocalJournalBridgeHandler
             return (false, "Sales Invoice printing is disabled.");
         }
 
-        if (!_receiptPreviewEnabled)
-        {
-            return (false, "Receipt preview must be enabled before Sales Invoice printing.");
-        }
-
         if (string.IsNullOrWhiteSpace(_receiptPrinterName))
         {
             return (false, "APT_RECEIPT_PRINTER_NAME is not configured for Sales Invoice printing.");
@@ -1222,7 +1294,7 @@ public sealed record CentralPmsCashSubmissionPayload(Guid LocalCashTenderId);
 
 public sealed record CentralPmsCashFiscalPayload(Guid LocalCashTenderId);
 
-public sealed record CentralPmsCashReceiptPayload(Guid LocalCashTenderId);
+public sealed record CentralPmsCashReceiptPayload(Guid LocalCashTenderId, int? PaperWidthMm = null);
 
 public sealed record CentralPmsCashReceiptFiscalDocumentPayload(Guid FiscalDocumentId);
 

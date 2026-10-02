@@ -5,6 +5,8 @@ namespace AssistedPaymentTerminal.LocalOperations;
 
 public sealed class TerminalCashFiscalSubmissionService
 {
+    private const string ReportingPeriodUnavailableCode = "fiscal_reporting_period_unavailable";
+
     private static readonly string[] RecordedFiscalStates =
     [
         "FISCAL_ISSUANCE_RECORDED",
@@ -120,14 +122,15 @@ public sealed class TerminalCashFiscalSubmissionService
             .SingleAsync(value => value.Id == localFiscalCommandId, cancellationToken)
             .ConfigureAwait(false);
 
+        var reportingPeriodRecoveryReadbackOnly = IsReportingPeriodRecoveryReadbackOnly(command);
         if (command.Status is TerminalCashFiscalCommandStatus.Recorded
-            or TerminalCashFiscalCommandStatus.Conflict
-            or TerminalCashFiscalCommandStatus.Rejected)
+            or TerminalCashFiscalCommandStatus.Conflict ||
+            command.Status == TerminalCashFiscalCommandStatus.Rejected && !reportingPeriodRecoveryReadbackOnly)
         {
             return command;
         }
 
-        if (command.Attempts.Count > 0)
+        if (command.Attempts.Count > 0 || reportingPeriodRecoveryReadbackOnly)
         {
             var readback = await _client.ReadbackAsync(
                 new Uri(command.CentralPmsTarget, UriKind.Absolute),
@@ -141,9 +144,11 @@ public sealed class TerminalCashFiscalSubmissionService
                 command,
                 TerminalCashFiscalOperationType.Readback,
                 readback,
+                reportingPeriodRecoveryReadbackOnly,
                 cancellationToken).ConfigureAwait(false);
 
-            if (readback.Outcome == TerminalCashFiscalAttemptOutcome.Recorded)
+            if (reportingPeriodRecoveryReadbackOnly ||
+                readback.Outcome == TerminalCashFiscalAttemptOutcome.Recorded)
             {
                 return command;
             }
@@ -172,6 +177,7 @@ public sealed class TerminalCashFiscalSubmissionService
             command,
             TerminalCashFiscalOperationType.Submit,
             submit,
+            preserveRejectedConfigurationFailure: false,
             cancellationToken).ConfigureAwait(false);
 
         return command;
@@ -277,8 +283,17 @@ public sealed class TerminalCashFiscalSubmissionService
         TerminalCashFiscalOutboxCommand command,
         TerminalCashFiscalOperationType operationType,
         CentralPmsTerminalCashFiscalResult<TerminalCashFiscalIssuanceResponse> result,
+        bool preserveRejectedConfigurationFailure,
         CancellationToken cancellationToken)
     {
+        var rejectedConfigurationState = preserveRejectedConfigurationFailure
+            ? new RejectedConfigurationState(
+                command.FiscalIssuanceState,
+                command.ResultClassification,
+                command.LastSafeHttpStatus,
+                command.LastSafeErrorCode,
+                command.NextRetryAt)
+            : null;
         var now = DateTimeOffset.UtcNow;
         var lastSequence = await dbContext.TerminalCashFiscalAttempts
             .Where(attempt => attempt.LocalFiscalCommandId == command.Id)
@@ -309,6 +324,16 @@ public sealed class TerminalCashFiscalSubmissionService
         });
 
         ApplyResult(command, operationType, result);
+        if (rejectedConfigurationState is not null && command.Status != TerminalCashFiscalCommandStatus.Recorded)
+        {
+            command.Status = TerminalCashFiscalCommandStatus.Rejected;
+            command.FiscalIssuanceState = rejectedConfigurationState.FiscalIssuanceState;
+            command.ResultClassification = rejectedConfigurationState.ResultClassification;
+            command.LastSafeHttpStatus = rejectedConfigurationState.LastSafeHttpStatus;
+            command.LastSafeErrorCode = rejectedConfigurationState.LastSafeErrorCode;
+            command.NextRetryAt = rejectedConfigurationState.NextRetryAt;
+        }
+
         if (command.Status == TerminalCashFiscalCommandStatus.Recorded)
         {
             await TerminalCashReceiptRetrievalService.EnsureCommandForRecordedFiscalAsync(
@@ -321,6 +346,18 @@ public sealed class TerminalCashFiscalSubmissionService
 
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private static bool IsReportingPeriodRecoveryReadbackOnly(TerminalCashFiscalOutboxCommand command) =>
+        command.Status == TerminalCashFiscalCommandStatus.Rejected &&
+        string.Equals(command.FiscalIssuanceState, "FISCAL_ISSUANCE_FAILED_CONFIGURATION", StringComparison.Ordinal) &&
+        string.Equals(command.LastSafeErrorCode, ReportingPeriodUnavailableCode, StringComparison.Ordinal);
+
+    private sealed record RejectedConfigurationState(
+        string? FiscalIssuanceState,
+        string? ResultClassification,
+        int? LastSafeHttpStatus,
+        string? LastSafeErrorCode,
+        DateTimeOffset? NextRetryAt);
 
     private static void ApplyResult(
         TerminalCashFiscalOutboxCommand command,

@@ -730,25 +730,7 @@ dl {
 }
 
 .receipt-print-output {
-  margin: 6px 0;
-  border: 1px solid #c8d3dc;
-  border-radius: 5px;
-  background: #fffdf8;
-  padding: 6px;
-  color: #111;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-.receipt-print-output p {
-  margin: 1px 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.receipt-print-output p:first-child {
-  font-weight: 900;
+  margin: 6px auto;
 }
 
 .print-history-expanded {
@@ -837,6 +819,14 @@ dl {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 6px;
+}
+
+.receipt-preview-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .receipt-preview-header h3 {
@@ -935,33 +925,63 @@ dl {
 }
 
 .receipt-paper {
+  box-sizing: border-box;
   max-width: 100%;
   margin: 8px auto 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   border: 1px solid #d8dde2;
   background: #fffdf8;
   color: #111;
-  font-family: "Segoe UI", Arial, sans-serif;
+  font-family: Consolas, "Courier New", monospace;
   line-height: 1.24;
   box-shadow: 0 4px 18px rgba(12, 25, 38, 0.16);
 }
 
+.receipt-paper-width-selector {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  gap: 2px;
+  margin: 6px 0 2px;
+  border: 1px solid #aeb9c2;
+  border-radius: 5px;
+  padding: 2px;
+  background: #eef2f4;
+}
+
+.receipt-paper-width-selector button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 3px;
+  padding: 5px 10px;
+  background: transparent;
+  color: #26343d;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.receipt-paper-width-selector button.active {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(12, 25, 38, 0.2);
+  color: #111;
+}
+
 .receipt-paper-57 {
-  width: min(57mm, 100%);
-  padding: 4mm;
-  font-size: 10.5px;
+  width: min(76mm, 100%);
+  padding: 3.33mm;
+  font-size: 3.25mm;
 }
 
 .receipt-paper-58 {
-  width: min(58mm, 100%);
-  padding: 4mm;
-  font-size: 10.8px;
+  width: min(77.33mm, 100%);
+  padding: 3.33mm;
+  font-size: 3.32mm;
 }
 
 .receipt-paper-80 {
-  width: min(80mm, 100%);
-  padding: 5mm;
-  font-size: 12px;
+  width: min(106.67mm, 100%);
+  padding: 6.67mm;
+  font-size: 4.38mm;
 }
 
 .receipt-paper-section {
@@ -1291,6 +1311,37 @@ dl {
   border: 1px solid #c7ced6;
   border-radius: 6px;
   background: #fff;
+}
+
+.canonical-sales-invoice-text {
+  box-sizing: border-box;
+  width: 35ch;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow-x: visible;
+  color: inherit;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: inherit;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: pre;
+}
+
+.apt-ticket-qr {
+  display: grid;
+  place-items: center;
+  margin: 1.5mm 0;
+}
+
+.apt-ticket-qr img {
+  display: block;
+  width: min(28mm, 58%);
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+}
+
+.receipt-paper-80 .apt-ticket-qr img {
+  width: min(30mm, 46%);
 }
 
 .cashier-header {

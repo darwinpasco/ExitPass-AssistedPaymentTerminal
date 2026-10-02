@@ -896,15 +896,19 @@ describe("CashCapturePanel", () => {
     expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
     const body = screen.getByLabelText("Read-only receipt body");
     expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body).toHaveTextContent("ACCR. NO.");
     expect(body).toHaveTextContent("SALES INVOICE");
     expect(body).toHaveTextContent("Parking fee - cash");
     expect(body).toHaveTextContent("VAT BREAKDOWN");
     expect(body).toHaveTextContent("THIS SERVES AS YOUR SALES INVOICE");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body).toHaveTextContent("ACCR-0001");
+    const qr = within(body).getByRole("img", { name: "Ticket 1474119573117 QR code" });
+    expect(qr).toHaveAttribute("src", "data:image/png;base64,cXItMTQ3NDExOTU3MzExNw==");
+    expect(qr.compareDocumentPosition(within(body).getByText(/NOTHING FOLLOWS/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
     expect(body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
-    expect(screen.queryByRole("button", { name: /^(Print Sales Invoice|Reprint Sales Invoice|Export|PDF|Email|SMS|Share)$/i })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Print Sales Invoice" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^(Reprint Sales Invoice|Export|PDF|Email|SMS|Share)$/i })).not.toBeInTheDocument();
   });
 
   it("prints only an available authoritative receipt and does not retrieve another presentation", async () => {
@@ -934,7 +938,9 @@ describe("CashCapturePanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Print Sales Invoice" }));
 
     expect(bridge.submitCentralPmsCashReceiptPrint).toHaveBeenCalledTimes(1);
+    expect(bridge.submitCentralPmsCashReceiptPrint).toHaveBeenCalledWith(expect.any(String), "tender-001", 57);
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
+    expect(bridge.getCentralPmsCashReceiptPreview).not.toHaveBeenCalled();
     expect(screen.getByText("Submitted to printer.")).toBeInTheDocument();
     expect(screen.getByText("Submitted to printer")).toBeInTheDocument();
     expect(screen.getByLabelText("Prepared print output")).toHaveTextContent("SALES INVOICE");
@@ -942,7 +948,29 @@ describe("CashCapturePanel", () => {
     expect(screen.getByLabelText("Prepared print output")).not.toHaveTextContent("SALES INVOICE DETAILS");
   });
 
-  it("renders durable REPRINTED marker above Sales Invoice for reprint output", async () => {
+  it("shows direct print as unavailable until a terminal printer is configured", async () => {
+    renderPanel({
+      config: receiptPreviewEnabledConfig({
+        receiptPrintingEnabled: false,
+        receiptPrinterName: null,
+      }),
+      bridge: new FakeBridge({
+        initialReadback: {
+          tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-001" }),
+          events: [],
+        },
+        centralStatus: centralStatus("Confirmed"),
+        fiscalStatus: fiscalStatus("Recorded"),
+        receiptStatus: receiptStatus("Available"),
+      }),
+    });
+
+    const printButton = await screen.findByRole("button", { name: "Print Sales Invoice" });
+    expect(printButton).toBeDisabled();
+    expect(screen.getByText("Configure the terminal printer to enable direct Sales Invoice printing.")).toBeInTheDocument();
+  });
+
+  it("renders the POS-governed canonical REPRINT document without a local marker", async () => {
     const reprintJob = receiptPrintJob({
       classification: "Reprint",
       classificationLabel: "Reprint",
@@ -983,13 +1011,47 @@ describe("CashCapturePanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Reprint Sales Invoice" }));
 
     const output = screen.getByLabelText("Prepared print output");
-    expect(output).toHaveTextContent("REPRINTED: 2026-07-24 15:42");
+    expect(output).toHaveTextContent("REPRINT");
     expect(output).toHaveTextContent("SALES INVOICE");
+    expect(output).not.toHaveTextContent("ORIGINAL");
+    expect(output).not.toHaveTextContent("REPRINTED:");
     expect(output).not.toHaveTextContent("SALES INVOICE DETAILS");
-    expect((output.textContent ?? "").indexOf("REPRINTED: 2026-07-24 15:42")).toBeLessThan(
-      (output.textContent ?? "").indexOf("SALES INVOICE"),
-    );
     expect(output).toHaveTextContent("Fiscal doc: SI-000001");
+  });
+
+  it("uses the POS-governed submitted document in the main preview without rewriting it", async () => {
+    const reprintJob = receiptPrintJob({
+      classification: "Reprint",
+      classificationLabel: "Reprint",
+      copySequence: 2,
+      submittedToSpoolerAt: "2026-10-01T04:00:00Z",
+    });
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-001" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview({ complete: true }),
+      receiptPrintStatus: receiptPrintStatus([
+        receiptPrintJob({ classification: "Original", classificationLabel: "Original", copySequence: 1 }),
+      ]),
+      receiptPrintSubmit: receiptPrintSubmit(reprintJob),
+    });
+    renderPanel({
+      config: receiptPreviewEnabledConfig({ receiptPrintingEnabled: true, receiptPrinterName: "APT Controlled Printer" }),
+      bridge,
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reprint Sales Invoice" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+
+    const preview = await screen.findByLabelText("Read-only receipt body");
+    expect(preview).toHaveTextContent("REPRINT");
+    expect(preview).not.toHaveTextContent("ORIGINAL");
+    expect(preview).not.toHaveTextContent("REPRINTED:");
   });
 
   it("shows read-only Sales Invoice print history summary, filters, and detail", async () => {
@@ -1088,7 +1150,7 @@ describe("CashCapturePanel", () => {
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
   });
 
-  it("opening receipt preview does not create a print job", async () => {
+  it("opens receipt preview without printing and its print button submits directly without another preview", async () => {
     const bridge = new FakeBridge({
       centralStatus: centralStatus("Confirmed"),
       fiscalStatus: fiscalStatus("Recorded"),
@@ -1107,8 +1169,17 @@ describe("CashCapturePanel", () => {
     await recordCashReceived();
     await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
 
-    expect(screen.getByLabelText("Read-only receipt body")).toBeInTheDocument();
+    const previewDialog = screen.getByRole("dialog");
+    expect(within(previewDialog).getByLabelText("Read-only receipt body")).toBeInTheDocument();
     expect(bridge.submitCentralPmsCashReceiptPrint).not.toHaveBeenCalled();
+    expect(bridge.getCentralPmsCashReceiptPreview).toHaveBeenCalledTimes(1);
+
+    const previewPrintButton = within(previewDialog).getByRole("button", { name: "Print Sales Invoice" });
+    await waitFor(() => expect(previewPrintButton).toBeEnabled());
+    await userEvent.click(previewPrintButton);
+
+    expect(bridge.submitCentralPmsCashReceiptPrint).toHaveBeenCalledTimes(1);
+    expect(bridge.getCentralPmsCashReceiptPreview).toHaveBeenCalledTimes(1);
   });
 
   it("uses authoritative values instead of corresponding placeholders when supplied", async () => {
@@ -1129,28 +1200,35 @@ describe("CashCapturePanel", () => {
     expect(document.body).toHaveTextContent("Configuration completeness: Complete");
     expect(screen.queryByText(/Development preview: some Sales Invoice fields are placeholders/)).not.toBeInTheDocument();
     expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
+    expect(body).toHaveTextContent("ACCR. NO.");
     expect(body.textContent ?? "").not.toMatch(/merchant Name|site Name|Fiscal Identity|Fiscal document no\.|display Amount|total Type|change Display|authoritativePresentation|rawValue/i);
     expect(body).toHaveTextContent("GOVERNED REGISTERED BUSINESS NAME");
-    expect(body).toHaveTextContent("GOVERNED PARKING LOCATION");
+    expect(body).toHaveTextContent("Parking Location");
     expect(body).toHaveTextContent("SI-000001");
-    expect(body).toHaveTextContent("Fiscal Document Number");
+    expect(body.textContent).toContain("SI No                     SI-000001");
+    expect(body).not.toHaveTextContent("Fiscal Document Number");
     expect(screen.queryByText("[REGISTERED BUSINESS NAME]")).not.toBeInTheDocument();
     expect(screen.queryByText("[TIN]")).not.toBeInTheDocument();
     expect(screen.queryByText("[PLATE NUMBER]")).not.toBeInTheDocument();
     expect(screen.queryByText("[SALES INVOICE FOOTER]")).not.toBeInTheDocument();
     expect(body).toHaveTextContent("GOVERNED TIN");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION NO.");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION DATE ISSUED");
-    expect(body).toHaveTextContent("GOVERNED BIR ACCREDITATION VALID UNTIL");
-    expect(body).toHaveTextContent("GOVERNED PTU NO.");
-    expect(body).toHaveTextContent("GOVERNED PTU DATE ISSUED");
+    expect(body.textContent).toContain("ACCR. NO.                ACCR-0001");
+    expect(body.textContent).toContain("PTU                       PTU-0001");
     expect(screen.queryByText("[BIR ACCREDITATION NO.]")).not.toBeInTheDocument();
     expect(screen.queryByText("[BIR ACCREDITATION DATE ISSUED]")).not.toBeInTheDocument();
     expect(screen.queryByText("[BIR ACCREDITATION VALID UNTIL]")).not.toBeInTheDocument();
     expect(screen.queryByText("[PTU DATE ISSUED]")).not.toBeInTheDocument();
     expect(body).toHaveTextContent("THIS SERVES AS YOUR SALES INVOICE");
     expect(body).toHaveTextContent("THANK YOU FOR CHOOSING OUR SERVICE");
+    expect(body.textContent).toContain("Entry Time         2026-09-29 08:42");
+    expect(body.textContent).toContain("Payment            2026-09-30 22:39");
+    expect(body).not.toHaveTextContent("PHT");
+    expect((body.textContent?.match(/THANK YOU FOR CHOOSING OUR SERVICE/g) ?? [])).toHaveLength(1);
+    expect(body).toHaveTextContent(/Item\s+1\s+Description\s+Parking fee - cash\s+Quantity\s+1\s+Unit Amount\s+PHP 125\.00\s+Amount\s+PHP 125\.00/);
+    expect(body).toHaveTextContent(/PAYMENT DETAILS\s+-+\s+Type\s+CASH\s+Amount\s+PHP 125\.00\s+Total Paid\s+PHP 125\.00/);
+    const canonicalLines = Array.from(body.querySelectorAll("pre"))
+      .flatMap((element) => (element.textContent ?? "").split("\n"));
+    expect(Math.max(...canonicalLines.map((line) => line.length))).toBeLessThanOrEqual(35);
     expect(body.textContent ?? "").not.toMatch(/Demo Corporation|Sample TIN|ABC 1234|ACC-001|PTU-001/i);
   });
 
@@ -1171,7 +1249,7 @@ describe("CashCapturePanel", () => {
     expect(await screen.findByText("Sales Invoice No. SI-000001")).toBeInTheDocument();
     expect(screen.getByText("Paper width: 57 mm")).toBeInTheDocument();
     expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
-    expect(screen.getByText("Not printed")).toBeInTheDocument();
+    expect(screen.getAllByText("Not printed")).not.toHaveLength(0);
     expect(screen.getByText("Exit Authorization: ISSUED")).toBeInTheDocument();
     const details = screen.getByText("Receipt technical details").closest("details");
     expect(details).not.toHaveAttribute("open");
@@ -1359,6 +1437,28 @@ describe("CashCapturePanel", () => {
     expect(factsByWidth[2]).toBe(factsByWidth[0]);
   });
 
+  it("presents one canonical Sales Invoice at 57 58 and 80 mm without changing its content", async () => {
+    const bridge = new FakeBridge({
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded"),
+      receiptStatus: receiptStatus("Available"),
+      receiptPreview: receiptPreview({ paperWidthMm: 80, complete: true }),
+    });
+    renderPanel({ config: receiptPreviewEnabledConfig({ receiptPaperWidthMm: 80 }), bridge });
+
+    await recordCashReceived();
+    await userEvent.click(await screen.findByRole("button", { name: "View Receipt Preview" }));
+    const body = await screen.findByLabelText("Read-only receipt body");
+    const canonicalText = body.textContent;
+
+    for (const width of [57, 58, 80] as const) {
+      await userEvent.click(screen.getByRole("button", { name: `${width} mm` }));
+      expect(body).toHaveClass(`receipt-paper-${width}`);
+      expect(body.textContent).toBe(canonicalText);
+      expect(screen.getByRole("button", { name: `${width} mm` })).toHaveAttribute("aria-pressed", "true");
+    }
+  });
+
   it("restart-loaded available receipt can be previewed without retrieval", async () => {
     const bridge = new FakeBridge({
       initialReadback: {
@@ -1404,7 +1504,13 @@ describe("CashCapturePanel", () => {
       receiptStatus: receiptStatus("RetryPending"),
       receiptRetrieveStatus: receiptStatus("Available"),
     });
-    renderPanel({ config: receiptEnabledConfig(), bridge });
+    renderPanel({
+      config: receiptEnabledConfig({
+        receiptPrintingEnabled: true,
+        receiptPrinterName: "APT Controlled Printer",
+      }),
+      bridge,
+    });
 
     await recordCashReceived();
 
@@ -1412,12 +1518,14 @@ describe("CashCapturePanel", () => {
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Sales Invoice" }));
 
     await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(bridge.retrieveOrCheckCentralPmsCashReceipt).toHaveBeenCalledTimes(1));
     expect(bridge.recordCashReceived).toHaveBeenCalledTimes(1);
+    expect(bridge.submitCentralPmsCashReceiptPrint).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Print Sales Invoice" })).toBeEnabled());
     expect(await screen.findByLabelText("Cashier transaction state")).toBeInTheDocument();
     expect(screen.getByTestId("terminal-cash-submission-state")).toHaveTextContent("Terminal Cash Submission Accepted");
     expect(screen.getByTestId("payment-finality-state")).toHaveTextContent("Payment Final");
@@ -1435,7 +1543,7 @@ describe("CashCapturePanel", () => {
     renderPanel({ config: receiptEnabledConfig(), bridge });
 
     await recordCashReceived();
-    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Sales Invoice" }));
 
     expect(await screen.findByText("Payment confirmation is pending. Try again.")).toBeInTheDocument();
     expect(bridge.submitOrReadbackCentralPmsCashSubmission).toHaveBeenCalledTimes(1);
@@ -1454,7 +1562,7 @@ describe("CashCapturePanel", () => {
     renderPanel({ config: receiptEnabledConfig(), bridge });
 
     await recordCashReceived();
-    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" }));
+    await userEvent.click(screen.getByRole("button", { name: "Get Exit Authorization & Sales Invoice" }));
 
     expect(await screen.findByText("Exit authorization has not been issued. Try again or contact support.")).toBeInTheDocument();
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).toHaveBeenCalledTimes(1);
@@ -1471,7 +1579,7 @@ describe("CashCapturePanel", () => {
     });
     renderPanel({ config: receiptEnabledConfig(), bridge });
 
-    expect(await screen.findByRole("button", { name: "Get Exit Authorization & Print Sales Invoice" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Get Exit Authorization & Sales Invoice" })).toBeEnabled();
     expect(bridge.submitOrReadbackCentralPmsCashSubmission).not.toHaveBeenCalled();
     expect(bridge.submitOrReadbackCentralPmsCashFiscal).not.toHaveBeenCalled();
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
@@ -1556,12 +1664,13 @@ function fiscalEnabledConfig(): AptConfig {
   });
 }
 
-function receiptEnabledConfig(): AptConfig {
+function receiptEnabledConfig(overrides: Partial<AptConfig> = {}): AptConfig {
   return enabledConfig({
     centralPmsCashSubmissionEnabled: true,
     centralPmsFiscalIssuanceEnabled: true,
     centralPmsReceiptRetrievalEnabled: true,
     centralPmsBaseUrl: "http://127.0.0.1:18080",
+    ...overrides,
   });
 }
 
@@ -1844,7 +1953,7 @@ class FakeBridge implements LocalJournalBridge {
     payload: this.receiptPrintStatus,
   }));
 
-  public submitCentralPmsCashReceiptPrint = vi.fn(async (correlationId: string): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>> => ({
+  public submitCentralPmsCashReceiptPrint = vi.fn(async (correlationId: string, _localCashTenderId: string, _paperWidthMm?: 57 | 58 | 80): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>> => ({
     ok: true,
     command: "centralPmsCashReceiptPrint.submit",
     correlationId,
@@ -2188,7 +2297,7 @@ function printHistoryDetail(job: CentralPmsCashReceiptPrintStatus["jobs"][number
 function receiptPrintSubmit(
   job: CentralPmsCashReceiptPrintStatus["jobs"][number] = receiptPrintJob(),
 ): CentralPmsCashReceiptPrintSubmit {
-  const reprintMarker = job.classification === "Reprint" ? "REPRINTED: 2026-07-24 15:42" : null;
+  const reprint = job.classification === "Reprint";
   return {
     job,
     safeMessage: "Submitted to printer.",
@@ -2201,11 +2310,11 @@ function receiptPrintSubmit(
       classification: job.classification,
       copySequence: job.copySequence,
       reprintedAt: job.classification === "Reprint" ? job.submittedToSpoolerAt : null,
-      reprintMarker,
+      reprintMarker: null,
       paperProfile: receiptPreview({ complete: true }).paperProfile,
-      lines: reprintMarker
-        ? [reprintMarker, "SALES INVOICE", "Fiscal doc: SI-000001"]
-        : ["SALES INVOICE", "Fiscal doc: SI-000001"],
+      lines: ["SALES INVOICE", reprint ? "REPRINT" : "ORIGINAL", "Fiscal doc: SI-000001", "NOTHING FOLLOWS"],
+      aptTicketNumber: "1474119573117",
+      aptTicketQrCodeDataUrl: "data:image/png;base64,cXItMTQ3NDExOTU3MzExNw==",
     },
   };
 }
@@ -2299,44 +2408,78 @@ function receiptPreview({
       paperProfile: profile,
       hasPlaceholders: !complete,
       configurationCompleteness: complete ? "Complete" : "Incomplete",
-      sections: complete ? [
-        {
-          name: "header",
-          label: "Header",
-          rows: [{ key: "header.documentTitle", label: "Document Title", displayValue: "SALES INVOICE", posture: "required" }],
-        },
-        {
-          name: "salesInvoiceHeaderSnapshot",
-          label: "Sales Invoice Header Snapshot",
-          rows: [
-            { key: "salesInvoiceHeaderSnapshot.registeredBusinessName", label: "Registered Business Name", displayValue: "GOVERNED REGISTERED BUSINESS NAME", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.tin", label: "TIN", displayValue: "GOVERNED TIN", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.parkingLocationDisplay", label: "Parking Location", displayValue: "GOVERNED PARKING LOCATION", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.birAccreditationNumber", label: "BIR Accreditation Number", displayValue: "GOVERNED BIR ACCREDITATION NO.", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.birAccreditationIssuedDate", label: "BIR Accreditation Issued Date", displayValue: "GOVERNED BIR ACCREDITATION DATE ISSUED", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.birAccreditationValidUntil", label: "BIR Accreditation Valid Until", displayValue: "GOVERNED BIR ACCREDITATION VALID UNTIL", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.ptuNumber", label: "PTU Number", displayValue: "GOVERNED PTU NO.", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.ptuIssuedDate", label: "PTU Issued Date", displayValue: "GOVERNED PTU DATE ISSUED", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.salesInvoiceLegalStatement", label: "Sales Invoice Legal Statement", displayValue: "THIS SERVES AS YOUR SALES INVOICE", posture: "required" },
-            { key: "salesInvoiceHeaderSnapshot.customerServiceFooter", label: "Customer Service Footer", displayValue: "THANK YOU FOR CHOOSING OUR SERVICE", posture: "required" },
-          ],
-        },
-        {
-          name: "fiscalNumbering",
-          label: "Fiscal Numbering",
-          rows: [{ key: "fiscalNumbering.fiscalDocumentNumber", label: "Fiscal Document Number", displayValue: "SI-000001", posture: "required" }],
-        },
-        {
-          name: "lineItems",
-          label: "Line Items",
-          rows: [{ key: "lineItems[0000].description", label: "Description", displayValue: "Parking fee - cash", posture: "required" }],
-        },
-        {
-          name: "vatBreakdown",
-          label: "VAT BREAKDOWN",
-          rows: [{ key: "totals.vatAmount", label: "VAT Amount", displayValue: "PHP 0.00", posture: "required" }],
-        },
-      ] : [],
+      canonicalPrintableText: complete
+        ? [
+            " GOVERNED REGISTERED BUSINESS NAME",
+            "       GOVERNED SITE ADDRESS",
+            "",
+            "VAT REG TIN           GOVERNED TIN",
+            "Branch / Site          PITX Level 3",
+            "Parking Location       PITX Level 3",
+            "--------------------------------",
+            "         SALES INVOICE",
+            "--------------------------------",
+            "            ORIGINAL",
+            "SI No                     SI-000001",
+            "Issued Date        2026-09-30 22:40",
+            "--------------------------------",
+            "        PARKING DETAILS",
+            "--------------------------------",
+            "Ticket Number       1474119573117",
+            "Plate Number              ABC1117",
+            "Entry Time         2026-09-29 08:42",
+            "Payment            2026-09-30 22:39",
+            "Duration                  37:57:17",
+            "--------------------------------",
+            "             ITEMS",
+            "--------------------------------",
+            "Item                             1",
+            "Description     Parking fee - cash",
+            "Quantity                         1",
+            "Unit Amount              PHP 125.00",
+            "Amount                   PHP 125.00",
+            "Subtotal                 PHP 125.00",
+            "--------------------------------",
+            "           DISCOUNTS",
+            "--------------------------------",
+            "Discount Reason                NONE",
+            "Discount Amount            PHP 0.00",
+            "--------------------------------",
+            "          VAT BREAKDOWN",
+            "--------------------------------",
+            "VATable Sales            PHP 125.00",
+            "VAT Amount                 PHP 0.00",
+            "VAT Exempt Sales           PHP 0.00",
+            "Zero Rated Sales           PHP 0.00",
+            "--------------------------------",
+            "        PAYMENT DETAILS",
+            "--------------------------------",
+            "Type                           CASH",
+            "Amount                   PHP 125.00",
+            "Total Paid               PHP 125.00",
+            "--------------------------------",
+            "THIS SERVES AS YOUR SALES INVOICE",
+            "Print Date         2026-09-30 22:40",
+            "--------------------------------",
+            "      Customer Information",
+            "--------------------------------",
+            "NAME               JUAN DELA CRUZ",
+            "ADDRESS           GOVERNED ADDRESS",
+            "TIN              123-456-789-000",
+            "BUS. STYLE                 RETAIL",
+            "--------------------------------",
+            "POS SOFTWARE SUPPLIER / DEVELOPER",
+            "--------------------------------",
+            "GOVERNED SOFTWARE SUPPLIER",
+            "ACCR. NO.                ACCR-0001",
+            "PTU                       PTU-0001",
+            "THANK YOU FOR CHOOSING OUR SERVICE",
+            "    ===== NOTHING FOLLOWS =====",
+            "",
+          ].join("\n")
+        : "",
+      aptTicketNumber: "1474119573117",
+      aptTicketQrCodeDataUrl: "data:image/png;base64,cXItMTQ3NDExOTU3MzExNw==",
     },
   };
 }

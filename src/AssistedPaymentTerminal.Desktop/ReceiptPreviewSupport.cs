@@ -1,14 +1,20 @@
 using System.Globalization;
 using System.Text.Json;
 using AssistedPaymentTerminal.LocalOperations;
+using QRCoder;
 
 namespace AssistedPaymentTerminal.Desktop;
 
 public static class ReceiptPreviewContract
 {
     public const string PresentationVersion = "digital-sales-invoice-presentation-json-v1";
+    public const string PersistedOriginalPresentationVersion = "digital-sales-invoice-presentation-json-v2-persisted-original";
     public const string TemplateVersion = "digital-sales-invoice-json-v1";
     public const string ContentType = "application/json";
+
+    public static bool SupportsPresentationVersion(string? value) =>
+        string.Equals(value, PresentationVersion, StringComparison.Ordinal)
+        || string.Equals(value, PersistedOriginalPresentationVersion, StringComparison.Ordinal);
 }
 
 public sealed record ReceiptPreviewPaperProfile(
@@ -67,56 +73,6 @@ public sealed record ReceiptPreviewBuildResult(
 
 public static class ReceiptPreviewBuilder
 {
-    private static readonly HashSet<string> CashierSections = new(StringComparer.Ordinal)
-    {
-        "header",
-        "salesInvoiceHeaderSnapshot",
-        "documentIdentity",
-        "fiscalNumbering",
-        "parkingPaymentReferences",
-        "customerInformation",
-        "lineItems",
-        "discounts",
-        "taxes",
-        "vatBreakdown",
-        "appliedStatutoryFiscalFacts",
-        "tenders",
-        "totals",
-        "footerDisclaimers"
-    };
-
-    private static readonly HashSet<string> RequiredCashierFacts = new(StringComparer.Ordinal)
-    {
-        "header.documentTitle",
-        "salesInvoiceHeaderSnapshot.registeredBusinessName",
-        "salesInvoiceHeaderSnapshot.registeredBusinessAddress",
-        "salesInvoiceHeaderSnapshot.tin",
-        "salesInvoiceHeaderSnapshot.posSerialNumber",
-        "salesInvoiceHeaderSnapshot.machineIdentificationNumber",
-        "salesInvoiceHeaderSnapshot.parkingLocationDisplay",
-        "salesInvoiceHeaderSnapshot.supplierDeveloperRegisteredName",
-        "salesInvoiceHeaderSnapshot.supplierDeveloperAddress",
-        "salesInvoiceHeaderSnapshot.supplierDeveloperTin",
-        "salesInvoiceHeaderSnapshot.birAccreditationNumber",
-        "salesInvoiceHeaderSnapshot.birAccreditationIssuedDate",
-        "salesInvoiceHeaderSnapshot.birAccreditationValidUntil",
-        "salesInvoiceHeaderSnapshot.ptuNumber",
-        "salesInvoiceHeaderSnapshot.ptuIssuedDate",
-        "salesInvoiceHeaderSnapshot.salesInvoiceLegalStatement",
-        "fiscalNumbering.fiscalDocumentNumber",
-        "parkingPaymentReferences.branchOrSite",
-        "parkingPaymentReferences.ticketNumber",
-        "parkingPaymentReferences.plateNumber",
-        "parkingPaymentReferences.entryTime",
-        "parkingPaymentReferences.paymentTime",
-        "parkingPaymentReferences.parkingDuration",
-        "parkingPaymentReferences.paymentMethod",
-        "totals.vatableSales",
-        "totals.vatAmount",
-        "totals.vatExemptSales",
-        "totals.zeroRatedSales"
-    };
-
     public static ReceiptPreviewBuildResult Build(
         TerminalCashReceiptRetrievalCommand command,
         ReceiptPreviewPaperProfile paperProfile)
@@ -150,7 +106,7 @@ public static class ReceiptPreviewBuilder
                 "Receipt payload integrity check failed. Support review is required.");
         }
 
-        if (!string.Equals(command.PresentationVersion, ReceiptPreviewContract.PresentationVersion, StringComparison.Ordinal)
+        if (!ReceiptPreviewContract.SupportsPresentationVersion(command.PresentationVersion)
             || !string.Equals(command.TemplateVersion, ReceiptPreviewContract.TemplateVersion, StringComparison.Ordinal)
             || !string.Equals(command.ContentType, ReceiptPreviewContract.ContentType, StringComparison.Ordinal))
         {
@@ -171,14 +127,6 @@ public static class ReceiptPreviewBuilder
                     "Receipt presentation could not be safely decoded. Support review is required.");
             }
 
-            var sections = ReadCanonicalSections(presentation);
-            if (sections is null || sections.Count == 0)
-            {
-                return ReceiptPreviewBuildResult.Fail(
-                    "receipt_preview_incomplete_authoritative_payload",
-                    "The POS-owned canonical Sales Invoice presentation is incomplete.");
-            }
-
             if (!ReadString(json.RootElement, "canonicalText", out var canonicalPrintableText)
                 || canonicalPrintableText.Contains('\0'))
             {
@@ -187,16 +135,14 @@ public static class ReceiptPreviewBuilder
                     "The POS-owned canonical printable Sales Invoice is incomplete.");
             }
 
-            var availableKeys = sections
-                .SelectMany(section => section.Rows)
-                .Select(row => row.Key)
-                .ToHashSet(StringComparer.Ordinal);
-            if (!RequiredCashierFacts.IsSubsetOf(availableKeys))
+            if (!TryReadTicketNumber(presentation, out var ticketNumber))
             {
                 return ReceiptPreviewBuildResult.Fail(
                     "receipt_preview_incomplete_authoritative_payload",
-                    "The POS-owned canonical Sales Invoice presentation is incomplete.");
+                    "The POS-owned canonical Sales Invoice ticket reference is incomplete.");
             }
+
+            var aptTicketQrCodeDataUrl = AptTicketQrCode.CreateDataUrl(ticketNumber);
 
             var document = new ReceiptPreviewDocument(
                 command.TerminalCashTenderId,
@@ -224,7 +170,8 @@ public static class ReceiptPreviewBuilder
                 false,
                 "Complete",
                 canonicalPrintableText,
-                sections);
+                ticketNumber,
+                aptTicketQrCodeDataUrl);
 
             return ReceiptPreviewBuildResult.Ok(document);
         }
@@ -234,85 +181,6 @@ public static class ReceiptPreviewBuilder
                 "receipt_preview_decode_failed",
                 "Receipt presentation could not be safely decoded. Support review is required.");
         }
-    }
-
-    private static IReadOnlyList<ReceiptPreviewSection>? ReadCanonicalSections(JsonElement presentation)
-    {
-        if (!presentation.TryGetProperty("sections", out var sectionsElement)
-            || sectionsElement.ValueKind != JsonValueKind.Array)
-        {
-            return null;
-        }
-
-        var sections = new List<(int SortOrder, ReceiptPreviewSection Section)>();
-        foreach (var sectionElement in sectionsElement.EnumerateArray())
-        {
-            if (sectionElement.ValueKind != JsonValueKind.Object
-                || !ReadString(sectionElement, "name", out var name)
-                || !ReadString(sectionElement, "label", out var label)
-                || !CashierSections.Contains(name)
-                || !sectionElement.TryGetProperty("rows", out var rowsElement)
-                || rowsElement.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            var rows = new List<ReceiptPreviewField>();
-            foreach (var rowElement in rowsElement.EnumerateArray())
-            {
-                if (!TryReadCashierRow(rowElement, out var row))
-                {
-                    continue;
-                }
-
-                rows.Add(row);
-            }
-
-            if (rows.Count == 0)
-            {
-                continue;
-            }
-
-            var sortOrder = sectionElement.TryGetProperty("sortOrder", out var sortOrderElement)
-                && sortOrderElement.TryGetInt32(out var parsedSortOrder)
-                    ? parsedSortOrder
-                    : int.MaxValue;
-            sections.Add((sortOrder, new ReceiptPreviewSection(name, label, rows)));
-        }
-
-        return sections
-            .OrderBy(section => section.SortOrder)
-            .Select(section => section.Section)
-            .ToArray();
-    }
-
-    private static bool TryReadCashierRow(JsonElement rowElement, out ReceiptPreviewField row)
-    {
-        row = default!;
-        if (rowElement.ValueKind != JsonValueKind.Object
-            || !ReadString(rowElement, "key", out var key)
-            || !ReadString(rowElement, "label", out var label)
-            || !ReadString(rowElement, "posture", out var posture)
-            || posture is "placeholder" or "deferred" or "not_available"
-            || IsInternalKey(key)
-            || !rowElement.TryGetProperty("displayValue", out var displayValueElement)
-            || displayValueElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(displayValueElement.GetString()))
-        {
-            return false;
-        }
-
-        row = new ReceiptPreviewField(key, label, displayValueElement.GetString()!, posture);
-        return true;
-    }
-
-    private static bool IsInternalKey(string key)
-    {
-        var fieldName = key[(key.LastIndexOf('.') + 1)..];
-        return fieldName.EndsWith("Id", StringComparison.Ordinal)
-            || fieldName.EndsWith("Ref", StringComparison.Ordinal)
-            || fieldName.Contains("Hash", StringComparison.Ordinal)
-            || fieldName.EndsWith("Version", StringComparison.Ordinal);
     }
 
     private static bool ReadString(JsonElement source, string propertyName, out string value)
@@ -327,6 +195,55 @@ public static class ReceiptPreviewBuilder
 
         value = element.GetString()!;
         return true;
+    }
+
+    private static bool TryReadTicketNumber(JsonElement presentation, out string ticketNumber)
+    {
+        ticketNumber = string.Empty;
+        if (!presentation.TryGetProperty("sections", out var sections)
+            || sections.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var section in sections.EnumerateArray())
+        {
+            if (!section.TryGetProperty("rows", out var rows) || rows.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var row in rows.EnumerateArray())
+            {
+                if (ReadString(row, "key", out var key)
+                    && string.Equals(key, "parkingPaymentReferences.ticketNumber", StringComparison.Ordinal)
+                    && ReadString(row, "displayValue", out ticketNumber))
+                {
+                    ticketNumber = ticketNumber.Trim();
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+internal static class AptTicketQrCode
+{
+    private const string DataUrlPrefix = "data:image/png;base64,";
+
+    public static string CreateDataUrl(string ticketNumber)
+    {
+        if (string.IsNullOrWhiteSpace(ticketNumber))
+            throw new ArgumentException("A ticket number is required for the APT QR code.", nameof(ticketNumber));
+
+        using var data = QRCodeGenerator.GenerateQrCode(ticketNumber.Trim(), QRCodeGenerator.ECCLevel.M);
+        var png = new PngByteQRCode(data).GetGraphic(12, drawQuietZones: true);
+        return DataUrlPrefix + Convert.ToBase64String(png);
+    }
+
+    public static byte[] DecodeDataUrl(string dataUrl)
+    {
+        if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith(DataUrlPrefix, StringComparison.Ordinal))
+            throw new InvalidOperationException("The APT ticket QR code is invalid.");
+        return Convert.FromBase64String(dataUrl[DataUrlPrefix.Length..]);
     }
 }
 
@@ -361,15 +278,5 @@ public sealed record ReceiptPreviewDocument(
     bool HasPlaceholders,
     string ConfigurationCompleteness,
     string CanonicalPrintableText,
-    IReadOnlyList<ReceiptPreviewSection> Sections);
-
-public sealed record ReceiptPreviewSection(
-    string Name,
-    string Label,
-    IReadOnlyList<ReceiptPreviewField> Rows);
-
-public sealed record ReceiptPreviewField(
-    string Key,
-    string Label,
-    string DisplayValue,
-    string Posture);
+    string AptTicketNumber,
+    string AptTicketQrCodeDataUrl);

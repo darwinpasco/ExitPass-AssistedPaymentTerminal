@@ -269,19 +269,6 @@ export type ReceiptPreviewPaperProfile = {
   metadataDensity: string;
 };
 
-export type ReceiptPreviewField = {
-  key: string;
-  label: string;
-  displayValue: string;
-  posture: string;
-};
-
-export type ReceiptPreviewSection = {
-  name: string;
-  label: string;
-  rows: ReceiptPreviewField[];
-};
-
 export type ReceiptPreviewDocument = {
   terminalCashTenderId: string;
   localReceiptRetrievalId: string;
@@ -307,7 +294,9 @@ export type ReceiptPreviewDocument = {
   paperProfile: ReceiptPreviewPaperProfile;
   hasPlaceholders: boolean;
   configurationCompleteness: "Incomplete" | "Complete";
-  sections: ReceiptPreviewSection[];
+  canonicalPrintableText: string;
+  aptTicketNumber: string;
+  aptTicketQrCodeDataUrl: string;
 };
 
 export type CentralPmsCashReceiptPreview = {
@@ -330,6 +319,8 @@ export type ReceiptPrintDocument = {
   reprintMarker: string | null;
   paperProfile: ReceiptPreviewPaperProfile;
   lines: string[];
+  aptTicketNumber: string;
+  aptTicketQrCodeDataUrl: string;
 };
 
 export type CentralPmsCashReceiptPrintJob = {
@@ -562,6 +553,7 @@ export interface LocalJournalBridge {
   submitCentralPmsCashReceiptPrint(
     correlationId: string,
     localCashTenderId: string,
+    paperWidthMm?: 57 | 58 | 80,
   ): Promise<BridgeResult<CentralPmsCashReceiptPrintSubmit>>;
   getSalesInvoicePrintHistoryForTender(
     correlationId: string,
@@ -620,8 +612,8 @@ export function createWebViewLocalJournalBridge(): LocalJournalBridge {
       send("centralPmsCashReceipt.getPreview", correlationId, { localCashTenderId }),
     getCentralPmsCashReceiptPrintStatus: (correlationId, localCashTenderId) =>
       send("centralPmsCashReceiptPrint.getStatus", correlationId, { localCashTenderId }),
-    submitCentralPmsCashReceiptPrint: (correlationId, localCashTenderId) =>
-      send("centralPmsCashReceiptPrint.submit", correlationId, { localCashTenderId }),
+    submitCentralPmsCashReceiptPrint: (correlationId, localCashTenderId, paperWidthMm) =>
+      send("centralPmsCashReceiptPrint.submit", correlationId, { localCashTenderId, paperWidthMm }),
     getSalesInvoicePrintHistoryForTender: (correlationId, localCashTenderId) =>
       send("salesInvoicePrintHistory.getForTender", correlationId, { localCashTenderId }),
     getSalesInvoicePrintHistoryForFiscalDocument: (correlationId, fiscalDocumentId) =>

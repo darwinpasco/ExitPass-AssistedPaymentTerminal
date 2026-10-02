@@ -115,6 +115,17 @@ public sealed record TerminalCashReceiptPresentationResponse(
     DateTimeOffset UpdatedAt,
     Guid CorrelationId);
 
+public sealed record TerminalCashReceiptReprintResponse(
+    Guid TerminalCashTenderId,
+    Guid PaymentAttemptId,
+    Guid PaymentConfirmationId,
+    Guid FiscalIssuanceReferenceId,
+    Guid PosFiscalDocumentId,
+    string FiscalDocumentNumber,
+    JsonElement Reprint,
+    string CanonicalText,
+    Guid CorrelationId);
+
 public sealed record CentralPmsSafeError(
     string ErrorCode,
     string Message,

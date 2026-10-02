@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AssistedPaymentTerminal.LocalOperations;
 using Microsoft.EntityFrameworkCore;
@@ -258,6 +260,167 @@ public sealed class TerminalCashReceiptRetrievalTests
         Assert.Equal(originalPayload, result.AuthoritativePresentationJson);
         Assert.False(result.LastRetryable);
         Assert.Null(result.NextRetryAt);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task IncompletePresentationCanBeCompletedByCanonicalTextForSameFiscalIdentity()
+    {
+        using var database = TestDatabase.Create();
+        var incomplete = await RetrieveAvailableAsync(database);
+        var client = new ScriptedCentralPmsReceiptClient();
+        var completed = Available(incomplete) with
+        {
+            AuthoritativePresentation = AuthoritativePresentation(
+                voided: false,
+                alternatePayload: false,
+                canonicalText: "SALES INVOICE\nTicket: 1474119573117")
+        };
+        client.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            completed,
+            200,
+            Guid.Parse(incomplete.RetrievalCorrelationId)));
+
+        var result = await new TerminalCashReceiptRetrievalService(client, database.Options)
+            .RetrieveReceiptAsync(incomplete.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Available, result.Status);
+        Assert.Equal("AVAILABLE", result.ResultClassification);
+        Assert.Contains("canonicalText", result.AuthoritativePresentationJson);
+        Assert.Equal("sha256:fiscal-semantic", result.SemanticRequestHash);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task DynamicCanonicalTextCanUpgradeOnceToAttestedPersistedOriginal()
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await CreateReceiptRetrievalAsync(database);
+        var initialClient = new ScriptedCentralPmsReceiptClient();
+        initialClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt) with
+            {
+                AuthoritativePresentation = AuthoritativePresentation(
+                    voided: false,
+                    alternatePayload: false,
+                    canonicalText: "DYNAMIC ORIGINAL\nNOTHING FOLLOWS")
+            },
+            200));
+        var initial = await new TerminalCashReceiptRetrievalService(initialClient, database.Options)
+            .RetrieveReceiptAsync(receipt.Id);
+
+        const string persistedOriginal = "PERSISTED ORIGINAL\r\nNOTHING FOLLOWS\r\n";
+        var replacementClient = new ScriptedCentralPmsReceiptClient();
+        replacementClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(initial) with
+            {
+                PresentationVersion = "digital-sales-invoice-presentation-json-v2-persisted-original",
+                AuthoritativePresentation = PersistedOriginalPresentation(persistedOriginal)
+            },
+            200));
+
+        var result = await new TerminalCashReceiptRetrievalService(replacementClient, database.Options)
+            .RetrieveReceiptAsync(initial.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Available, result.Status);
+        Assert.Equal("AVAILABLE", result.ResultClassification);
+        Assert.Equal("digital-sales-invoice-presentation-json-v2-persisted-original", result.PresentationVersion);
+        Assert.Contains("PERSISTED ORIGINAL", result.AuthoritativePresentationJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("DYNAMIC ORIGINAL", result.AuthoritativePresentationJson, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [Trait("Category", "LocalOperations")]
+    public async Task PersistedOriginalUpgradeRejectsBadHashOrChangedFiscalFacts(
+        bool badHash,
+        bool alternatePayload)
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await CreateReceiptRetrievalAsync(database);
+        var initialClient = new ScriptedCentralPmsReceiptClient();
+        initialClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt) with
+            {
+                AuthoritativePresentation = AuthoritativePresentation(
+                    voided: false,
+                    alternatePayload: false,
+                    canonicalText: "DYNAMIC ORIGINAL\nNOTHING FOLLOWS")
+            },
+            200));
+        var initial = await new TerminalCashReceiptRetrievalService(initialClient, database.Options)
+            .RetrieveReceiptAsync(receipt.Id);
+        var originalPayload = initial.AuthoritativePresentationJson;
+
+        const string persistedOriginal = "PERSISTED ORIGINAL\r\nNOTHING FOLLOWS\r\n";
+        var replacementClient = new ScriptedCentralPmsReceiptClient();
+        replacementClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(initial) with
+            {
+                PresentationVersion = "digital-sales-invoice-presentation-json-v2-persisted-original",
+                AuthoritativePresentation = PersistedOriginalPresentation(
+                    persistedOriginal,
+                    alternatePayload,
+                    badHash ? "sha256:not-the-text-hash" : null)
+            },
+            200));
+
+        var result = await new TerminalCashReceiptRetrievalService(replacementClient, database.Options)
+            .RetrieveReceiptAsync(initial.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Inconsistent, result.Status);
+        Assert.Equal("PRESENTATION_INTEGRITY_MISMATCH", result.ResultClassification);
+        Assert.Equal(originalPayload, result.AuthoritativePresentationJson);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task PersistedOriginalCannotBeReplacedAfterAuthorityUpgrade()
+    {
+        using var database = TestDatabase.Create();
+        var receipt = await CreateReceiptRetrievalAsync(database);
+        var initialClient = new ScriptedCentralPmsReceiptClient();
+        initialClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(receipt) with
+            {
+                AuthoritativePresentation = AuthoritativePresentation(
+                    voided: false,
+                    alternatePayload: false,
+                    canonicalText: "DYNAMIC ORIGINAL\nNOTHING FOLLOWS")
+            },
+            200));
+        var initial = await new TerminalCashReceiptRetrievalService(initialClient, database.Options)
+            .RetrieveReceiptAsync(receipt.Id);
+
+        const string persistedOriginal = "PERSISTED ORIGINAL\r\nNOTHING FOLLOWS\r\n";
+        var upgradeClient = new ScriptedCentralPmsReceiptClient();
+        upgradeClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(initial) with
+            {
+                PresentationVersion = "digital-sales-invoice-presentation-json-v2-persisted-original",
+                AuthoritativePresentation = PersistedOriginalPresentation(persistedOriginal)
+            },
+            200));
+        var upgraded = await new TerminalCashReceiptRetrievalService(upgradeClient, database.Options)
+            .RetrieveReceiptAsync(initial.Id);
+        var persistedPayload = upgraded.AuthoritativePresentationJson;
+
+        const string alteredText = "ALTERED AFTER PERSISTENCE\r\nNOTHING FOLLOWS\r\n";
+        var replayClient = new ScriptedCentralPmsReceiptClient();
+        replayClient.Enqueue(CentralPmsTerminalCashReceiptResult<TerminalCashReceiptPresentationResponse>.Available(
+            Available(upgraded) with
+            {
+                PresentationVersion = "digital-sales-invoice-presentation-json-v2-persisted-original",
+                AuthoritativePresentation = PersistedOriginalPresentation(alteredText)
+            },
+            200));
+
+        var result = await new TerminalCashReceiptRetrievalService(replayClient, database.Options)
+            .RetrieveReceiptAsync(upgraded.Id);
+
+        Assert.Equal(TerminalCashReceiptRetrievalStatus.Inconsistent, result.Status);
+        Assert.Equal(persistedPayload, result.AuthoritativePresentationJson);
     }
 
     [Fact]
@@ -594,12 +757,18 @@ public sealed class TerminalCashReceiptRetrievalTests
             Guid.Parse(command.RetrievalCorrelationId));
     }
 
-    private static JsonElement AuthoritativePresentation(bool voided, bool alternatePayload)
+    private static JsonElement AuthoritativePresentation(
+        bool voided,
+        bool alternatePayload,
+        string? canonicalText = null)
     {
         var voidJson = voided
             ? "\"voidStatus\":\"voided\",\"voidReasonCode\":\"operator_void\",\"voidedAt\":\"2026-07-15T00:06:00Z\""
             : "\"voidStatus\":null,\"voidReasonCode\":null,\"voidedAt\":null";
         var description = alternatePayload ? "Altered parking fee - cash" : "Parking fee - cash";
+        var canonicalTextJson = canonicalText is null
+            ? string.Empty
+            : $",\"canonicalText\":{JsonSerializer.Serialize(canonicalText)}";
         var json = $$"""
         {
           "succeeded": true,
@@ -625,7 +794,52 @@ public sealed class TerminalCashReceiptRetrievalTests
           "presentationVersion": "digital-sales-invoice-presentation-json-v1",
           "templateVersion": "digital-sales-invoice-json-v1",
           "contentType": "application/json",
-          {{voidJson}}
+          {{voidJson}}{{canonicalTextJson}}
+        }
+        """;
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static JsonElement PersistedOriginalPresentation(
+        string canonicalText,
+        bool alternatePayload = false,
+        string? canonicalTextHash = null)
+    {
+        var hash = canonicalTextHash ??
+            $"sha256:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalText))).ToLowerInvariant()}";
+        var description = alternatePayload ? "Altered parking fee - cash" : "Parking fee - cash";
+        var json = $$"""
+        {
+          "succeeded": true,
+          "code": "presented",
+          "message": "Digital Sales Invoice presentation returned.",
+          "presentation": {
+            "presentationVersion": "digital-sales-invoice-presentation-json-v1",
+            "lines": [
+              { "description": "{{description}}", "amountMinorUnits": 10000 }
+            ],
+            "taxes": [
+              { "taxType": "VAT", "amountMinorUnits": 0 }
+            ],
+            "totals": [
+              { "totalType": "grand_total", "amountMinorUnits": 10000 }
+            ],
+            "tenders": [
+              { "tenderType": "CASH", "amountMinorUnits": 10000 }
+            ]
+          },
+          "fiscalDocumentId": "{{PosFiscalDocumentId:D}}",
+          "fiscalDocumentNumber": "SI-000001",
+          "presentationVersion": "digital-sales-invoice-presentation-json-v2-persisted-original",
+          "templateVersion": "digital-sales-invoice-json-v1",
+          "contentType": "application/json",
+          "voidStatus": null,
+          "voidReasonCode": null,
+          "voidedAt": null,
+          "canonicalText": {{JsonSerializer.Serialize(canonicalText)}},
+          "canonicalTextAuthority": "persisted_original_electronic_journal",
+          "canonicalTextHash": "{{hash}}"
         }
         """;
         using var document = JsonDocument.Parse(json);

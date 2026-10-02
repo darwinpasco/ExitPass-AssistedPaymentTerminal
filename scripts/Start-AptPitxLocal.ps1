@@ -2,7 +2,10 @@
 param(
     [switch]$PreflightOnly,
     [switch]$WebViewSmokeCheck,
-    [string]$CentralPmsUrl = "http://127.0.0.1:56095"
+    [string]$CentralPmsUrl = "http://127.0.0.1:56095",
+    [string]$ReceiptPrinterName = $env:APT_RECEIPT_PRINTER_NAME,
+    [ValidateSet("57", "58", "80")]
+    [string]$ReceiptPaperWidthMm = $(if ($env:APT_RECEIPT_PAPER_WIDTH_MM) { $env:APT_RECEIPT_PAPER_WIDTH_MM } else { "57" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +39,9 @@ $runtimeConfig = [ordered]@{
     APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = "true"
     APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = "true"
     APT_ENABLE_RECEIPT_PREVIEW = "true"
+    APT_ENABLE_RECEIPT_PRINTING = if ([string]::IsNullOrWhiteSpace($ReceiptPrinterName)) { "false" } else { "true" }
+    APT_RECEIPT_PRINTER_NAME = $ReceiptPrinterName
+    APT_RECEIPT_PAPER_WIDTH_MM = $ReceiptPaperWidthMm
     APT_WEB_UI_URL = $webUiUrl
     CENTRAL_PMS_VENDOR_SYSTEM_ID = "afdefaab-6be4-6b25-8f3f-3ad8309662e8"
 }
@@ -53,6 +59,9 @@ $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = $runtimeConfig.APT_ENABLE_CENTRAL_
 $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE
 $env:APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_RECEIPT_RETRIEVAL
 $env:APT_ENABLE_RECEIPT_PREVIEW = $runtimeConfig.APT_ENABLE_RECEIPT_PREVIEW
+$env:APT_ENABLE_RECEIPT_PRINTING = $runtimeConfig.APT_ENABLE_RECEIPT_PRINTING
+$env:APT_RECEIPT_PRINTER_NAME = $runtimeConfig.APT_RECEIPT_PRINTER_NAME
+$env:APT_RECEIPT_PAPER_WIDTH_MM = $runtimeConfig.APT_RECEIPT_PAPER_WIDTH_MM
 $env:APT_WEB_UI_URL = $runtimeConfig.APT_WEB_UI_URL
 $env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID = "be31c0c2-7fdb-4029-a61e-50fd5bbf87ce"
 
