@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
+import type { CentralPmsClient, ProjectedSessionResponse } from "./api/centralPmsTypes";
 import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext } from "./localJournalBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 import { containsInternalGuid } from "./cashierSafeReferences";
@@ -117,6 +118,54 @@ describe("App cashier workflow", () => {
 
     expect(await screen.findByRole("heading", { name: "Parking session details" })).toBeInTheDocument();
     expect(screen.getByText("PLATE-READY-1002")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["ticket", "Ticket number", "1474119573147"],
+    ["plate", "Plate number", "ABC1147"],
+  ] as const)("shows a projected session by %s while keeping cash unavailable", async (_referenceType, label, value) => {
+    const revalidatePayableBasis = vi.fn();
+    const client: CentralPmsClient = {
+      resolvePayableBasis: vi.fn(async () => ({ ok: true as const, response: projectedSessionPayload() })),
+      revalidatePayableBasis,
+    };
+
+    render(<TerminalShell config={mode1Config()} client={client} localJournalBridge={bridgeWithLocalState({ activeShift: true, activeCustody: true })} />);
+    await userEvent.type(screen.getByLabelText(label), value);
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByRole("heading", { name: "Session found from projection" })).toBeInTheDocument();
+    expect(screen.getByText("1474119573147")).toBeInTheDocument();
+    expect(screen.getByText("ABC1147")).toBeInTheDocument();
+    expect(screen.getByText("PITX Level 3")).toBeInTheDocument();
+    expect(screen.getByText("Continuity projection")).toBeInTheDocument();
+    expect(screen.getByTestId("projection-payable-basis-blocked")).toHaveTextContent("Cash acceptance remains blocked");
+    expect(screen.queryByTestId("payable-basis-amount")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
+    expect(revalidatePayableBasis).not.toHaveBeenCalled();
+  });
+
+  it("retries the same lookup and transitions from projection to a live payable basis", async () => {
+    const config = mode1Config();
+    const liveClient = new MockCentralPmsClient(config);
+    const resolvePayableBasis = vi.fn()
+      .mockResolvedValueOnce({ ok: true as const, response: projectedSessionPayload() })
+      .mockImplementation((...args: Parameters<typeof liveClient.resolvePayableBasis>) => liveClient.resolvePayableBasis(...args));
+    const client: CentralPmsClient = {
+      resolvePayableBasis,
+      revalidatePayableBasis: (basis, correlationId) => liveClient.revalidatePayableBasis(basis, correlationId),
+    };
+
+    render(<TerminalShell config={config} client={client} localJournalBridge={bridgeWithLocalState()} />);
+    await userEvent.type(screen.getByLabelText("Ticket number"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    expect(await screen.findByRole("heading", { name: "Session found from projection" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry live fee" }));
+
+    expect(await screen.findByRole("heading", { name: "Parking session details" })).toBeInTheDocument();
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
+    expect(resolvePayableBasis).toHaveBeenCalledTimes(2);
   });
 
   it("accepts matching ticket and plate values", async () => {
@@ -313,4 +362,38 @@ function bridgeWithLocalState(options: {
       payload: { tender: null, events: [] },
     })),
   } as unknown as LocalJournalBridge;
+}
+
+function projectedSessionPayload(): ProjectedSessionResponse {
+  return {
+    operation: "resolve",
+    parkingSessionId: null,
+    tariffSnapshotId: null,
+    sessionFound: true,
+    sessionSource: "VENDOR_SESSION_PROJECTION",
+    degraded: true,
+    payableBasisAvailable: false,
+    vendorSessionProjectionId: "455bfa51-98b3-4fbf-9efb-336339596a34",
+    projectionStatus: "ACTIVE",
+    projectionLastRefreshedAt: "2026-10-05T01:00:00Z",
+    projectionFreshnessAgeSeconds: 15,
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    siteName: "PITX Level 3",
+    vendorSystemId: "VENDOR-PMS-DEV",
+    ticketReference: "1474119573147",
+    plateNumber: "ABC1147",
+    entryTimestamp: "2026-10-05T00:30:00Z",
+    parkingStatus: "ACTIVE",
+    paymentStatus: null,
+    authoritativeAmountMinorUnits: null,
+    currency: null,
+    tariffValidUntil: null,
+    readyForCashAcceptance: false,
+    blockingReasonCodes: ["PROJECTION_SESSION_PAYABLE_BASIS_UNAVAILABLE"],
+    retryable: true,
+    safeUserFacingClassification: "PROJECTION_SESSION_PAYABLE_BASIS_UNAVAILABLE",
+    safeMessage: "Session found from projection; live payable amount is temporarily unavailable.",
+    correlationId: "projection-correlation",
+  };
 }

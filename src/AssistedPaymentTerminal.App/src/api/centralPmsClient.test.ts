@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LiveCentralPmsClient } from "./centralPmsClient";
-import type { PayableBasisResponse, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
+import type { PayableBasisResponse, ProjectedSessionResponse, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
 import { mode1Config } from "../test/testConfig";
 import { maskStatutoryId } from "../statutoryIdMasking";
 
@@ -57,6 +57,46 @@ describe("LiveCentralPmsClient", () => {
         body: expect.stringContaining('"referenceType":"ticket"'),
       }),
     );
+  });
+
+  it("accepts a projection-only session without financial authority", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => projectedSessionPayload(),
+    })) as unknown as typeof fetch;
+
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+    const result = await client.resolvePayableBasis("ticket", "1474119573147", "projection-correlation");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.response).toEqual(expect.objectContaining({
+        sessionSource: "VENDOR_SESSION_PROJECTION",
+        degraded: true,
+        payableBasisAvailable: false,
+        parkingSessionId: null,
+        tariffSnapshotId: null,
+        authoritativeAmountMinorUnits: null,
+        currency: null,
+        paymentStatus: null,
+        readyForCashAcceptance: false,
+      }));
+    }
+  });
+
+  it("rejects a contradictory projection response that carries financial authority", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ...projectedSessionPayload(), authoritativeAmountMinorUnits: 10000 }),
+    })) as unknown as typeof fetch;
+
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+    const result = await client.resolvePayableBasis("ticket", "1474119573147", "projection-malformed-correlation");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("malformed_response");
+    }
   });
 
   it("posts revalidation to the APT payable-basis facade without using WebPay routes", async () => {
@@ -270,6 +310,41 @@ function payableBasisPayload(overrides: Partial<PayableBasisResponse> = {}): Pay
     retryable: false,
     safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
     correlationId: "11111111-2222-4333-8444-555555555555",
+    ...overrides,
+  };
+}
+
+function projectedSessionPayload(overrides: Partial<ProjectedSessionResponse> = {}): ProjectedSessionResponse {
+  return {
+    operation: "resolve",
+    parkingSessionId: null,
+    tariffSnapshotId: null,
+    sessionFound: true,
+    sessionSource: "VENDOR_SESSION_PROJECTION",
+    degraded: true,
+    payableBasisAvailable: false,
+    vendorSessionProjectionId: "455bfa51-98b3-4fbf-9efb-336339596a34",
+    projectionStatus: "ACTIVE",
+    projectionLastRefreshedAt: "2026-10-05T01:00:00Z",
+    projectionFreshnessAgeSeconds: 15,
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    siteName: "PITX Level 3",
+    vendorSystemId: "VENDOR-PMS-DEV",
+    ticketReference: "1474119573147",
+    plateNumber: "ABC1147",
+    entryTimestamp: "2026-10-05T00:30:00Z",
+    parkingStatus: "ACTIVE",
+    paymentStatus: null,
+    authoritativeAmountMinorUnits: null,
+    currency: null,
+    tariffValidUntil: null,
+    readyForCashAcceptance: false,
+    blockingReasonCodes: ["PROJECTION_SESSION_PAYABLE_BASIS_UNAVAILABLE"],
+    retryable: true,
+    safeUserFacingClassification: "PROJECTION_SESSION_PAYABLE_BASIS_UNAVAILABLE",
+    safeMessage: "Session found from projection; live payable amount is temporarily unavailable.",
+    correlationId: "projection-correlation",
     ...overrides,
   };
 }

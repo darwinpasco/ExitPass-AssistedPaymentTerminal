@@ -4,8 +4,11 @@ import type {
   CentralPmsErrorResponse,
   CentralPmsFailureKind,
   CentralPmsResult,
+  CentralPmsResolveResult,
   PayableBasisReferenceType,
+  PayableBasisLookupResponse,
   PayableBasisResponse,
+  ProjectedSessionResponse,
   RevalidatePayableBasisRequest,
   ResolvePayableBasisRequest,
   StatutoryDiscountDecisionResponse,
@@ -26,7 +29,7 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     referenceValue: string,
     correlationId: string,
     statutoryDiscountDecisionCommandId?: string | null,
-  ): Promise<CentralPmsResult> {
+  ): Promise<CentralPmsResolveResult> {
     const trimmed = referenceValue.trim();
     const request: ResolvePayableBasisRequest = {
       siteGroupId: this.config.siteGroupId,
@@ -43,11 +46,11 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     return this.postPayableBasis("/v1/terminal-cash-payments/payable-basis/resolve", request, correlationId);
   }
 
-  async resolveTicket(ticketReference: string, correlationId: string): Promise<CentralPmsResult> {
+  async resolveTicket(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult> {
     return this.resolvePayableBasis("ticket", ticketReference, correlationId);
   }
 
-  async recalculateFee(ticketReference: string, correlationId: string): Promise<CentralPmsResult> {
+  async recalculateFee(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult> {
     return this.resolvePayableBasis("ticket", ticketReference, correlationId);
   }
 
@@ -111,7 +114,17 @@ export class LiveCentralPmsClient implements CentralPmsClient {
     return this.requestStatutoryDiscountDecision("GET", `/v1/statutory-discounts/decisions/${encodeURIComponent(decisionCommandId)}`, correlationId);
   }
 
-  private async postPayableBasis(path: string, request: unknown, correlationId: string): Promise<CentralPmsResult> {
+  private async postPayableBasis(
+    path: "/v1/terminal-cash-payments/payable-basis/resolve",
+    request: unknown,
+    correlationId: string,
+  ): Promise<CentralPmsResolveResult>;
+  private async postPayableBasis(
+    path: "/v1/terminal-cash-payments/payable-basis/revalidate",
+    request: unknown,
+    correlationId: string,
+  ): Promise<CentralPmsResult>;
+  private async postPayableBasis(path: string, request: unknown, correlationId: string): Promise<CentralPmsResolveResult> {
     const bridgeCommand: PayableBasisBridgeCommand = path.endsWith("/revalidate")
       ? "payableBasis.revalidate"
       : "payableBasis.resolve";
@@ -137,10 +150,10 @@ export class LiveCentralPmsClient implements CentralPmsClient {
           error: normalizeError(payload, correlationId),
         };
       }
-      if (!isPayableBasisResponse(payload)) {
+      if (!(bridgeCommand === "payableBasis.resolve" ? isResolveResponse(payload) : isPayableBasisResponse(payload))) {
         return malformed(correlationId);
       }
-      return { ok: true, response: normalizePayableBasisResponse(payload) };
+      return { ok: true, response: normalizePayableBasisResponse(payload as PayableBasisLookupResponse) };
     }
 
     const result = await this.send(path, "POST", correlationId, undefined, request);
@@ -148,11 +161,11 @@ export class LiveCentralPmsClient implements CentralPmsClient {
       return result;
     }
 
-    if (!isPayableBasisResponse(result.payload)) {
+    if (!(bridgeCommand === "payableBasis.resolve" ? isResolveResponse(result.payload) : isPayableBasisResponse(result.payload))) {
       return malformed(correlationId);
     }
 
-    return { ok: true, response: normalizePayableBasisResponse(result.payload) };
+    return { ok: true, response: normalizePayableBasisResponse(result.payload as PayableBasisLookupResponse) };
   }
 
   private async requestStatutoryDiscountDecision(
@@ -274,26 +287,59 @@ export function isPayableBasisResponse(payload: unknown): payload is PayableBasi
   const candidate = payload as Partial<PayableBasisResponse> | null;
   return Boolean(
     candidate &&
-      typeof candidate.parkingSessionId === "string" &&
-      typeof candidate.tariffSnapshotId === "string" &&
       typeof candidate.siteGroupId === "string" &&
       typeof candidate.siteId === "string" &&
       typeof candidate.parkingStatus === "string" &&
-      typeof candidate.paymentStatus === "string" &&
-      typeof candidate.authoritativeAmountMinorUnits === "number" &&
-      typeof candidate.currency === "string" &&
-      typeof candidate.tariffValidUntil === "string" &&
       typeof candidate.readyForCashAcceptance === "boolean" &&
       Array.isArray(candidate.blockingReasonCodes) &&
       typeof candidate.retryable === "boolean" &&
       typeof candidate.safeUserFacingClassification === "string" &&
-      typeof candidate.correlationId === "string",
+      typeof candidate.correlationId === "string" &&
+      typeof candidate.parkingSessionId === "string" &&
+      typeof candidate.tariffSnapshotId === "string" &&
+      typeof candidate.paymentStatus === "string" &&
+      typeof candidate.authoritativeAmountMinorUnits === "number" &&
+      typeof candidate.currency === "string" &&
+      typeof candidate.tariffValidUntil === "string",
   );
 }
 
-export const isResolveResponse = isPayableBasisResponse;
+export function isProjectedSessionResponse(payload: unknown): payload is ProjectedSessionResponse {
+  const candidate = payload as Partial<ProjectedSessionResponse> | null;
+  return Boolean(
+    candidate &&
+      candidate.sessionFound === true &&
+      candidate.sessionSource === "VENDOR_SESSION_PROJECTION" &&
+      candidate.degraded === true &&
+      candidate.payableBasisAvailable === false &&
+      candidate.parkingSessionId === null &&
+      candidate.tariffSnapshotId === null &&
+      candidate.paymentStatus === null &&
+      candidate.authoritativeAmountMinorUnits === null &&
+      candidate.currency === null &&
+      candidate.tariffValidUntil === null &&
+      candidate.readyForCashAcceptance === false &&
+      typeof candidate.vendorSessionProjectionId === "string" &&
+      typeof candidate.projectionStatus === "string" &&
+      typeof candidate.siteGroupId === "string" &&
+      typeof candidate.siteId === "string" &&
+      typeof candidate.parkingStatus === "string" &&
+      Array.isArray(candidate.blockingReasonCodes) &&
+      typeof candidate.retryable === "boolean" &&
+      typeof candidate.safeUserFacingClassification === "string" &&
+      typeof candidate.correlationId === "string" &&
+      (typeof candidate.ticketReference === "string" || typeof candidate.plateNumber === "string"),
+  );
+}
 
-export function normalizePayableBasisResponse(payload: PayableBasisResponse): PayableBasisResponse {
+export function isResolveResponse(payload: unknown): payload is PayableBasisLookupResponse {
+  return isPayableBasisResponse(payload) || isProjectedSessionResponse(payload);
+}
+
+export function normalizePayableBasisResponse(payload: PayableBasisLookupResponse): PayableBasisLookupResponse {
+  if (isProjectedSessionResponse(payload)) {
+    return { ...payload, blockingReasonCodes: payload.blockingReasonCodes ?? [] };
+  }
   const readinessDimensions = Array.isArray(payload.readinessDimensions) ? payload.readinessDimensions : [];
   return {
     ...payload,
