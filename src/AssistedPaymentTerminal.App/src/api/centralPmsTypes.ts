@@ -169,6 +169,10 @@ export type PayableBasisResponse = {
   revalidationOutcome?: PayableBasisRevalidationOutcome | string | null;
   parkingSessionId: string;
   tariffSnapshotId: string;
+  sessionFound?: true;
+  sessionSource?: "LIVE_VENDOR" | string;
+  degraded?: false;
+  payableBasisAvailable?: true;
   siteGroupId: string;
   siteId: string;
   sitePosServerId?: string | null;
@@ -222,6 +226,40 @@ export type PayableBasisResponse = {
   safeMessage?: string | null;
   correlationId: string;
 };
+
+export type ProjectedSessionResponse = {
+  operation?: "resolve" | string;
+  parkingSessionId: null;
+  tariffSnapshotId: null;
+  sessionFound: true;
+  sessionSource: "VENDOR_SESSION_PROJECTION";
+  degraded: true;
+  payableBasisAvailable: false;
+  vendorSessionProjectionId: string;
+  projectionStatus: string;
+  projectionLastRefreshedAt?: string | null;
+  projectionFreshnessAgeSeconds?: number | null;
+  siteGroupId: string;
+  siteId: string;
+  siteName?: string | null;
+  vendorSystemId?: string | null;
+  ticketReference?: string | null;
+  plateNumber?: string | null;
+  entryTimestamp?: string | null;
+  parkingStatus: string;
+  paymentStatus: null;
+  authoritativeAmountMinorUnits: null;
+  currency: null;
+  tariffValidUntil: null;
+  readyForCashAcceptance: false;
+  blockingReasonCodes: string[];
+  retryable: boolean;
+  safeUserFacingClassification: string;
+  safeMessage?: string | null;
+  correlationId: string;
+};
+
+export type PayableBasisLookupResponse = PayableBasisResponse | ProjectedSessionResponse;
 
 export type StatutoryDiscountEvidenceReference = {
   evidenceType: string;
@@ -425,6 +463,10 @@ export type CentralPmsResult =
   | { ok: true; response: PayableBasisResponse }
   | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
 
+export type CentralPmsResolveResult =
+  | { ok: true; response: PayableBasisLookupResponse }
+  | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
+
 export type StatutoryDiscountDecisionResult =
   | { ok: true; response: StatutoryDiscountDecisionResponse }
   | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
@@ -435,7 +477,7 @@ export interface CentralPmsClient {
     referenceValue: string,
     correlationId: string,
     statutoryDiscountDecisionCommandId?: string | null,
-  ): Promise<CentralPmsResult>;
+  ): Promise<CentralPmsResolveResult>;
   revalidatePayableBasis(displayedBasis: PayableBasisResponse, correlationId: string): Promise<CentralPmsResult>;
   resolveStatutoryOrdinanceAvailability?(
     displayedBasis: PayableBasisResponse,
@@ -453,6 +495,6 @@ export interface CentralPmsClient {
     idempotencyKey: string,
   ): Promise<StatutoryDiscountDecisionResult>;
   getStatutoryDiscountDecision?(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult>;
-  resolveTicket?(ticketReference: string, correlationId: string): Promise<CentralPmsResult>;
-  recalculateFee?(ticketReference: string, correlationId: string): Promise<CentralPmsResult>;
+  resolveTicket?(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult>;
+  recalculateFee?(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult>;
 }

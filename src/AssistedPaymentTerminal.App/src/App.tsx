@@ -7,10 +7,14 @@ import { createCentralPmsClient } from "./api/clientFactory";
 import type {
   CentralPmsClient,
   CentralPmsResult,
+  CentralPmsResolveResult,
+  PayableBasisLookupResponse,
   PayableBasisReferenceType,
   PayableBasisResponse,
+  ProjectedSessionResponse,
   StatutoryDiscountWorkflowState,
 } from "./api/centralPmsTypes";
+import { isProjectedSessionResponse } from "./api/centralPmsClient";
 import { CashCapturePanel } from "./CashCapturePanel";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import {
@@ -37,9 +41,9 @@ import {
 type LookupState =
   | { status: "idle" }
   | { status: "loading"; correlationId: string; requestId: number; referenceType: PayableBasisReferenceType; referenceValue: string }
-  | { status: "resolved"; basis: PayableBasisResponse; source: "fresh" | "restored"; acknowledgementRequired?: false }
+  | { status: "resolved"; basis: PayableBasisLookupResponse; source: "fresh" | "restored"; acknowledgementRequired?: false }
   | { status: "amount_changed"; previous: PayableBasisResponse; current: PayableBasisResponse; correlationId: string; acknowledged: boolean }
-  | { status: "failed"; result: Exclude<CentralPmsResult, { ok: true }> };
+  | { status: "failed"; result: Exclude<CentralPmsResolveResult, { ok: true }> };
 
 type PreCashResult =
   | { ok: true; basis: PayableBasisResponse }
@@ -397,11 +401,14 @@ export function TerminalShell({
   }, [context.cashierId, context.posServerId, context.siteGroupId, context.siteId, context.terminalId, localJournalBridge]);
   const displayedBasis = lookupState.status === "resolved" ? lookupState.basis : lookupState.status === "amount_changed" && lookupState.acknowledged ? lookupState.current : undefined;
 
-  const tariffExpired = displayedBasis ? new Date(displayedBasis.tariffValidUntil).getTime() <= Date.now() : false;
+  const authoritativeBasis = displayedBasis && !isProjectedSessionResponse(displayedBasis) ? displayedBasis : undefined;
+  const tariffExpired = authoritativeBasis?.tariffValidUntil
+    ? new Date(authoritativeBasis.tariffValidUntil).getTime() <= Date.now()
+    : false;
   const statutoryWorkflowActive = statutoryWorkflowState.status !== "none";
-  const centralReady = Boolean(displayedBasis?.readyForCashAcceptance) && !tariffExpired && lookupState.status !== "amount_changed";
-  const statutoryCashGate = displayedBasis
-    ? statutoryCashGateStatus(displayedBasis, statutoryWorkflowState, lookupState)
+  const centralReady = Boolean(authoritativeBasis?.readyForCashAcceptance) && !tariffExpired && lookupState.status !== "amount_changed";
+  const statutoryCashGate = authoritativeBasis
+    ? statutoryCashGateStatus(authoritativeBasis, statutoryWorkflowState, lookupState)
     : { ready: false, message: "No payable basis is resolved." };
   const cashBoundaryReady = centralReady && (!statutoryWorkflowActive || statutoryCashGate.ready);
 
@@ -453,7 +460,7 @@ export function TerminalShell({
         setLookupState({ status: "failed", result: plateResult });
         return;
       }
-      if (ticketResult.response.parkingSessionId !== plateResult.response.parkingSessionId) {
+      if (!sameResolvedSession(ticketResult.response, plateResult.response)) {
         setLookupState({ status: "failed", result: lookupMismatchFailure() });
         return;
       }
@@ -462,6 +469,11 @@ export function TerminalShell({
     const result = ticketResult ?? plateResult;
     if (!result) return;
     if (result.ok) {
+      if (isProjectedSessionResponse(result.response)) {
+        setStatutoryWorkflowState(noStatutoryWorkflow);
+        setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
+        return;
+      }
       const resolvedStatutoryState = statutoryStateFromPayableBasis(
         result.response,
         noStatutoryWorkflow,
@@ -584,6 +596,11 @@ export function TerminalShell({
       if (!refreshed.ok) {
         setLookupState({ status: "failed", result: refreshed });
         return { ok: false, message: refreshed.error.message };
+      }
+      if (isProjectedSessionResponse(refreshed.response)) {
+        setStatutoryWorkflowState(noStatutoryWorkflow);
+        setLookupState({ status: "resolved", basis: refreshed.response, source: "fresh" });
+        return { ok: false, message: "Session found from projection; live payable amount is temporarily unavailable." };
       }
       await persistPayableBasis(
         refreshed.response,
@@ -794,8 +811,10 @@ export function TerminalShell({
 
           {displayedBasis && (
             <div className="cashier-workflow">
-              <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} />
-              <section className="payment-section" aria-labelledby="receive-payment-heading">
+              {isProjectedSessionResponse(displayedBasis)
+                ? <ProjectionSessionSummary basis={displayedBasis} onRetry={() => void resolveReference()} />
+                : <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} />}
+              {authoritativeBasis && <section className="payment-section" aria-labelledby="receive-payment-heading">
                 <div className="section-heading">
                   <p className="eyebrow">3. Receive Payment</p>
                   <h2 id="receive-payment-heading">Receive payment</h2>
@@ -806,7 +825,7 @@ export function TerminalShell({
                   </StatusNotice>
                 )}
                 {!cashBoundaryReady && (
-                  <StatusNotice tone="danger" title={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryStatusSummary(statutoryWorkflowState).message : blockerMessage(displayedBasis)}>
+                  <StatusNotice tone="danger" title={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryStatusSummary(statutoryWorkflowState).message : blockerMessage(authoritativeBasis)}>
                     Resolve the blocker before recording cash.
                   </StatusNotice>
                 )}
@@ -814,16 +833,16 @@ export function TerminalShell({
                 <CashCapturePanel
                   config={config}
                   context={context}
-                  session={displayedBasis}
+                  session={authoritativeBasis}
                   tariffExpired={tariffExpired}
                   cashAcceptanceReady={localPrerequisitesReady && (cashBoundaryReady || tariffExpired)}
-                  cashAcceptanceBlockedMessage={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryCashGate.message : blockerMessage(displayedBasis)}
+                  cashAcceptanceBlockedMessage={statutoryWorkflowActive && !statutoryCashGate.ready ? statutoryCashGate.message : blockerMessage(authoritativeBasis)}
                   activeCashCustodySessionId={activeCashCustodySession?.id ?? null}
                   onBeforeCashReceived={authorizeHumanAndRevalidate}
                   onLocalPrerequisiteFailure={setLocalPrerequisiteMessage}
                   bridge={localJournalBridge}
                 />
-              </section>
+              </section>}
             </div>
           )}
         </section>
@@ -1142,6 +1161,40 @@ function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse
       </div>
     </section>
   );
+}
+
+function ProjectionSessionSummary({ basis, onRetry }: { basis: ProjectedSessionResponse; onRetry: () => void }) {
+  return (
+    <section className="session-summary" aria-label="Projected parking session" data-testid="projection-session-summary">
+      <div className="section-heading session-summary-heading">
+        <p className="eyebrow">2. Parking Session Details</p>
+        <h2>Session found from projection</h2>
+      </div>
+      <dl className="approved-session-details">
+        <div><dt>Ticket reference</dt><dd>{basis.ticketReference ?? "Unavailable"}</dd></div>
+        <div><dt>Plate number</dt><dd>{basis.plateNumber ?? "Unavailable"}</dd></div>
+        <div><dt>Entry timestamp</dt><dd>{formatDate(basis.entryTimestamp)}</dd></div>
+        <div><dt>Site</dt><dd>{basis.siteName ?? "Parking Site"}</dd></div>
+        <div><dt>Session source</dt><dd>Continuity projection</dd></div>
+      </dl>
+      <StatusNotice tone="info" title="Live payable amount temporarily unavailable" dataTestId="projection-payable-basis-blocked">
+        <p>Cash acceptance remains blocked until Central PMS obtains an authoritative live payable basis.</p>
+        <button className="secondary-action" type="button" onClick={onRetry}>Retry live fee</button>
+      </StatusNotice>
+    </section>
+  );
+}
+
+function sameResolvedSession(left: PayableBasisLookupResponse, right: PayableBasisLookupResponse): boolean {
+  if (isProjectedSessionResponse(left) || isProjectedSessionResponse(right)) {
+    return isProjectedSessionResponse(left) &&
+      isProjectedSessionResponse(right) &&
+      left.vendorSessionProjectionId === right.vendorSessionProjectionId &&
+      left.siteId === right.siteId &&
+      left.siteGroupId === right.siteGroupId;
+  }
+
+  return left.parkingSessionId === right.parkingSessionId;
 }
 
 function AmountChangedNotice({ previous, current, onAcknowledge }: { previous: PayableBasisResponse; current: PayableBasisResponse; onAcknowledge: () => void }) {
