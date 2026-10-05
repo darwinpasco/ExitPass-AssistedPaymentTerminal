@@ -462,7 +462,12 @@ export function TerminalShell({
     const result = ticketResult ?? plateResult;
     if (!result) return;
     if (result.ok) {
-      await persistPayableBasis(result.response, primaryType, primaryValue, false, false, null, noStatutoryWorkflow);
+      const resolvedStatutoryState = statutoryStateFromPayableBasis(
+        result.response,
+        noStatutoryWorkflow,
+      );
+      setStatutoryWorkflowState(resolvedStatutoryState);
+      await persistPayableBasis(result.response, primaryType, primaryValue, false, false, null, resolvedStatutoryState);
       setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
       return;
     }
@@ -1101,7 +1106,11 @@ function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse
   const statutory = statutoryStatusSummary(statutoryState);
   const discountAmount = basis.statutoryDiscountReadiness?.statutoryDiscountAmountMinorUnits ?? 0;
   const taxPending = "Confirmed on Sales Invoice";
-  const customerInformation = basis.customerInformationSubmitted === true ? "Submitted" : "Not submitted";
+  const customerInformation = basis.customerInformationSubmitted === true
+    ? "Submitted"
+    : basis.customerInformationSubmitted === false
+      ? "Not submitted"
+      : "Unavailable";
 
   return (
     <section className="session-summary" aria-label="Parking Session Details" data-testid="payable-basis-summary">
