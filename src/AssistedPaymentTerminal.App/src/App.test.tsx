@@ -32,6 +32,59 @@ describe("App cashier workflow", () => {
     expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
   });
 
+  it("discovers an existing pending statutory request and canonical customer-information presence", async () => {
+    const config = mode1Config();
+    const mock = new MockCentralPmsClient(config);
+    const resolvePayableBasis = vi.fn(async (...args: Parameters<typeof mock.resolvePayableBasis>) => {
+      const result = await mock.resolvePayableBasis(...args);
+      if (!result.ok) return result;
+
+      return {
+        ok: true as const,
+        response: {
+          ...result.response,
+          customerInformationSubmitted: true,
+          statutoryDiscountReadiness: {
+            applicable: true,
+            ready: false,
+            statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
+            entitlementType: "SENIOR_CITIZEN",
+            decisionStatus: "AWAITING_REVIEW",
+            decisionResultStatus: "NOT_DECIDED",
+            decisionCommandStatus: "AWAITING_REVIEW",
+            applicationCommandStatus: "NOT_REQUESTED",
+            applicationResultClassification: "NOT_REQUESTED",
+            payableBasisReady: false,
+            payableBasisReadinessStatus: "AWAITING_REVIEW",
+            payableBasisReadinessAction: "POLL_READBACK",
+            retryable: true,
+            recoveryClassification: "PENDING_REVIEW",
+            recoveryAction: "POLL_READBACK",
+            message: "Statutory discount is awaiting review.",
+          },
+        },
+      };
+    });
+
+    render(
+      <TerminalShell
+        config={config}
+        client={{
+          resolvePayableBasis,
+          revalidatePayableBasis: (basis, correlationId) => mock.revalidatePayableBasis(basis, correlationId),
+        }}
+      />,
+    );
+
+    await resolveTicket("APT-ACTIVE-1001");
+
+    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
+    expect(screen.getByText("Customer Information for Sales Invoice").parentElement).toHaveTextContent("Submitted");
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
+    expect(resolvePayableBasis).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps cash blocked for the actual missing-custody reason", async () => {
     const config = mode1Config();
     render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridgeWithLocalState({ activeShift: true })} />);
