@@ -29,7 +29,7 @@ public partial class MainWindow : Window
         var humanSessionOptions = CreateHumanSessionOptions(options);
         var humanSessionHttpHandler = new HttpClientHandler
         {
-            ClientCertificateOptions = ClientCertificateOption.Automatic
+            ClientCertificateOptions = ClientCertificateOption.Manual
         };
         var humanAuthenticationTrace = HumanAuthenticationTrace.FromEnvironment();
         var humanSessionRuntime = new HumanSessionRuntime(
@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         _payableBasisBridge = new CentralPmsPayableBasisBridgeHandler(
             new HttpClient(new HttpClientHandler
             {
-                ClientCertificateOptions = ClientCertificateOption.Automatic
+                ClientCertificateOptions = ClientCertificateOption.Manual
             })
             {
                 Timeout = TimeSpan.FromSeconds(15)
