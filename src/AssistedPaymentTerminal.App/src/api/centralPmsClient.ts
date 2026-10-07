@@ -285,8 +285,14 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
 
 export function isPayableBasisResponse(payload: unknown): payload is PayableBasisResponse {
   const candidate = payload as Partial<PayableBasisResponse> | null;
+  const validSource = candidate?.degraded !== true ||
+    (candidate.sessionSource === "VENDOR_SESSION_PROJECTION" &&
+      candidate.tariffSource === "EXITPASS_CONTINUITY" &&
+      candidate.manualExitRequired === true);
   return Boolean(
     candidate &&
+      validSource &&
+      (candidate.payableBasisAvailable as boolean | undefined) !== false &&
       typeof candidate.siteGroupId === "string" &&
       typeof candidate.siteId === "string" &&
       typeof candidate.parkingStatus === "string" &&
@@ -312,6 +318,8 @@ export function isProjectedSessionResponse(payload: unknown): payload is Project
       candidate.sessionSource === "VENDOR_SESSION_PROJECTION" &&
       candidate.degraded === true &&
       candidate.payableBasisAvailable === false &&
+      candidate.tariffSource == null &&
+      (candidate.manualExitRequired as boolean | undefined) !== true &&
       candidate.parkingSessionId === null &&
       candidate.tariffSnapshotId === null &&
       candidate.paymentStatus === null &&
