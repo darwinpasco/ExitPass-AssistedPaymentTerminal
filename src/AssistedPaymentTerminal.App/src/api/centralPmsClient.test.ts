@@ -99,6 +99,35 @@ describe("LiveCentralPmsClient", () => {
     }
   });
 
+  it("accepts a projection session with a complete Central PMS continuity payable basis", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => payableBasisPayload({
+        sessionSource: "VENDOR_SESSION_PROJECTION",
+        degraded: true,
+        payableBasisAvailable: true,
+        tariffSource: "EXITPASS_CONTINUITY",
+        manualExitRequired: true,
+      }),
+    })) as unknown as typeof fetch;
+
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+    const result = await client.resolvePayableBasis("ticket", "1474119573147", "continuity-correlation");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.response).toEqual(expect.objectContaining({
+        parkingSessionId: expect.any(String),
+        tariffSnapshotId: expect.any(String),
+        authoritativeAmountMinorUnits: 12500,
+        sessionSource: "VENDOR_SESSION_PROJECTION",
+        tariffSource: "EXITPASS_CONTINUITY",
+        manualExitRequired: true,
+        readyForCashAcceptance: true,
+      }));
+    }
+  });
+
   it("posts revalidation to the APT payable-basis facade without using WebPay routes", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

@@ -168,6 +168,38 @@ describe("App cashier workflow", () => {
     expect(resolvePayableBasis).toHaveBeenCalledTimes(2);
   });
 
+  it("shows a complete continuity payable basis and keeps normal cash acceptance available", async () => {
+    const config = mode1Config();
+    const liveClient = new MockCentralPmsClient(config);
+    const resolvePayableBasis = vi.fn(async (...args: Parameters<typeof liveClient.resolvePayableBasis>) => {
+      const result = await liveClient.resolvePayableBasis(...args);
+      if (!result.ok) return result;
+      return {
+        ok: true as const,
+        response: {
+          ...result.response,
+          sessionSource: "VENDOR_SESSION_PROJECTION",
+          degraded: true,
+          payableBasisAvailable: true as const,
+          tariffSource: "EXITPASS_CONTINUITY",
+          manualExitRequired: true,
+        },
+      };
+    });
+
+    render(<TerminalShell config={config} client={{
+      resolvePayableBasis,
+      revalidatePayableBasis: (basis, correlationId) => liveClient.revalidatePayableBasis(basis, correlationId),
+    }} localJournalBridge={bridgeWithLocalState()} />);
+    await userEvent.type(screen.getByLabelText("Ticket number"), "APT-ACTIVE-1001");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    expect(await screen.findByRole("heading", { name: "Parking session details" })).toBeInTheDocument();
+    expect(screen.getByText(/Site continuity tariff/i)).toBeInTheDocument();
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeInTheDocument();
+  });
+
   it("accepts matching ticket and plate values", async () => {
     const config = mode1Config();
     const mock = new MockCentralPmsClient(config);

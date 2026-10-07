@@ -170,9 +170,13 @@ export type PayableBasisResponse = {
   parkingSessionId: string;
   tariffSnapshotId: string;
   sessionFound?: true;
-  sessionSource?: "LIVE_VENDOR" | string;
-  degraded?: false;
+  sessionSource?: "LIVE_VENDOR" | "VENDOR_SESSION_PROJECTION" | string;
+  degraded?: boolean;
   payableBasisAvailable?: true;
+  tariffSource?: "LIVE_VENDOR" | "EXITPASS_CONTINUITY" | string | null;
+  manualExitRequired?: boolean;
+  vehicleTypeCode?: string | null;
+  tariffVersion?: string | null;
   siteGroupId: string;
   siteId: string;
   sitePosServerId?: string | null;
@@ -235,6 +239,10 @@ export type ProjectedSessionResponse = {
   sessionSource: "VENDOR_SESSION_PROJECTION";
   degraded: true;
   payableBasisAvailable: false;
+  tariffSource?: null;
+  manualExitRequired?: false;
+  vehicleTypeCode?: string | null;
+  tariffVersion?: null;
   vendorSessionProjectionId: string;
   projectionStatus: string;
   projectionLastRefreshedAt?: string | null;

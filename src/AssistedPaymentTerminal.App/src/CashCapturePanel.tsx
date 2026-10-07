@@ -208,6 +208,7 @@ export function CashCapturePanel({
     fiscalStatus,
     receiptStatus,
     receiptPreviewEligible,
+    manualExitRequired: session.manualExitRequired === true,
   });
 
   useEffect(() => {
@@ -605,7 +606,7 @@ export function CashCapturePanel({
       return;
     }
 
-    if (!completedFiscal.exitAuthorizationIssued) {
+    if (!completedFiscal.exitAuthorizationIssued && session.manualExitRequired !== true) {
       setCompletionStatus({ kind: "error", message: "Exit authorization has not been issued. Try again or contact support." });
       return;
     }
@@ -646,7 +647,9 @@ export function CashCapturePanel({
 
     setCompletionStatus({
       kind: "success",
-      message: "Exit authorization issued. Sales Invoice is ready to print.",
+      message: session.manualExitRequired === true
+        ? "Payment completed. Sales Invoice is ready to print. Verify payment and allow manual exit. When HikCentral service is restored, tag the vehicle as EXITED in HikCentral."
+        : "Exit authorization issued. Sales Invoice is ready to print.",
     });
   }
 
@@ -917,6 +920,7 @@ export function CashCapturePanel({
         status={receiptPreviewStatus}
         authoritativePrintDocument={receiptPrintStatus.kind === "ready" ? receiptPrintStatus.lastSubmit?.printDocument : undefined}
         exitAuthorizationIssued={fiscalCommand?.exitAuthorizationIssued === true}
+        manualExitRequired={session.manualExitRequired === true}
         selectedPaperWidthMm={receiptPaperWidthMm}
         onPaperWidthChange={setReceiptPaperWidthMm}
         paperWidthWarning={config.receiptPaperWidthWarning}
@@ -1055,12 +1059,14 @@ function buildCashierTransactionState({
   fiscalStatus,
   receiptStatus,
   receiptPreviewEligible,
+  manualExitRequired,
 }: {
   localTender: CashTenderSnapshot | null;
   centralPmsStatus: CentralPmsPanelStatus;
   fiscalStatus: FiscalPanelStatus;
   receiptStatus: ReceiptPanelStatus;
   receiptPreviewEligible: boolean;
+  manualExitRequired: boolean;
 }): CashierTransactionState {
   const paymentCommand = centralPmsStatus.kind === "ready" ? centralPmsStatus.status.command : null;
   const fiscalCommand = fiscalStatus.kind === "ready" ? fiscalStatus.status.command : null;
@@ -1085,10 +1091,14 @@ function buildCashierTransactionState({
   const fiscalRecorded = fiscalCommand?.status === "Recorded";
   const receiptAvailable = receiptCommand?.status === "Available" || receiptCommand?.status === "Voided" || receiptPreviewEligible;
   const exitAuthorizationIssued = fiscalCommand?.exitAuthorizationIssued === true;
-  const exitAuthorization = exitAuthorizationIssued ? "EXIT_AUTHORIZATION_ISSUED" : "EXIT_AUTHORIZATION_NOT_ISSUED";
-  const authorizationBlocked = receiptAvailable && !exitAuthorizationIssued;
-  // Completion requires durable cash custody plus authoritative payment, fiscal, receipt, and ExitAuthorization readback; no local ExitAuthorization inference is allowed.
-  const complete = Boolean(localTender?.currentLocalState === "CashReceived" && paymentFinal && fiscalRecorded && receiptAvailable && exitAuthorizationIssued);
+  const exitAuthorization = exitAuthorizationIssued
+    ? "EXIT_AUTHORIZATION_ISSUED"
+    : manualExitRequired
+      ? "MANUAL_EXIT_REQUIRED"
+      : "EXIT_AUTHORIZATION_NOT_ISSUED";
+  const authorizationBlocked = receiptAvailable && !exitAuthorizationIssued && !manualExitRequired;
+  // Continuity provenance from Central PMS explicitly substitutes manual exit for normal ExitAuthorization.
+  const complete = Boolean(localTender?.currentLocalState === "CashReceived" && paymentFinal && fiscalRecorded && receiptAvailable && (exitAuthorizationIssued || manualExitRequired));
 
   let completion: CashierTransactionState["completion"] = "TRANSACTION_IN_PROGRESS";
   if (paymentTerminal || fiscalTerminal || receiptTerminal || authorizationBlocked) {
@@ -1923,6 +1933,7 @@ function ReceiptPreviewSurface({
   status,
   authoritativePrintDocument,
   exitAuthorizationIssued,
+  manualExitRequired,
   selectedPaperWidthMm,
   onPaperWidthChange,
   paperWidthWarning,
@@ -1934,6 +1945,7 @@ function ReceiptPreviewSurface({
   status: ReceiptPreviewStatus;
   authoritativePrintDocument?: ReceiptPrintDocument;
   exitAuthorizationIssued: boolean;
+  manualExitRequired: boolean;
   selectedPaperWidthMm: 57 | 58 | 80;
   onPaperWidthChange: (paperWidthMm: 57 | 58 | 80) => void;
   paperWidthWarning: string | null;
@@ -1983,7 +1995,7 @@ function ReceiptPreviewSurface({
           <span>Paper width: {width} mm</span>
           {preview && <span>Configuration completeness: {preview.configurationCompleteness}</span>}
           <span>Not printed</span>
-          <span>{exitAuthorizationIssued ? "Exit Authorization: ISSUED" : "Exit authorization unavailable"}</span>
+          <span>{exitAuthorizationIssued ? "Exit Authorization: ISSUED" : manualExitRequired ? "Exit handling: MANUAL EXIT REQUIRED" : "Exit authorization unavailable"}</span>
         </div>
         <div className="receipt-paper-width-selector" role="group" aria-label="Sales Invoice paper width">
           {[57, 58, 80].map((paperWidthMm) => (

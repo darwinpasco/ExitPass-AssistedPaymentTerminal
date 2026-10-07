@@ -1137,12 +1137,19 @@ function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse
         <p className="eyebrow">2. Parking Session Details</p>
         <h2>Parking session details</h2>
       </div>
+      {basis.degraded === true && basis.tariffSource === "EXITPASS_CONTINUITY" && (
+        <StatusNotice tone="info" title="Site continuity tariff" dataTestId="continuity-tariff-notice">
+          <p>The payable amount was calculated by Central PMS using the approved Site tariff while the parking system is temporarily unavailable.</p>
+        </StatusNotice>
+      )}
       <dl className="approved-session-details">
         <div><dt>Ticket reference</dt><dd>{basis.ticketReference ?? "Unavailable"}</dd></div>
         <div><dt>Plate number</dt><dd>{basis.plateNumber ?? "Unavailable"}</dd></div>
+        <div><dt>Vehicle type</dt><dd>{basis.vehicleTypeCode ?? "Unavailable"}</dd></div>
         <div><dt>Entry timestamp</dt><dd>{formatDate(basis.entryTimestamp)}</dd></div>
         <div><dt>Parking duration</dt><dd>{basis.parkingDurationDisplay ?? formatParkingDuration(basis.entryTimestamp, basis.currentFeeCalculationTime ?? basis.tariffCalculatedAt)}</dd></div>
         <div><dt>Tariff calculated</dt><dd>{formatDate(basis.tariffCalculatedAt)}</dd></div>
+        <div><dt>Tariff version</dt><dd>{basis.tariffVersion ?? "Unavailable"}</dd></div>
         <div><dt>Fee valid until</dt><dd>{formatDate(basis.feeValidUntil ?? basis.tariffValidUntil)}</dd></div>
         <div><dt>Discount Request</dt><dd>{statutory.label}</dd></div>
         {statutory.reason && <div><dt>Reason</dt><dd>{statutory.reason}</dd></div>}
@@ -1173,6 +1180,7 @@ function ProjectionSessionSummary({ basis, onRetry }: { basis: ProjectedSessionR
       <dl className="approved-session-details">
         <div><dt>Ticket reference</dt><dd>{basis.ticketReference ?? "Unavailable"}</dd></div>
         <div><dt>Plate number</dt><dd>{basis.plateNumber ?? "Unavailable"}</dd></div>
+        <div><dt>Vehicle type</dt><dd>{basis.vehicleTypeCode ?? "Unavailable"}</dd></div>
         <div><dt>Entry timestamp</dt><dd>{formatDate(basis.entryTimestamp)}</dd></div>
         <div><dt>Site</dt><dd>{basis.siteName ?? "Parking Site"}</dd></div>
         <div><dt>Session source</dt><dd>Continuity projection</dd></div>

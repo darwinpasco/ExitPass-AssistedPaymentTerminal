@@ -1604,6 +1604,36 @@ describe("CashCapturePanel", () => {
     expect(document.body).not.toHaveTextContent("Transaction complete");
     expect(bridge.retrieveOrCheckCentralPmsCashReceipt).not.toHaveBeenCalled();
   });
+
+  it("completes a continuity cash transaction with receipt and manual exit instead of ExitAuthorization", async () => {
+    const bridge = new FakeBridge({
+      initialReadback: {
+        tender: tender({ id: "tender-001", state: "CashReceived", correlationId: "corr-restored" }),
+        events: [],
+      },
+      centralStatus: centralStatus("Confirmed"),
+      fiscalStatus: fiscalStatus("Recorded", { exitAuthorizationIssued: false }),
+      receiptStatus: receiptStatus("Available"),
+    });
+    renderPanel({
+      config: receiptEnabledConfig(),
+      bridge,
+      session: {
+        ...activeSession(),
+        sessionSource: "VENDOR_SESSION_PROJECTION",
+        degraded: true,
+        payableBasisAvailable: true,
+        tariffSource: "EXITPASS_CONTINUITY",
+        manualExitRequired: true,
+      },
+    });
+
+    const statePanel = within(await screen.findByLabelText("Cashier transaction state"));
+    await waitFor(() => expect(statePanel.getByTestId("receipt-presentation-state")).toHaveTextContent("Receipt Available"));
+    expect(statePanel.getByTestId("cashier-completion-state")).toHaveTextContent("Transaction Complete");
+    expect(statePanel.getByText(/MANUAL EXIT REQUIRED/i)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Transaction Requires Support");
+  });
 });
 
 function renderPanel({
