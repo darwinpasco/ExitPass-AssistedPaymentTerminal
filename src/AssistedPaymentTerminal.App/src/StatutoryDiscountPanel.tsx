@@ -403,7 +403,7 @@ export function mapDecisionResponse(response: StatutoryDiscountDecisionResponse,
 }
 
 function statusFromResponse(response: StatutoryDiscountDecisionResponse): StatutoryDiscountWorkflowState["status"] {
-  if (response.payableBasisReady && response.payableBasisReadinessStatus === "APPLIED") return "applied";
+  if (response.payableBasisReady && ["PAYABLE_BASIS_READY", "APPLIED"].includes(response.payableBasisReadinessStatus)) return "applied";
   switch (response.payableBasisReadinessStatus) {
     case "AWAITING_REVIEW": return "awaiting_review";
     case "DECISION_APPROVED_APPLICATION_NOT_REQUESTED": return "approved_application_not_requested";
@@ -412,6 +412,8 @@ function statusFromResponse(response: StatutoryDiscountDecisionResponse): Statut
     case "RETRYABLE_FAILURE": return "retryable_failure";
     case "TERMINAL_FAILURE": return "terminal_failure";
     case "REQUIRED_FACTS_UNAVAILABLE": return "required_facts_unavailable";
+    case "PAYABLE_BASIS_READY":
+    case "APPLIED": return "required_facts_unavailable";
     default:
       if (response.decisionResultStatus === "REJECTED") return "rejected";
       if (response.applicationCommandStatus === "PROCESSING") return "application_processing";

@@ -14,6 +14,7 @@ export type StatutoryDiscountVisualSmokeScenarioId =
   | "approved-application-not-requested"
   | "application-processing"
   | "applied-complete"
+  | "applied-zero-payable-complete"
   | "applied-amount-changed"
   | "rejected"
   | "retryable-decision-failure"
@@ -71,6 +72,7 @@ export const statutoryDiscountVisualSmokeScenarios: StatutoryDiscountVisualSmoke
   { id: "approved-application-not-requested", label: "Approved, application not requested", expectedPosture: "Operator Console approved the request; application intent is available.", state: baseState("approved_application_not_requested", { decisionResultStatus: "APPROVED", payableBasisReadinessStatus: "DECISION_APPROVED_APPLICATION_NOT_REQUESTED", payableBasisReadinessAction: "SUBMIT_APPLICATION_INTENT" }) },
   { id: "application-processing", label: "Application processing", expectedPosture: "Application command exists and remains pending without another POST.", state: baseState("application_processing", { statutoryDiscountPayableBasisApplicationCommandId: applicationId, applicationCommandStatus: "PROCESSING", payableBasisReadinessStatus: "APPLICATION_PROCESSING", payableBasisReadinessAction: "POLL_READBACK" }) },
   { id: "applied-complete", label: "Applied complete", expectedPosture: "Applied snapshot, final amount, VAT, and discount facts are visible after amount acknowledgement.", state: appliedState(true) },
+  { id: "applied-zero-payable-complete", label: "Applied zero-payable complete", expectedPosture: "Applied full exemption shows canonical fiscal and exit completion without cash collection.", state: zeroPayableAppliedState() },
   { id: "applied-amount-changed", label: "Applied amount changed", expectedPosture: "Applied basis differs from the original basis and requires amount acknowledgement.", state: appliedState(false) },
   { id: "rejected", label: "Rejected", expectedPosture: "Rejected decision is terminal for this statutory request.", state: baseState("rejected", { decisionResultStatus: "REJECTED", payableBasisReadinessStatus: "DECISION_REJECTED", payableBasisReadinessAction: "DO_NOT_RETRY", safeErrorCode: "STATUTORY_DISCOUNT_DECISION_REJECTED" }) },
   { id: "retryable-decision-failure", label: "Retryable decision failure", expectedPosture: "Retry guidance preserves the original idempotency key.", state: baseState("retryable_failure", { retryable: true, recoveryClassification: "RETRY_ORIGINAL_IDEMPOTENCY_KEY", recoveryAction: "WAIT_THEN_RETRY_ORIGINAL_IDEMPOTENCY_KEY", safeErrorCode: "STATUTORY_DISCOUNT_RETRYABLE_FAILURE", payableBasisReadinessStatus: "RETRYABLE_FAILURE" }) },
@@ -142,7 +144,7 @@ export function StatutoryDiscountVisualSmokeShell({ config, renderTerminalShell 
       <section className="status-notice info" role="status" aria-label="Statutory discount visual smoke notice">
         <h2>{scenario.label}</h2>
         <p>{scenario.expectedPosture}</p>
-        <p>Statutory CASH_RECEIVED is enabled only for APPLIED, acknowledged, revalidated, locally ready fixture states.</p>
+        <p>Statutory CASH_RECEIVED follows Central PMS readiness for regular fallback or an applied adjusted basis, with immediate revalidation before cash.</p>
         <p>No live Central PMS, HikCentral, fiscal, receipt, ExitAuthorization, gate, or cash-drawer command is executed.</p>
       </section>
       <section className="visual-smoke-selector" aria-label="Statutory discount visual smoke scenarios">
@@ -174,7 +176,7 @@ function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscou
       revalidationCount += 1;
       const queuedOutcome = actionRevalidationOutcome(scenario.id, revalidationCount, displayedBasis, correlationId);
       if (!queuedOutcome) {
-        if (scenario.state.status === "applied") {
+        if (scenario.state.status === "applied" || isRegularPaymentFallbackScenario(scenario.state)) {
           return {
             ok: true as const,
             response: {
@@ -195,6 +197,8 @@ function clientForScenario(base: MockCentralPmsClient, scenario: StatutoryDiscou
     },
     submitStatutoryDiscountDecision: (...args) => base.submitStatutoryDiscountDecision(...args),
     getStatutoryDiscountDecision: (...args) => base.getStatutoryDiscountDecision(...args),
+    getStatutorySalesInvoicePresentation: (...args) => base.getStatutorySalesInvoicePresentation(...args),
+    printStatutorySalesInvoice: (...args) => base.printStatutorySalesInvoice(...args),
     resolveStatutoryOrdinanceAvailability: (...args) => base.resolveStatutoryOrdinanceAvailability(...args),
     resolveTicket: (...args) => base.resolveTicket(...args),
     recalculateFee: (...args) => base.recalculateFee(...args),
@@ -385,7 +389,7 @@ function appliedState(amountAcknowledged: boolean): StatutoryDiscountWorkflowSta
     statutoryDiscountAmountMinorUnits: 2500,
     finalPayableAmountMinorUnits: 10000,
     payableBasisReady: true,
-    payableBasisReadinessStatus: "APPLIED",
+    payableBasisReadinessStatus: "PAYABLE_BASIS_READY",
     payableBasisReadinessAction: null,
     amountAcknowledged,
     evidenceRequired: true,
@@ -408,9 +412,18 @@ function appliedState(amountAcknowledged: boolean): StatutoryDiscountWorkflowSta
   });
 }
 
+function zeroPayableAppliedState(): StatutoryDiscountWorkflowState {
+  return {
+    ...appliedState(true),
+    statutoryDiscountAmountMinorUnits: 12500,
+    finalPayableAmountMinorUnits: 0,
+  };
+}
+
 function basisForScenario(config: AptConfig, scenario: StatutoryDiscountVisualSmokeScenario): PayableBasisResponse {
   const applied = scenario.state.status === "applied";
-  const blocker = statutoryBlockerForScenario(scenario.state);
+  const regularPaymentFallback = isRegularPaymentFallbackScenario(scenario.state);
+  const blocker = regularPaymentFallback ? null : statutoryBlockerForScenario(scenario.state);
   const amount = applied && scenario.state.finalPayableAmountMinorUnits != null ? scenario.state.finalPayableAmountMinorUnits : 12500;
   const snapshot = applied && scenario.state.appliedTariffSnapshotId ? scenario.state.appliedTariffSnapshotId : originalSnapshot;
   const referenceValue = scenario.referenceValue ?? "APT-ACTIVE-1001";
@@ -444,7 +457,7 @@ function basisForScenario(config: AptConfig, scenario: StatutoryDiscountVisualSm
     statutoryDiscountApplicationId: scenario.state.statutoryDiscountPayableBasisApplicationCommandId ?? null,
     statutoryDiscountReadiness: scenario.state.status === "none" ? null : {
       applicable: true,
-      ready: applied,
+      ready: applied || regularPaymentFallback,
       statutoryDiscountDecisionCommandId: scenario.state.statutoryDiscountDecisionCommandId ?? null,
       statutoryDiscountPayableBasisApplicationCommandId: scenario.state.statutoryDiscountPayableBasisApplicationCommandId ?? null,
       entitlementType: scenario.state.entitlementType ?? null,
@@ -472,27 +485,44 @@ function basisForScenario(config: AptConfig, scenario: StatutoryDiscountVisualSm
       blockingReasonCode: blocker,
       message: scenario.state.payableBasisReadinessStatus ?? scenario.state.status,
     },
+    zeroPayableStatutoryCompletion: applied && amount === 0 ? {
+      completionBasis: "ZERO_PAYABLE_STATUTORY_FINALITY",
+      fiscalPrerequisiteSatisfied: true,
+      fiscalIssuanceReferenceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2001",
+      fiscalIssuanceState: "FiscalIssuanceRecorded",
+      posServerFiscalDocumentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb2001",
+      fiscalDocumentNumber: "SI-00000073",
+      exitAuthorizationId: "cccccccc-cccc-4ccc-8ccc-cccccccc2001",
+      exitAuthorizationStatus: "ISSUED",
+      exitAuthorizationIssuedAt: now.toISOString(),
+      exitAuthorizationExpiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+    } : null,
     originalTariffSnapshotId: applied ? originalSnapshot : null,
     effectiveTariffSnapshotId: snapshot,
     appliedTariffSnapshotId: applied ? appliedSnapshot : null,
     policyResolutionBasis: applied ? "CENTRAL_PMS_STATUTORY_POLICY" : null,
     benefitType: scenario.state.entitlementType ?? null,
-    readinessDimensions: scenario.state.status === "none" ? [{ name: "statutoryEvidenceReadiness", status: "READY", ready: true, blockingReasonCode: null, retryable: false, message: "No statutory evidence is required." }] : [{ name: "statutoryEvidenceReadiness", status: applied ? "READY" : "BLOCKED", ready: applied, blockingReasonCode: applied ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: applied ? "Statutory evidence is applied." : "Statutory evidence is not ready." }],
-    statutoryEvidenceReadiness: { name: "statutoryEvidenceReadiness", status: applied || scenario.state.status === "none" ? "READY" : "BLOCKED", ready: applied || scenario.state.status === "none", blockingReasonCode: applied || scenario.state.status === "none" ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: applied || scenario.state.status === "none" ? "Statutory evidence is ready." : "Statutory evidence is not ready." },
+    readinessDimensions: scenario.state.status === "none" ? [{ name: "statutoryEvidenceReadiness", status: "READY", ready: true, blockingReasonCode: null, retryable: false, message: "No statutory evidence is required." }] : [{ name: "statutoryEvidenceReadiness", status: applied || regularPaymentFallback ? "READY" : "BLOCKED", ready: applied || regularPaymentFallback, blockingReasonCode: applied || regularPaymentFallback ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: regularPaymentFallback ? "Statutory evidence remains under review; the current regular payable basis remains available." : applied ? "Statutory evidence is applied." : "Statutory evidence is not ready." }],
+    statutoryEvidenceReadiness: { name: "statutoryEvidenceReadiness", status: applied || regularPaymentFallback || scenario.state.status === "none" ? "READY" : "BLOCKED", ready: applied || regularPaymentFallback || scenario.state.status === "none", blockingReasonCode: applied || regularPaymentFallback || scenario.state.status === "none" ? null : "STATUTORY_EVIDENCE_NOT_READY", retryable: false, message: regularPaymentFallback ? "Statutory evidence remains under review; the current regular payable basis remains available." : applied || scenario.state.status === "none" ? "Statutory evidence is ready." : "Statutory evidence is not ready." },
     sessionReadiness: "RESOLVED_PAYABLE",
     tariffReadiness: "CURRENT",
     paymentEligibility: "ELIGIBLE",
     terminalCashAvailability: "AVAILABLE",
     fiscalReadiness: "READY",
     salesInvoiceConfigurationReadiness: "READY",
-    cashAcceptanceReadiness: applied || scenario.state.status === "none" ? "READY" : "BLOCKED",
-    readyForCashAcceptance: applied || scenario.state.status === "none",
-    blockingReasonCodes: applied || scenario.state.status === "none" ? [] : [blocker],
+    cashAcceptanceReadiness: applied || regularPaymentFallback || scenario.state.status === "none" ? "READY" : "BLOCKED",
+    readyForCashAcceptance: applied || regularPaymentFallback || scenario.state.status === "none",
+    blockingReasonCodes: applied || regularPaymentFallback || scenario.state.status === "none" ? [] : [blocker!],
     retryable: Boolean(scenario.state.retryable),
     safeUserFacingClassification: applied || scenario.state.status === "none" ? "READY_FOR_CASH_ACCEPTANCE" : "STATUTORY_DISCOUNT_BLOCKED",
     safeMessage: "Controlled statutory discount visual smoke basis.",
     correlationId: scenario.state.correlationId ?? "statutory-smoke-correlation",
   };
+}
+
+function isRegularPaymentFallbackScenario(state: StatutoryDiscountWorkflowState): boolean {
+  return state.payableBasisReadinessStatus === "AWAITING_REVIEW"
+    || state.payableBasisReadinessStatus === "DECISION_REJECTED";
 }
 
 function statutoryBlockerForScenario(state: StatutoryDiscountWorkflowState): string {

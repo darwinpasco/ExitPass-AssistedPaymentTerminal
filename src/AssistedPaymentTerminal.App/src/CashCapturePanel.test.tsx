@@ -130,7 +130,7 @@ describe("CashCapturePanel", () => {
       currency: "PHP",
       immediateRevalidationOutcome: "PASSED_UNCHANGED",
       centralPmsCorrelationId: "corr-second-revalidation",
-      readinessStatus: "APPLIED",
+      readinessStatus: "PAYABLE_BASIS_READY",
     });
     expect(document.body).not.toHaveTextContent("99999999-9999-4999-8999-999999990001");
   });
@@ -1779,7 +1779,7 @@ function statutoryAppliedSession(): ResolveVendorParkingResponse {
       applicationCommandStatus: "APPLIED",
       applicationResultClassification: "APPLIED",
       payableBasisReady: true,
-      payableBasisReadinessStatus: "APPLIED",
+      payableBasisReadinessStatus: "PAYABLE_BASIS_READY",
       payableBasisReadinessAction: null,
       originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
       appliedTariffSnapshotId: "99999999-9999-4999-8999-999999990001",

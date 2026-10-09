@@ -26,6 +26,7 @@ import {
   shouldUseTransactionCompletionVisualSmoke,
 } from "./TransactionCompletionVisualSmoke";
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
+import { ZeroPayableSalesInvoicePanel } from "./ZeroPayableSalesInvoicePanel";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type LocalJournalHealth, type PayableBasisStateSnapshot } from "./localJournalBridge";
 import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge, type StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
@@ -543,6 +544,13 @@ export function TerminalShell({
       nextStatutoryState,
     );
 
+    if (outcome === "PASSED_UNCHANGED"
+      && result.response.readyForCashAcceptance
+      && permitsRegularPaymentFallback(result.response, nextStatutoryState)) {
+      setLookupState({ status: "resolved", basis: result.response, source: "fresh" });
+      return { ok: true, basis: result.response };
+    }
+
     if (outcome === "PASSED_UNCHANGED" && result.response.readyForCashAcceptance && revalidatedBasisMatchesCurrentStatutoryAuthority(result.response, nextStatutoryState)) {
       if (nextStatutoryState.status !== "none") {
         const evidenceResult = await statutoryEvidenceBridge.revalidate(
@@ -813,8 +821,8 @@ export function TerminalShell({
             <div className="cashier-workflow">
               {isProjectedSessionResponse(displayedBasis)
                 ? <ProjectionSessionSummary basis={displayedBasis} onRetry={() => void resolveReference()} />
-                : <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} />}
-              {authoritativeBasis && <section className="payment-section" aria-labelledby="receive-payment-heading">
+                : <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} client={client} />}
+              {authoritativeBasis && authoritativeBasis.authoritativeAmountMinorUnits > 0 && <section className="payment-section" aria-labelledby="receive-payment-heading">
                 <div className="section-heading">
                   <p className="eyebrow">3. Receive Payment</p>
                   <h2 id="receive-payment-heading">Receive payment</h2>
@@ -1121,9 +1129,12 @@ function localCashPrerequisiteBlockers(
   return blockers;
 }
 
-function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse; statutoryState: StatutoryDiscountWorkflowState }) {
+function SessionSummary({ basis, statutoryState, client }: { basis: PayableBasisResponse; statutoryState: StatutoryDiscountWorkflowState; client: CentralPmsClient }) {
   const statutory = statutoryStatusSummary(statutoryState);
   const discountAmount = basis.statutoryDiscountReadiness?.statutoryDiscountAmountMinorUnits ?? 0;
+  const zeroPayableCompletion = basis.authoritativeAmountMinorUnits === 0
+    ? basis.zeroPayableStatutoryCompletion
+    : null;
   const taxPending = "Confirmed on Sales Invoice";
   const customerInformation = basis.customerInformationSubmitted === true
     ? "Submitted"
@@ -1166,6 +1177,26 @@ function SessionSummary({ basis, statutoryState }: { basis: PayableBasisResponse
           <div className="amount-summary-total-row"><dt>Total Amount</dt><dd>{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</dd></div>
         </dl>
       </div>
+      {zeroPayableCompletion && (
+        <>
+          <StatusNotice tone="success" title="Zero-payable statutory completion" dataTestId="zero-payable-statutory-completion">
+            <p>Full parking discount applied. No cash is required.</p>
+            <dl className="approved-session-details">
+              <div><dt>Sales Invoice</dt><dd>{zeroPayableCompletion.fiscalDocumentNumber ?? "Being prepared"}</dd></div>
+              <div><dt>Fiscal status</dt><dd>{zeroPayableCompletion.fiscalIssuanceState ?? "Being prepared"}</dd></div>
+              <div><dt>Exit authorization</dt><dd>{zeroPayableCompletion.exitAuthorizationStatus ?? "Being prepared"}</dd></div>
+            </dl>
+          </StatusNotice>
+          {zeroPayableCompletion.fiscalPrerequisiteSatisfied && zeroPayableCompletion.fiscalDocumentNumber && (
+            <ZeroPayableSalesInvoicePanel basis={basis} client={client} />
+          )}
+        </>
+      )}
+      {basis.authoritativeAmountMinorUnits === 0 && !zeroPayableCompletion && (
+        <StatusNotice tone="info" title="Zero-payable statutory completion">
+          <p>No cash is required. Fiscal and exit completion are being prepared.</p>
+        </StatusNotice>
+      )}
     </section>
   );
 }
@@ -1304,13 +1335,27 @@ function statutoryCashGateStatus(
     return { ready: true, message: "No statutory workflow is active." };
   }
 
-  if (lookupState.status === "amount_changed" || !statutoryState.amountAcknowledged) {
+  if (lookupState.status === "amount_changed"
+    || (statutoryState.status === "applied" && !statutoryState.amountAcknowledged)) {
     return { ready: false, message: "Review the updated amount before recording cash." };
   }
 
   const readiness = basis.statutoryDiscountReadiness;
   if (!readiness?.applicable) {
     return { ready: false, message: "Central PMS did not return statutory readiness for the active statutory workflow." };
+  }
+
+  if (isRegularPaymentFallbackStatus(readiness.payableBasisReadinessStatus)) {
+    if (!permitsRegularPaymentFallback(basis, statutoryState)) {
+      return { ready: false, message: blockerMessage(basis) };
+    }
+
+    return {
+      ready: true,
+      message: statutoryState.status === "rejected"
+        ? "Statutory request was rejected. The current regular amount remains available."
+        : "Statutory review is pending. You may wait for review or collect the current regular amount.",
+    };
   }
 
   if (statutoryState.status !== "applied") {
@@ -1363,6 +1408,29 @@ function statutoryCashGateStatus(
   }
 
   return { ready: true, message: "Statutory payable basis is ready for cash acceptance." };
+}
+
+function isRegularPaymentFallbackStatus(status?: string | null): boolean {
+  return status === "AWAITING_REVIEW" || status === "DECISION_REJECTED";
+}
+
+function permitsRegularPaymentFallback(
+  basis: PayableBasisResponse,
+  statutoryState: StatutoryDiscountWorkflowState,
+): boolean {
+  const readiness = basis.statutoryDiscountReadiness;
+  const expectedState = readiness?.payableBasisReadinessStatus === "AWAITING_REVIEW"
+    ? "awaiting_review"
+    : readiness?.payableBasisReadinessStatus === "DECISION_REJECTED"
+      ? "rejected"
+      : null;
+
+  return expectedState !== null
+    && statutoryState.status === expectedState
+    && readiness?.applicable === true
+    && readiness.ready === true
+    && basis.readyForCashAcceptance
+    && basis.blockingReasonCodes.length === 0;
 }
 
 function evidenceRecoveryFromResponse(
@@ -1482,7 +1550,7 @@ function statutoryStateFromPayableBasis(
 }
 
 function statutoryWorkflowStatusFromReadiness(status: string, ready: boolean): StatutoryDiscountWorkflowState["status"] {
-  if (ready && status === "APPLIED") return "applied";
+  if (ready && (status === "PAYABLE_BASIS_READY" || status === "APPLIED")) return "applied";
   switch (status) {
     case "AWAITING_REVIEW": return "awaiting_review";
     case "DECISION_APPROVED_APPLICATION_NOT_REQUESTED": return "approved_application_not_requested";
@@ -1491,7 +1559,8 @@ function statutoryWorkflowStatusFromReadiness(status: string, ready: boolean): S
     case "RETRYABLE_FAILURE": return "retryable_failure";
     case "TERMINAL_FAILURE": return "terminal_failure";
     case "REQUIRED_FACTS_UNAVAILABLE": return "required_facts_unavailable";
-    case "APPLIED": return "applied";
+    case "PAYABLE_BASIS_READY":
+    case "APPLIED": return "required_facts_unavailable";
     default: return "required_facts_unavailable";
   }
 }
