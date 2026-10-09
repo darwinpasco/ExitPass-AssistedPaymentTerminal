@@ -1,4 +1,8 @@
-export type PayableBasisBridgeCommand = "payableBasis.resolve" | "payableBasis.revalidate";
+export type PayableBasisBridgeCommand =
+  | "payableBasis.resolve"
+  | "payableBasis.revalidate"
+  | "statutoryReceiptPresentation.get"
+  | "statutoryReceiptPresentation.print";
 
 export type PayableBasisBridgeResult =
   | {

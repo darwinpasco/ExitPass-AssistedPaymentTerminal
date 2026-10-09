@@ -1129,6 +1129,56 @@ dl {
   border-top: 1px dotted #c7d1d8;
 }
 
+.zero-payable-sales-invoice {
+  margin-top: 10px;
+}
+
+.zero-payable-sales-invoice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zero-payable-sales-invoice-actions h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.zero-payable-sales-invoice-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.zero-payable-sales-invoice-error {
+  margin-top: 8px;
+}
+
+@media print {
+  body:has(.zero-payable-sales-invoice-print) * {
+    visibility: hidden !important;
+  }
+
+  .zero-payable-sales-invoice-print,
+  .zero-payable-sales-invoice-print * {
+    visibility: visible !important;
+  }
+
+  .zero-payable-sales-invoice-print {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 80mm;
+    max-width: none;
+    margin: 0;
+    border: 0;
+    padding: 4mm;
+    box-shadow: none;
+  }
+}
+
 .receipt-paper-57 .receipt-paper-fields div,
 .receipt-paper-58 .receipt-paper-fields div {
   grid-template-columns: minmax(0, 1fr);

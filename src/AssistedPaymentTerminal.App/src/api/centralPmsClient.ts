@@ -18,6 +18,10 @@ import type {
   StatutoryOrdinanceAvailabilityRequest,
   StatutoryOrdinanceAvailabilityResponse,
   StatutoryOrdinanceAvailabilityResult,
+  StatutorySalesInvoicePresentationResponse,
+  StatutorySalesInvoicePresentationResult,
+  StatutorySalesInvoicePrintResponse,
+  StatutorySalesInvoicePrintResult,
 } from "./centralPmsTypes";
 import { sendPayableBasisRequest, type PayableBasisBridgeCommand } from "../centralPmsPayableBasisBridge";
 
@@ -112,6 +116,135 @@ export class LiveCentralPmsClient implements CentralPmsClient {
 
   async getStatutoryDiscountDecision(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult> {
     return this.requestStatutoryDiscountDecision("GET", `/v1/statutory-discounts/decisions/${encodeURIComponent(decisionCommandId)}`, correlationId);
+  }
+
+  async getStatutorySalesInvoicePresentation(
+    displayedBasis: PayableBasisResponse,
+    correlationId: string,
+  ): Promise<StatutorySalesInvoicePresentationResult> {
+    const completion = displayedBasis.zeroPayableStatutoryCompletion;
+    const decisionCommandId = displayedBasis.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId;
+    const applicationCommandId = displayedBasis.statutoryDiscountReadiness?.statutoryDiscountPayableBasisApplicationCommandId;
+    if (completion?.completionBasis !== "ZERO_PAYABLE_STATUTORY_FINALITY" || !decisionCommandId || !applicationCommandId) {
+      return failure(
+        "invalid_request",
+        "STATUTORY_RECEIPT_ANCESTRY_UNAVAILABLE",
+        "The zero-payable statutory Sales Invoice ancestry is unavailable.",
+        correlationId,
+        false,
+      );
+    }
+
+    const query = new URLSearchParams({
+      decisionCommandId,
+      parkingSessionId: displayedBasis.parkingSessionId,
+    });
+    const path = `/v1/webpay/statutory-applications/${encodeURIComponent(applicationCommandId)}/receipt-presentation?${query}`;
+    const bridged = await sendPayableBasisRequest(
+      "statutoryReceiptPresentation.get",
+      correlationId,
+      displayedBasis.siteId,
+      { applicationCommandId, decisionCommandId, parkingSessionId: displayedBasis.parkingSessionId },
+    );
+    if (bridged) {
+      if (!bridged.ok) {
+        const kind: CentralPmsFailureKind = bridged.error.code === "CENTRAL_PMS_TIMEOUT"
+          ? "timeout"
+          : bridged.error.code === "HUMAN_SESSION_REQUIRED"
+            ? "unauthorized"
+            : "service_unavailable";
+        return failure(kind, bridged.error.code, bridged.error.message, correlationId, kind !== "unauthorized");
+      }
+
+      const payload = bridged.payload.body;
+      if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300) {
+        return {
+          ok: false,
+          kind: mapFailureKind(bridged.payload.statusCode, typeof payload?.errorCode === "string" ? payload.errorCode : undefined),
+          error: normalizeError(payload, correlationId),
+        };
+      }
+      if (!isStatutorySalesInvoicePresentationResponse(payload, completion)) {
+        return failure(
+          "malformed_response",
+          "MALFORMED_STATUTORY_RECEIPT_PRESENTATION",
+          "Central PMS statutory Sales Invoice presentation did not match the completed fiscal record.",
+          correlationId,
+          false,
+        );
+      }
+      return { ok: true, response: payload };
+    }
+
+    const result = await this.send(path, "GET", correlationId);
+    if (!result.ok) {
+      return result;
+    }
+
+    if (!isStatutorySalesInvoicePresentationResponse(result.payload, completion)) {
+      return failure(
+        "malformed_response",
+        "MALFORMED_STATUTORY_RECEIPT_PRESENTATION",
+        "Central PMS statutory Sales Invoice presentation did not match the completed fiscal record.",
+        correlationId,
+        false,
+      );
+    }
+
+    return { ok: true, response: result.payload };
+  }
+
+  async printStatutorySalesInvoice(
+    displayedBasis: PayableBasisResponse,
+    correlationId: string,
+  ): Promise<StatutorySalesInvoicePrintResult> {
+    const ancestry = statutoryReceiptAncestry(displayedBasis);
+    if (!ancestry) {
+      return failure(
+        "invalid_request",
+        "STATUTORY_RECEIPT_ANCESTRY_UNAVAILABLE",
+        "The zero-payable statutory Sales Invoice ancestry is unavailable.",
+        correlationId,
+        false,
+      );
+    }
+
+    const bridged = await sendPayableBasisRequest(
+      "statutoryReceiptPresentation.print",
+      correlationId,
+      displayedBasis.siteId,
+      ancestry,
+    );
+    if (!bridged) {
+      return failure(
+        "service_unavailable",
+        "APT_HOST_BRIDGE_UNAVAILABLE",
+        "The APT printer bridge is unavailable.",
+        correlationId,
+        true,
+      );
+    }
+    if (!bridged.ok) {
+      return failure(
+        bridged.error.code === "HUMAN_SESSION_REQUIRED" ? "unauthorized" : "service_unavailable",
+        bridged.error.code,
+        bridged.error.message,
+        correlationId,
+        bridged.error.code !== "HUMAN_SESSION_REQUIRED",
+      );
+    }
+
+    const payload = bridged.payload.body;
+    if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300 || !isStatutorySalesInvoicePrintResponse(payload)) {
+      return failure(
+        "malformed_response",
+        "MALFORMED_STATUTORY_RECEIPT_PRINT_RESPONSE",
+        "The APT printer did not return a valid Sales Invoice submission result.",
+        correlationId,
+        false,
+      );
+    }
+    return { ok: true, response: payload };
   }
 
   private async postPayableBasis(
@@ -390,6 +523,52 @@ export function isStatutoryDiscountDecisionResponse(payload: unknown): payload i
       typeof candidate.payableBasisReady === "boolean" &&
       typeof candidate.payableBasisReadinessStatus === "string" &&
       typeof candidate.correlationId === "string",
+  );
+}
+
+function isStatutorySalesInvoicePresentationResponse(
+  payload: unknown,
+  completion: NonNullable<PayableBasisResponse["zeroPayableStatutoryCompletion"]>,
+): payload is StatutorySalesInvoicePresentationResponse {
+  const candidate = payload as Partial<StatutorySalesInvoicePresentationResponse> | null;
+  const presentation = candidate?.authoritativePresentation;
+  const hasRenderablePresentation = typeof presentation?.canonicalText === "string" && presentation.canonicalText.trim().length > 0
+    || Boolean(presentation?.presentation?.sections?.length);
+  return Boolean(
+    candidate
+      && candidate.paymentAttemptId == null
+      && candidate.paymentConfirmationId == null
+      && candidate.receiptAvailabilityState === "AVAILABLE"
+      && candidate.fiscalIssuanceReferenceId === completion.fiscalIssuanceReferenceId
+      && candidate.posFiscalDocumentId === completion.posServerFiscalDocumentId
+      && (!completion.fiscalDocumentNumber || candidate.fiscalDocumentNumber === completion.fiscalDocumentNumber)
+      && typeof candidate.correlationId === "string"
+      && hasRenderablePresentation,
+  );
+}
+
+function statutoryReceiptAncestry(displayedBasis: PayableBasisResponse): {
+  applicationCommandId: string;
+  decisionCommandId: string;
+  parkingSessionId: string;
+} | null {
+  const completion = displayedBasis.zeroPayableStatutoryCompletion;
+  const decisionCommandId = displayedBasis.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId;
+  const applicationCommandId = displayedBasis.statutoryDiscountReadiness?.statutoryDiscountPayableBasisApplicationCommandId;
+  return completion?.completionBasis === "ZERO_PAYABLE_STATUTORY_FINALITY" && decisionCommandId && applicationCommandId
+    ? { applicationCommandId, decisionCommandId, parkingSessionId: displayedBasis.parkingSessionId }
+    : null;
+}
+
+function isStatutorySalesInvoicePrintResponse(payload: unknown): payload is StatutorySalesInvoicePrintResponse {
+  const candidate = payload as Partial<StatutorySalesInvoicePrintResponse> | null;
+  return Boolean(
+    candidate
+      && candidate.submitted === true
+      && typeof candidate.printerName === "string"
+      && typeof candidate.fiscalDocumentId === "string"
+      && typeof candidate.fiscalDocumentNumber === "string"
+      && typeof candidate.safeMessage === "string",
   );
 }
 

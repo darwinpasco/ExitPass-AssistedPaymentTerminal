@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
 import type { CentralPmsClient, PayableBasisResponse } from "./api/centralPmsTypes";
 import {
@@ -38,6 +38,9 @@ function renderSmoke(
               : {}),
             ...(client.getStatutoryDiscountDecision
               ? { getStatutoryDiscountDecision: (...args) => client.getStatutoryDiscountDecision!(...args) }
+              : {}),
+            ...(client.getStatutorySalesInvoicePresentation
+              ? { getStatutorySalesInvoicePresentation: (...args) => client.getStatutorySalesInvoicePresentation!(...args) }
               : {}),
             ...(client.resolveStatutoryOrdinanceAvailability
               ? { resolveStatutoryOrdinanceAvailability: (...args) => client.resolveStatutoryOrdinanceAvailability!(...args) }
@@ -124,6 +127,63 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Approved");
     expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
+  });
+
+  it("shows canonical Sales Invoice and exit authorization for zero-payable statutory completion", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Applied zero-payable complete" }));
+
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("0.00");
+    const completion = screen.getByTestId("zero-payable-statutory-completion");
+    expect(completion).toHaveTextContent("No cash is required");
+    expect(completion).toHaveTextContent("SI-00000073");
+    expect(completion).toHaveTextContent("ISSUED");
+    const invoice = await screen.findByLabelText("Printable Sales Invoice");
+    expect(invoice).toHaveTextContent("SALES INVOICE");
+    expect(invoice).toHaveTextContent("SI-00000073");
+    expect(invoice).toHaveTextContent("No payment required");
+    await userEvent.click(screen.getByRole("button", { name: "Print Sales Invoice" }));
+    expect(await screen.findByText("Submitted to printer. APT Controlled Printer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sales Invoice submitted" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("cccccccc-cccc-4ccc-8ccc-cccccccc2001");
+  });
+
+  it("allows the current regular amount while statutory review is pending", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Awaiting review" }));
+
+    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
+    expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect(await screen.findByRole("heading", { name: "Complete transaction" })).toBeInTheDocument();
+  });
+
+  it("allows the current regular amount after statutory rejection", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rejected" }));
+
+    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Rejected");
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+  });
+
+  it("keeps stale cash blocked after approval until application completes", async () => {
+    renderSmoke();
+
+    await userEvent.click(screen.getByRole("button", { name: "Approved, application not requested" }));
+
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Application processing" }));
+
+    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
   });
 
   it("runs statutory-aware revalidation at Record Cash Received", async () => {

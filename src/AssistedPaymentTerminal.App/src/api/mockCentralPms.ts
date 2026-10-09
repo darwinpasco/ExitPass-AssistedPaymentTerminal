@@ -11,6 +11,8 @@ import type {
   StatutoryDiscountReadiness,
   StatutoryEntitlementType,
   StatutoryOrdinanceAvailabilityResult,
+  StatutorySalesInvoicePresentationResult,
+  StatutorySalesInvoicePrintResult,
 } from "./centralPmsTypes";
 
 const ids = {
@@ -105,6 +107,60 @@ export class MockCentralPmsClient implements CentralPmsClient {
     }
 
     return { ok: true, response: { ...current, correlationId, lastReadbackAt: undefined } as StatutoryDiscountDecisionResponse };
+  }
+
+  async getStatutorySalesInvoicePresentation(
+    displayedBasis: PayableBasisResponse,
+    correlationId: string,
+  ): Promise<StatutorySalesInvoicePresentationResult> {
+    const completion = displayedBasis.zeroPayableStatutoryCompletion;
+    if (!completion?.fiscalIssuanceReferenceId || !completion.posServerFiscalDocumentId) {
+      return failure("invalid_request", "STATUTORY_RECEIPT_NOT_READY", "The statutory Sales Invoice is not ready.", correlationId, false);
+    }
+
+    const fiscalDocumentNumber = completion.fiscalDocumentNumber ?? "SI-00000073";
+    return {
+      ok: true,
+      response: {
+        paymentAttemptId: null,
+        paymentConfirmationId: null,
+        fiscalIssuanceReferenceId: completion.fiscalIssuanceReferenceId,
+        fiscalIssuanceState: completion.fiscalIssuanceState ?? "FISCAL_ISSUANCE_RECORDED",
+        posFiscalDocumentId: completion.posServerFiscalDocumentId,
+        fiscalDocumentNumber,
+        fiscalDocumentStatus: "issued",
+        receiptAvailabilityState: "AVAILABLE",
+        authoritativePresentation: {
+          fiscalDocumentId: completion.posServerFiscalDocumentId,
+          fiscalDocumentNumber,
+          canonicalTextAuthority: "persisted_original_electronic_journal",
+          canonicalText: `SALES INVOICE\nSI No ${fiscalDocumentNumber}\nParking Fee PHP 0.00\nNo payment required`,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        correlationId,
+      },
+    };
+  }
+
+  async printStatutorySalesInvoice(
+    displayedBasis: PayableBasisResponse,
+    _correlationId: string,
+  ): Promise<StatutorySalesInvoicePrintResult> {
+    const completion = displayedBasis.zeroPayableStatutoryCompletion;
+    if (!completion?.posServerFiscalDocumentId || !completion.fiscalDocumentNumber) {
+      return failure("invalid_request", "STATUTORY_RECEIPT_NOT_READY", "The statutory Sales Invoice is not ready.", _correlationId, false);
+    }
+    return {
+      ok: true,
+      response: {
+        submitted: true,
+        printerName: "APT Controlled Printer",
+        fiscalDocumentId: completion.posServerFiscalDocumentId,
+        fiscalDocumentNumber: completion.fiscalDocumentNumber,
+        safeMessage: "Submitted to printer.",
+      },
+    };
   }
 
   async revalidatePayableBasis(displayedBasis: PayableBasisResponse, correlationId: string): Promise<CentralPmsResult> {
@@ -506,7 +562,7 @@ export class MockCentralPmsClient implements CentralPmsClient {
     const applied = status === "applied";
     const missing = status === "missing";
     const processing = status === "processing";
-    const readinessStatus = applied ? "APPLIED" : processing ? "APPLICATION_PROCESSING" : missing ? "REQUIRED_FACTS_UNAVAILABLE" : rejected ? "DECISION_REJECTED" : retryable ? "RETRYABLE_FAILURE" : terminal ? "TERMINAL_FAILURE" : approved ? "DECISION_APPROVED_APPLICATION_NOT_REQUESTED" : "AWAITING_REVIEW";
+    const readinessStatus = applied ? "PAYABLE_BASIS_READY" : processing ? "APPLICATION_PROCESSING" : missing ? "REQUIRED_FACTS_UNAVAILABLE" : rejected ? "DECISION_REJECTED" : retryable ? "RETRYABLE_FAILURE" : terminal ? "TERMINAL_FAILURE" : approved ? "DECISION_APPROVED_APPLICATION_NOT_REQUESTED" : "AWAITING_REVIEW";
 
     return {
       statutoryDiscountDecisionCommandId: decisionId,

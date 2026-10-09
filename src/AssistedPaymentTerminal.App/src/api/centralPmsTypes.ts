@@ -164,6 +164,58 @@ export type AptReadinessDimension = {
   message: string;
 };
 
+export type ZeroPayableStatutoryCompletion = {
+  completionBasis: string;
+  fiscalPrerequisiteSatisfied: boolean;
+  fiscalIssuanceReferenceId?: string | null;
+  fiscalIssuanceState?: string | null;
+  posServerFiscalDocumentId?: string | null;
+  fiscalDocumentNumber?: string | null;
+  exitAuthorizationId?: string | null;
+  exitAuthorizationStatus?: string | null;
+  exitAuthorizationIssuedAt?: string | null;
+  exitAuthorizationExpiresAt?: string | null;
+};
+
+export type SalesInvoicePresentationRow = {
+  label?: string | null;
+  displayValue?: string | number | null;
+  value?: string | number | null;
+  posture?: string | null;
+};
+
+export type SalesInvoicePresentationSection = {
+  label?: string | null;
+  title?: string | null;
+  rows?: SalesInvoicePresentationRow[] | null;
+};
+
+export type StatutorySalesInvoicePresentation = {
+  canonicalText?: string | null;
+  canonicalTextAuthority?: string | null;
+  fiscalDocumentId?: string | null;
+  fiscalDocumentNumber?: string | null;
+  presentation?: {
+    documentTitle?: string | null;
+    sections?: SalesInvoicePresentationSection[] | null;
+  } | null;
+};
+
+export type StatutorySalesInvoicePresentationResponse = {
+  paymentAttemptId?: string | null;
+  paymentConfirmationId?: string | null;
+  fiscalIssuanceReferenceId: string;
+  fiscalIssuanceState: string;
+  posFiscalDocumentId: string;
+  fiscalDocumentNumber?: string | null;
+  fiscalDocumentStatus?: string | null;
+  receiptAvailabilityState: string;
+  authoritativePresentation: StatutorySalesInvoicePresentation;
+  createdAt: string;
+  updatedAt: string;
+  correlationId: string;
+};
+
 export type PayableBasisResponse = {
   operation?: "resolve" | "revalidate" | string;
   revalidationOutcome?: PayableBasisRevalidationOutcome | string | null;
@@ -209,6 +261,7 @@ export type PayableBasisResponse = {
   statutoryDiscountValidationId?: string | null;
   statutoryDiscountApplicationId?: string | null;
   statutoryDiscountReadiness?: StatutoryDiscountReadiness | null;
+  zeroPayableStatutoryCompletion?: ZeroPayableStatutoryCompletion | null;
   originalTariffSnapshotId?: string | null;
   effectiveTariffSnapshotId?: string | null;
   appliedTariffSnapshotId?: string | null;
@@ -479,6 +532,22 @@ export type StatutoryDiscountDecisionResult =
   | { ok: true; response: StatutoryDiscountDecisionResponse }
   | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
 
+export type StatutorySalesInvoicePresentationResult =
+  | { ok: true; response: StatutorySalesInvoicePresentationResponse }
+  | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
+
+export type StatutorySalesInvoicePrintResponse = {
+  submitted: boolean;
+  printerName: string;
+  fiscalDocumentId: string;
+  fiscalDocumentNumber: string;
+  safeMessage: string;
+};
+
+export type StatutorySalesInvoicePrintResult =
+  | { ok: true; response: StatutorySalesInvoicePrintResponse }
+  | { ok: false; kind: CentralPmsFailureKind; error: CentralPmsErrorResponse };
+
 export interface CentralPmsClient {
   resolvePayableBasis(
     referenceType: PayableBasisReferenceType,
@@ -503,6 +572,14 @@ export interface CentralPmsClient {
     idempotencyKey: string,
   ): Promise<StatutoryDiscountDecisionResult>;
   getStatutoryDiscountDecision?(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult>;
+  getStatutorySalesInvoicePresentation?(
+    displayedBasis: PayableBasisResponse,
+    correlationId: string,
+  ): Promise<StatutorySalesInvoicePresentationResult>;
+  printStatutorySalesInvoice?(
+    displayedBasis: PayableBasisResponse,
+    correlationId: string,
+  ): Promise<StatutorySalesInvoicePrintResult>;
   resolveTicket?(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult>;
   recalculateFee?(ticketReference: string, correlationId: string): Promise<CentralPmsResolveResult>;
 }

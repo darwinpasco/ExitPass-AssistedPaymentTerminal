@@ -8,7 +8,7 @@ using AssistedPaymentTerminal.LocalOperations;
 namespace AssistedPaymentTerminal.Desktop;
 
 public sealed record ReceiptPrintDocument(
-    Guid TerminalCashTenderId,
+    Guid? TerminalCashTenderId,
     Guid FiscalDocumentId,
     string FiscalDocumentNumber,
     string AuthoritativePayloadHash,
@@ -93,6 +93,41 @@ public static class ReceiptPrintDocumentBuilder
             lines,
             preview.AptTicketNumber,
             preview.AptTicketQrCodeDataUrl);
+    }
+
+    public static ReceiptPrintDocument BuildZeroPayableStatutory(
+        Guid fiscalDocumentId,
+        string fiscalDocumentNumber,
+        string authoritativePayloadHash,
+        ReceiptPreviewPaperProfile paperProfile,
+        string canonicalText,
+        string ticketNumber)
+    {
+        if (fiscalDocumentId == Guid.Empty || string.IsNullOrWhiteSpace(fiscalDocumentNumber))
+            throw new InvalidOperationException("Canonical fiscal identity is required for printing.");
+        if (string.IsNullOrWhiteSpace(authoritativePayloadHash))
+            throw new InvalidOperationException("The authoritative Sales Invoice hash is required for printing.");
+        if (string.IsNullOrWhiteSpace(canonicalText) || canonicalText.Contains('\0'))
+            throw new InvalidOperationException("Canonical Sales Invoice text is required for printing.");
+        if (!CanonicalLines(canonicalText).Any(IsNothingFollowsLine))
+            throw new InvalidOperationException("Canonical Sales Invoice text must contain the closing marker.");
+        if (string.IsNullOrWhiteSpace(ticketNumber))
+            throw new InvalidOperationException("The authoritative ticket reference is required for printing.");
+
+        return new ReceiptPrintDocument(
+            TerminalCashTenderId: null,
+            fiscalDocumentId,
+            fiscalDocumentNumber.Trim(),
+            authoritativePayloadHash.Trim(),
+            SemanticRequestHash: null,
+            TerminalCashReceiptPrintClassification.Original,
+            CopySequence: 1,
+            ReprintedAt: null,
+            ReprintMarker: null,
+            paperProfile,
+            CanonicalLines(canonicalText),
+            ticketNumber.Trim(),
+            AptTicketQrCode.CreateDataUrl(ticketNumber));
     }
 
     private static IReadOnlyList<string> CanonicalLines(string canonicalText)

@@ -224,7 +224,7 @@ describe("LiveCentralPmsClient", () => {
         ready: true,
         statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
         payableBasisReady: true,
-        payableBasisReadinessStatus: "APPLIED",
+        payableBasisReadinessStatus: "PAYABLE_BASIS_READY",
         retryable: false,
         message: "Applied",
       },
@@ -290,7 +290,153 @@ describe("LiveCentralPmsClient", () => {
     expect(result.ok).toBe(true);
     expect(vi.mocked(fetchMock).mock.calls[0][0]).toContain("/v1/statutory-discounts/decisions/77777777-7777-4777-8777-777777770777");
     expect(vi.mocked(fetchMock).mock.calls[0][1]).toEqual(expect.objectContaining({ method: "GET", body: undefined }));
-  });  it("maps malformed success payload to contract failure", async () => {
+  });
+
+  it("retrieves the POS-owned zero-payable Sales Invoice using canonical statutory ancestry", async () => {
+    const basis = zeroPayableBasisPayload();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => statutoryReceiptPayload(),
+    })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.getStatutorySalesInvoicePresentation!(basis, "statutory-receipt-corr");
+
+    expect(result.ok).toBe(true);
+    const [url, init] = vi.mocked(fetchMock).mock.calls[0];
+    expect(url).toContain("/v1/webpay/statutory-applications/88888888-8888-4888-8888-888888880001/receipt-presentation");
+    expect(url).toContain("decisionCommandId=77777777-7777-4777-8777-777777770777");
+    expect(url).toContain("parkingSessionId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001");
+    expect(init).toEqual(expect.objectContaining({ method: "GET", body: undefined }));
+    expect(init?.headers).toEqual(expect.objectContaining({
+      "X-Correlation-Id": "statutory-receipt-corr",
+      "X-Site-Id": "11111111-1111-1111-1111-111111111111",
+    }));
+    if (result.ok) {
+      expect(result.response.paymentAttemptId).toBeNull();
+      expect(result.response.paymentConfirmationId).toBeNull();
+      expect(result.response.authoritativePresentation.canonicalText).toContain("SI-00000073");
+    }
+  });
+
+  it("uses the host-authorized bridge for zero-payable statutory Sales Invoice retrieval in WebView2", async () => {
+    let listener: ((event: { data: unknown }) => void) | undefined;
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const postMessage = vi.fn((message: string) => {
+      const request = JSON.parse(message) as { command: string; correlationId: string };
+      listener?.({
+        data: JSON.stringify({
+          ok: true,
+          command: request.command,
+          correlationId: request.correlationId,
+          payload: { statusCode: 200, body: statutoryReceiptPayload() },
+        }),
+      });
+    });
+    window.chrome = {
+      webview: {
+        postMessage,
+        addEventListener: (_type, callback) => { listener = callback; },
+        removeEventListener: vi.fn(),
+      },
+    };
+
+    try {
+      const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+      const result = await client.getStatutorySalesInvoicePresentation!(zeroPayableBasisPayload(), "statutory-receipt-corr");
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postMessage).toHaveBeenCalledOnce();
+      const request = JSON.parse(String(postMessage.mock.calls[0][0])) as Record<string, unknown>;
+      expect(request).toEqual(expect.objectContaining({
+        source: "apt-central-pms-payable-basis",
+        command: "statutoryReceiptPresentation.get",
+        correlationId: "statutory-receipt-corr",
+        siteId: "11111111-1111-1111-1111-111111111111",
+      }));
+      expect(request.body).toEqual({
+        applicationCommandId: "88888888-8888-4888-8888-888888880001",
+        decisionCommandId: "77777777-7777-4777-8777-777777770777",
+        parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+      });
+    } finally {
+      delete window.chrome;
+    }
+  });
+
+  it("submits zero-payable statutory Sales Invoice printing through the native host bridge", async () => {
+    let listener: ((event: { data: unknown }) => void) | undefined;
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const postMessage = vi.fn((message: string) => {
+      const request = JSON.parse(message) as { command: string; correlationId: string };
+      listener?.({
+        data: JSON.stringify({
+          ok: true,
+          command: request.command,
+          correlationId: request.correlationId,
+          payload: {
+            statusCode: 200,
+            body: {
+              submitted: true,
+              printerName: "TSC TTP-225",
+              fiscalDocumentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb2001",
+              fiscalDocumentNumber: "SI-00000073",
+              safeMessage: "Submitted to printer.",
+            },
+          },
+        }),
+      });
+    });
+    window.chrome = {
+      webview: {
+        postMessage,
+        addEventListener: (_type, callback) => { listener = callback; },
+        removeEventListener: vi.fn(),
+      },
+    };
+
+    try {
+      const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+      const result = await client.printStatutorySalesInvoice!(zeroPayableBasisPayload(), "statutory-print-corr");
+
+      expect(result).toEqual({
+        ok: true,
+        response: expect.objectContaining({ submitted: true, printerName: "TSC TTP-225", fiscalDocumentNumber: "SI-00000073" }),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      const request = JSON.parse(String(postMessage.mock.calls[0][0])) as Record<string, unknown>;
+      expect(request).toEqual(expect.objectContaining({
+        command: "statutoryReceiptPresentation.print",
+        correlationId: "statutory-print-corr",
+      }));
+      expect(request.body).toEqual({
+        applicationCommandId: "88888888-8888-4888-8888-888888880001",
+        decisionCommandId: "77777777-7777-4777-8777-777777770777",
+        parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+      });
+    } finally {
+      delete window.chrome;
+    }
+  });
+
+  it("fails closed when a statutory receipt does not match the completed fiscal document", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => statutoryReceiptPayload({ posFiscalDocumentId: "ffffffff-ffff-4fff-8fff-ffffffffffff" }),
+    })) as unknown as typeof fetch;
+    const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+
+    const result = await client.getStatutorySalesInvoicePresentation!(zeroPayableBasisPayload(), "statutory-receipt-mismatch");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("malformed_response");
+      expect(result.error.errorCode).toBe("MALFORMED_STATUTORY_RECEIPT_PRESENTATION");
+    }
+  });
+
+  it("maps malformed success payload to contract failure", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ parkingSessionId: "missing-required-fields" }) })) as unknown as typeof fetch;
 
     const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
@@ -304,6 +450,54 @@ describe("LiveCentralPmsClient", () => {
     }
   });
 });
+
+function zeroPayableBasisPayload(): PayableBasisResponse {
+  return payableBasisPayload({
+    authoritativeAmountMinorUnits: 0,
+    statutoryDiscountReadiness: {
+      applicable: true,
+      ready: true,
+      statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770777",
+      statutoryDiscountPayableBasisApplicationCommandId: "88888888-8888-4888-8888-888888880001",
+      payableBasisReady: true,
+      payableBasisReadinessStatus: "PAYABLE_BASIS_READY",
+      retryable: false,
+      message: "Applied",
+    },
+    zeroPayableStatutoryCompletion: {
+      completionBasis: "ZERO_PAYABLE_STATUTORY_FINALITY",
+      fiscalPrerequisiteSatisfied: true,
+      fiscalIssuanceReferenceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2001",
+      fiscalIssuanceState: "FISCAL_ISSUANCE_RECORDED",
+      posServerFiscalDocumentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb2001",
+      fiscalDocumentNumber: "SI-00000073",
+      exitAuthorizationStatus: "ISSUED",
+    },
+  });
+}
+
+function statutoryReceiptPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    paymentAttemptId: null,
+    paymentConfirmationId: null,
+    fiscalIssuanceReferenceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa2001",
+    fiscalIssuanceState: "FISCAL_ISSUANCE_RECORDED",
+    posFiscalDocumentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb2001",
+    fiscalDocumentNumber: "SI-00000073",
+    fiscalDocumentStatus: "issued",
+    receiptAvailabilityState: "AVAILABLE",
+    authoritativePresentation: {
+      fiscalDocumentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb2001",
+      fiscalDocumentNumber: "SI-00000073",
+      canonicalTextAuthority: "persisted_original_electronic_journal",
+      canonicalText: "SALES INVOICE\nSI No SI-00000073\nParking Fee PHP 0.00\nNo payment required",
+    },
+    createdAt: "2026-10-09T06:02:23Z",
+    updatedAt: "2026-10-09T06:02:24Z",
+    correlationId: "statutory-receipt-corr",
+    ...overrides,
+  };
+}
 
 function payableBasisPayload(overrides: Partial<PayableBasisResponse> = {}): PayableBasisResponse {
   return {

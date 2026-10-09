@@ -46,6 +46,12 @@ public partial class MainWindow : Window
             humanSessionRuntime,
             new WpfHumanCredentialPrompt(this, humanAuthenticationTrace),
             trace: humanAuthenticationTrace);
+        IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
+        {
+            "controlled" => new ControlledReceiptPrinter(),
+            "visual-smoke" => new VisualSmokeReceiptPrinter(),
+            _ => new WindowsReceiptPrinter()
+        };
         _payableBasisBridge = new CentralPmsPayableBasisBridgeHandler(
             new HttpClient(new HttpClientHandler
             {
@@ -55,13 +61,11 @@ public partial class MainWindow : Window
                 Timeout = TimeSpan.FromSeconds(15)
             },
             options.CentralPmsBaseUrl,
-            humanSessionRuntime);
-        IReceiptPrinter receiptPrinter = options.ReceiptPrinterMode?.Trim().ToLowerInvariant() switch
-        {
-            "controlled" => new ControlledReceiptPrinter(),
-            "visual-smoke" => new VisualSmokeReceiptPrinter(),
-            _ => new WindowsReceiptPrinter()
-        };
+            humanSessionRuntime,
+            receiptPrintingEnabled: options.EnableReceiptPrinting,
+            receiptPrinterName: options.ReceiptPrinterName,
+            receiptPaperWidthMm: options.ReceiptPaperWidthMm,
+            receiptPrinter: receiptPrinter);
         _localJournalBridge = new LocalJournalBridgeHandler(
             journal,
             centralPmsCashSubmissionEnabled: options.EnableCentralPmsCashSubmission,
