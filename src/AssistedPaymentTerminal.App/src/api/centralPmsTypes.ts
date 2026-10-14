@@ -211,6 +211,10 @@ export type StatutorySalesInvoicePresentationResponse = {
   fiscalDocumentStatus?: string | null;
   receiptAvailabilityState: string;
   authoritativePresentation: StatutorySalesInvoicePresentation;
+  aptExitQr?: {
+    ticketNumber: string;
+    qrCodeDataUrl: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
   correlationId: string;

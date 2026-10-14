@@ -1026,12 +1026,17 @@ public sealed class LocalJournalBridgeHandler
             }
         }
 
+        var fiscalCommand = await _fiscalService.GetFiscalCommandByTenderAsync(
+                payload.LocalCashTenderId,
+                cancellationToken)
+            .ConfigureAwait(false);
         var document = ReceiptPrintDocumentBuilder.Build(
             build.Document!,
             job.Classification,
             job.CopySequence,
             canonicalText,
-            reprintAcceptedAt);
+            reprintAcceptedAt,
+            appendExitQr: fiscalCommand?.ExitAuthorizationIssued == true);
 
         var submitted = await _receiptPrinter.SubmitAsync(document, _receiptPrinterName!, cancellationToken).ConfigureAwait(false);
         var failedStatus = string.Equals(submitted.FailureClassification, "SPOOLER_OUTCOME_UNKNOWN", StringComparison.Ordinal)

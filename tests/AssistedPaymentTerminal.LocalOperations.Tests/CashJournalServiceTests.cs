@@ -185,6 +185,49 @@ public sealed class CashJournalServiceTests
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task PreservesEnteredTenderWhenDenominationsAreSupportingEvidence()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartTenderAsync(service, session.Id, amountDue: 50m, amountTendered: 100m);
+
+        var committed = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(
+            tender.Id,
+            denominations:
+            [
+                new CashDenominationLine("PHP-50", 50m, 1),
+                new CashDenominationLine("PHP-20", 20m, 2),
+                new CashDenominationLine("PHP-5", 5m, 1),
+                new CashDenominationLine("PHP-1", 1m, 4)
+            ]));
+
+        Assert.True(committed.IsSuccess);
+        Assert.Equal(100m, committed.Value!.AmountTendered);
+        Assert.Equal(50m, committed.Value.ChangeDue);
+
+        var events = await service.GetCashTenderEventsAsync(tender.Id);
+        Assert.All(events, cashEvent => Assert.Equal(100m, cashEvent.AmountTendered));
+        Assert.All(events, cashEvent => Assert.Equal(50m, cashEvent.ChangeDue));
+        Assert.Equal(
+            99m,
+            events.Single(cashEvent => cashEvent.EventType == CashTenderEventType.CashReceived)
+                .DenominationEntries.Sum(entry => entry.DenominationValue * entry.Quantity));
+
+        var command = await service.GetTerminalCashPaymentOutboxCommandByTenderAsync(tender.Id);
+        Assert.NotNull(command);
+        var payload = System.Text.Json.JsonSerializer.Deserialize<TerminalCashPaymentRequest>(
+            command!.RequestPayloadJson,
+            TerminalCashPaymentPayloadFactory.JsonOptions);
+
+        Assert.NotNull(payload);
+        Assert.Equal(5000, payload!.AmountDueMinorUnits);
+        Assert.Equal(10000, payload.AmountTenderedMinorUnits);
+        Assert.Equal(5000, payload.ChangeDueMinorUnits);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task PersistsCashReceivedAcrossDatabaseReopen()
     {
         using var database = TestDatabase.Create();

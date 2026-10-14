@@ -235,7 +235,7 @@ describe("LiveCentralPmsClient", () => {
     expect(vi.mocked(fetchMock).mock.calls[0][0]).not.toContain("/v1/webpay/parking-session");
   });
 
-  it("submits statutory decisions through the shared route without reviewer or calculated fields", async () => {
+  it("rejects APT statutory request origin without calling Central PMS", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => statutoryDecisionPayload(),
@@ -264,21 +264,15 @@ describe("LiveCentralPmsClient", () => {
       originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
     }, "stat-submit-corr", "idem-stat-submit");
 
-    expect(result.ok).toBe(true);
-    expect(vi.mocked(fetchMock).mock.calls[0][0]).toContain("/v1/statutory-discounts/decisions");
-    expect(vi.mocked(fetchMock).mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
-    expect(vi.mocked(fetchMock).mock.calls[0][1]?.headers).toEqual(expect.objectContaining({
-      "Idempotency-Key": "idem-stat-submit",
-      "X-Correlation-Id": "stat-submit-corr",
-      "X-Site-Id": "11111111-1111-1111-1111-111111111111",
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      kind: "invalid_request",
+      error: expect.objectContaining({
+        errorCode: "STATUTORY_DISCOUNT_APT_REQUEST_ORIGIN_PROHIBITED",
+        retryable: false,
+      }),
     }));
-    const body = String(vi.mocked(fetchMock).mock.calls[0][1]?.body);
-    expect(body).toContain('"applyPayableBasis":false');
-    expect(body).toContain('"maskedIdReference":"AB******7890"');
-    expect(body).not.toContain("reviewerUserId");
-    expect(body).not.toContain("reviewerAttestation");
-    expect(body).not.toContain("statutoryDiscountAmountMinorUnits");
-    expect(body).not.toContain("vatAmountMinorUnits");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reads statutory decision status with GET only", async () => {
@@ -329,7 +323,14 @@ describe("LiveCentralPmsClient", () => {
           ok: true,
           command: request.command,
           correlationId: request.correlationId,
-          payload: { statusCode: 200, body: statutoryReceiptPayload() },
+          payload: {
+            statusCode: 200,
+            body: statutoryReceiptPayload(),
+            aptExitQr: {
+              ticketNumber: "14741195731701",
+              qrCodeDataUrl: "data:image/png;base64,cXItMTQ3NDExOTU3MzE3MDE=",
+            },
+          },
         }),
       });
     });
@@ -360,6 +361,12 @@ describe("LiveCentralPmsClient", () => {
         decisionCommandId: "77777777-7777-4777-8777-777777770777",
         parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
       });
+      if (result.ok) {
+        expect(result.response.aptExitQr).toEqual({
+          ticketNumber: "14741195731701",
+          qrCodeDataUrl: "data:image/png;base64,cXItMTQ3NDExOTU3MzE3MDE=",
+        });
+      }
     } finally {
       delete window.chrome;
     }

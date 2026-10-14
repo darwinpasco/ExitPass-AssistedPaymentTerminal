@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
@@ -143,6 +143,9 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(invoice).toHaveTextContent("SALES INVOICE");
     expect(invoice).toHaveTextContent("SI-00000073");
     expect(invoice).toHaveTextContent("No payment required");
+    expect(invoice).toHaveTextContent("EXIT QR");
+    expect(invoice).toHaveTextContent("Present at exit validator");
+    expect(within(invoice).getByRole("img", { name: /Ticket .* QR code/ })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Print Sales Invoice" }));
     expect(await screen.findByText("Submitted to printer. APT Controlled Printer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sales Invoice submitted" })).toBeDisabled();

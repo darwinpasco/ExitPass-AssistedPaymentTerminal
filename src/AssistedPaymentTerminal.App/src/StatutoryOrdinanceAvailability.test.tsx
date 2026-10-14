@@ -6,12 +6,12 @@ import { buildTerminalContext } from "./terminalContext";
 import { mode1Config } from "./test/testConfig";
 
 describe("configured statutory entitlements", () => {
-  it("offers only entitlements configured for the Site", () => {
+  it("does not offer APT statutory request origination even when entitlements are configured", () => {
     renderPanel(["SENIOR_CITIZEN"]);
 
-    expect(screen.getByTestId("covered-entitlement-selector")).toHaveDisplayValue("Senior citizen");
-    expect(screen.getByRole("button", { name: "Start statutory request" })).toBeEnabled();
-    expect(screen.queryByRole("option", { name: "Person with disability" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("covered-entitlement-selector")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Submit the request through WebPay or Operator Console/i)).toBeInTheDocument();
   });
 
   it("offers no statutory action when the Site has no configured entitlement", () => {

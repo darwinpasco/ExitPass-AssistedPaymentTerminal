@@ -49,4 +49,40 @@ describe("Central PMS payable-basis desktop bridge", () => {
     expect(result?.ok).toBe(true);
     expect(postMessage).toHaveBeenCalledOnce();
   });
+
+  it("sends statutory decision readback without exposing host credentials", async () => {
+    let listener: ((event: { data: unknown }) => void) | undefined;
+    const postMessage = vi.fn((message: string) => {
+      const request = JSON.parse(message) as Record<string, unknown>;
+      expect(request.command).toBe("statutoryDecision.get");
+      expect(request).not.toHaveProperty("authorization");
+      expect(request).not.toHaveProperty("sessionToken");
+      expect(request).not.toHaveProperty("serviceIdentityId");
+      listener?.({
+        data: JSON.stringify({
+          ok: true,
+          command: request.command,
+          correlationId: request.correlationId,
+          payload: { statusCode: 201, body: {} },
+        }),
+      });
+    });
+    window.chrome = {
+      webview: {
+        postMessage,
+        addEventListener: (_type, callback) => { listener = callback; },
+        removeEventListener: vi.fn(),
+      },
+    };
+
+    await sendPayableBasisRequest(
+      "statutoryDecision.get",
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      { decisionCommandId: "33333333-3333-4333-8333-333333333333" },
+    );
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(String(vi.mocked(postMessage).mock.calls[0][0])).not.toContain("actorUserId");
+  });
 });

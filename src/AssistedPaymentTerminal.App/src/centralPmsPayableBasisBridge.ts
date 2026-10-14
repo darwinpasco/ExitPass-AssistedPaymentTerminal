@@ -1,6 +1,7 @@
 export type PayableBasisBridgeCommand =
   | "payableBasis.resolve"
   | "payableBasis.revalidate"
+  | "statutoryDecision.get"
   | "statutoryReceiptPresentation.get"
   | "statutoryReceiptPresentation.print";
 
@@ -9,7 +10,11 @@ export type PayableBasisBridgeResult =
       ok: true;
       command: PayableBasisBridgeCommand;
       correlationId: string;
-      payload: { statusCode: number; body: Record<string, unknown> | null };
+      payload: {
+        statusCode: number;
+        body: Record<string, unknown> | null;
+        aptExitQr?: { ticketNumber: string; qrCodeDataUrl: string } | null;
+      };
     }
   | {
       ok: false;
@@ -23,6 +28,7 @@ export function sendPayableBasisRequest(
   correlationId: string,
   siteId: string,
   body: unknown,
+  idempotencyKey?: string,
 ): Promise<PayableBasisBridgeResult | null> {
   const webview = window.chrome?.webview;
   if (!webview) {
@@ -44,6 +50,7 @@ export function sendPayableBasisRequest(
       correlationId,
       siteId,
       body,
+      idempotencyKey,
     }));
   });
 }

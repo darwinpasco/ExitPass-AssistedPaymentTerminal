@@ -3,6 +3,7 @@ import type { AptConfig } from "./config";
 import { createCorrelationId } from "./correlation";
 import type { PayableBasisResponse } from "./api/centralPmsTypes";
 import type { TerminalContext } from "./terminalContext";
+import { CanonicalSalesInvoiceWithAptQr } from "./CanonicalSalesInvoiceWithAptQr";
 import {
   createWebViewLocalJournalBridge,
   type BridgeError,
@@ -811,10 +812,12 @@ export function CashCapturePanel({
             <label>
               Amount tendered
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
                 value={amountTenderedText}
+                onFocus={(event) => event.currentTarget.select()}
+                onClick={(event) => event.currentTarget.select()}
                 onChange={(event) => setAmountTenderedText(event.target.value)}
               />
             </label>
@@ -1736,6 +1739,7 @@ function ReceiptPrintPanel({
               canonicalText={status.lastSubmit.printDocument.lines.join("\n")}
               ticketNumber={status.lastSubmit.printDocument.aptTicketNumber}
               qrCodeDataUrl={status.lastSubmit.printDocument.aptTicketQrCodeDataUrl}
+              appendExitQr={status.lastSubmit.printDocument.appendExitQr === true}
             />
           </article>
         )}
@@ -2063,38 +2067,13 @@ function ReceiptPreviewSurface({
                 canonicalText={preparedPrint?.lines.join("\n") ?? preview.canonicalPrintableText}
                 ticketNumber={preparedPrint?.aptTicketNumber ?? preview.aptTicketNumber}
                 qrCodeDataUrl={preparedPrint?.aptTicketQrCodeDataUrl ?? preview.aptTicketQrCodeDataUrl}
+                appendExitQr={preparedPrint?.appendExitQr ?? exitAuthorizationIssued}
               />
             </article>
           </>
         )}
       </div>
     </section>
-  );
-}
-
-function CanonicalSalesInvoiceWithAptQr({
-  canonicalText,
-  ticketNumber,
-  qrCodeDataUrl,
-}: {
-  canonicalText: string;
-  ticketNumber: string;
-  qrCodeDataUrl: string;
-}) {
-  const lines = canonicalText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const closingIndex = lines.findIndex((line) => line.includes("NOTHING FOLLOWS"));
-  if (closingIndex < 0) {
-    return <pre className="canonical-sales-invoice-text">{canonicalText}</pre>;
-  }
-
-  return (
-    <>
-      <pre className="canonical-sales-invoice-text">{lines.slice(0, closingIndex).join("\n")}</pre>
-      <figure className="apt-ticket-qr">
-        <img src={qrCodeDataUrl} alt={`Ticket ${ticketNumber} QR code`} />
-      </figure>
-      <pre className="canonical-sales-invoice-text">{lines.slice(closingIndex).join("\n")}</pre>
-    </>
   );
 }
 

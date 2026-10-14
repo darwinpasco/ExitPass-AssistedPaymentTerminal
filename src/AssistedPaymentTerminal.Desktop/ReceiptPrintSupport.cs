@@ -20,7 +20,8 @@ public sealed record ReceiptPrintDocument(
     ReceiptPreviewPaperProfile PaperProfile,
     IReadOnlyList<string> Lines,
     string AptTicketNumber,
-    string AptTicketQrCodeDataUrl);
+    string AptTicketQrCodeDataUrl,
+    bool AppendExitQr = false);
 
 public sealed record ReceiptPrinterAvailability(
     bool Available,
@@ -60,7 +61,8 @@ public static class ReceiptPrintDocumentBuilder
         TerminalCashReceiptPrintClassification classification,
         int copySequence,
         string canonicalText,
-        DateTimeOffset? reprintAcceptedAt = null)
+        DateTimeOffset? reprintAcceptedAt = null,
+        bool appendExitQr = false)
     {
         if (string.IsNullOrWhiteSpace(canonicalText) || canonicalText.Contains('\0'))
         {
@@ -75,8 +77,8 @@ public static class ReceiptPrintDocumentBuilder
         var lines = CanonicalLines(canonicalText);
         if (!lines.Any(IsNothingFollowsLine))
             throw new InvalidOperationException("Canonical Sales Invoice text must contain the closing marker.");
-        if (string.IsNullOrWhiteSpace(preview.AptTicketNumber)
-            || string.IsNullOrWhiteSpace(preview.AptTicketQrCodeDataUrl))
+        if (appendExitQr && (string.IsNullOrWhiteSpace(preview.AptTicketNumber)
+            || string.IsNullOrWhiteSpace(preview.AptTicketQrCodeDataUrl)))
             throw new InvalidOperationException("The governed APT ticket QR code is required for printing.");
 
         return new ReceiptPrintDocument(
@@ -92,7 +94,8 @@ public static class ReceiptPrintDocumentBuilder
             preview.PaperProfile,
             lines,
             preview.AptTicketNumber,
-            preview.AptTicketQrCodeDataUrl);
+            preview.AptTicketQrCodeDataUrl,
+            appendExitQr);
     }
 
     public static ReceiptPrintDocument BuildZeroPayableStatutory(
@@ -101,7 +104,8 @@ public static class ReceiptPrintDocumentBuilder
         string authoritativePayloadHash,
         ReceiptPreviewPaperProfile paperProfile,
         string canonicalText,
-        string ticketNumber)
+        string ticketNumber,
+        bool appendExitQr = false)
     {
         if (fiscalDocumentId == Guid.Empty || string.IsNullOrWhiteSpace(fiscalDocumentNumber))
             throw new InvalidOperationException("Canonical fiscal identity is required for printing.");
@@ -127,7 +131,8 @@ public static class ReceiptPrintDocumentBuilder
             paperProfile,
             CanonicalLines(canonicalText),
             ticketNumber.Trim(),
-            AptTicketQrCode.CreateDataUrl(ticketNumber));
+            AptTicketQrCode.CreateDataUrl(ticketNumber),
+            AppendExitQr: appendExitQr);
     }
 
     private static IReadOnlyList<string> CanonicalLines(string canonicalText)
@@ -226,10 +231,17 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
                     args.Graphics.DpiX,
                     args.Graphics.DpiY);
                 using var format = CreateCanonicalTextFormat();
-                var layout = CreatePhysicalLayout(args.Graphics, document.Lines, contentBounds.Width, format);
+                var layout = CreatePhysicalLayout(
+                    args.Graphics,
+                    document.Lines,
+                    contentBounds.Width,
+                    document.AppendExitQr,
+                    format);
                 using var font = new Font("Consolas", layout.FontSizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
-                using var qrStream = new MemoryStream(AptTicketQrCode.DecodeDataUrl(document.AptTicketQrCodeDataUrl), writable: false);
-                using var qrImage = Image.FromStream(qrStream);
+                using var qrStream = document.AppendExitQr
+                    ? new MemoryStream(AptTicketQrCode.DecodeDataUrl(document.AptTicketQrCodeDataUrl), writable: false)
+                    : null;
+                using var qrImage = qrStream is null ? null : Image.FromStream(qrStream);
                 var lineHeight = font.GetHeight(args.Graphics);
                 var y = contentBounds.Top;
                 var textBlockWidth = MeasureTextBlockWidth(args.Graphics, layout.Lines, font, format);
@@ -246,7 +258,7 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
                         var qrX = contentBounds.Left + ((contentBounds.Width - qrSize) / 2);
                         args.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
                         args.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
-                        args.Graphics.DrawImage(qrImage, qrX, y, qrSize, qrSize);
+                        args.Graphics.DrawImage(qrImage!, qrX, y, qrSize, qrSize);
                         y += qrSize + (lineHeight * 0.5f);
                         qrPrinted = true;
                     }
@@ -292,13 +304,18 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
             Math.Max(1, printableWidthHundredths - (2 * ThermalSafetyInset)),
             graphics.DpiX);
         using var format = CreateCanonicalTextFormat();
-        var layout = CreatePhysicalLayout(graphics, document.Lines, contentWidth, format);
+        var layout = CreatePhysicalLayout(
+            graphics,
+            document.Lines,
+            contentWidth,
+            document.AppendExitQr,
+            format);
         using var font = new Font("Consolas", layout.FontSizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
         var requiredHeight = CalculateRequiredContentHeight(
             graphics,
             layout.Lines.Count,
             font,
-            ResolveQrSize(contentWidth, graphics.DpiX));
+            document.AppendExitQr ? ResolveQrSize(contentWidth, graphics.DpiX) : 0);
         var requiredHeightHundredths = PixelsToHundredths(requiredHeight, graphics.DpiY);
         var paperHeight = (int)Math.Ceiling(
             requiredHeightHundredths + margins.Top + margins.Bottom + (2 * ThermalSafetyInset));
@@ -347,6 +364,7 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
         Graphics graphics,
         IReadOnlyList<string> canonicalLines,
         float availableWidth,
+        bool appendExitQr,
         StringFormat? format = null)
     {
         var ownsFormat = format is null;
@@ -361,12 +379,15 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
             var qrInsertionLineIndex = -1;
             foreach (var canonicalLine in canonicalLines)
             {
-                if (qrInsertionLineIndex < 0 && ReceiptPrintDocumentBuilder.IsNothingFollowsLine(canonicalLine))
+                physicalLines.AddRange(WrapPhysicalLine(graphics, canonicalLine, enlargedFont, availableWidth, format));
+                if (appendExitQr
+                    && qrInsertionLineIndex < 0
+                    && ReceiptPrintDocumentBuilder.IsNothingFollowsLine(canonicalLine))
                 {
                     qrInsertionLineIndex = physicalLines.Count;
+                    physicalLines.Add("EXIT QR");
+                    physicalLines.Add("Present at exit validator");
                 }
-
-                physicalLines.AddRange(WrapPhysicalLine(graphics, canonicalLine, enlargedFont, availableWidth, format));
             }
 
             return new ReceiptPhysicalLayout(enlargedSize, physicalLines, qrInsertionLineIndex);
@@ -449,7 +470,7 @@ public sealed class WindowsReceiptPrinter : IReceiptPrinter
     internal static Margins ReceiptMargins() => new(5, 5, 5, 5);
 
     internal static float ResolveQrSize(float printableWidth, float dpi = 100f) =>
-        Math.Min(printableWidth * 0.56f, dpi * 1.1f);
+        Math.Min(printableWidth, dpi * 2.2f);
 
     internal static RectangleF ResolvePrintableBounds(
         Rectangle marginBounds,

@@ -140,6 +140,8 @@ public sealed class LocalJournalBridgeHandlerTests
         Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
         var payload = response.RootElement.GetProperty("payload");
         Assert.Equal(ParkingSessionStartId, payload.GetProperty("parkingSessionId").GetString());
+        Assert.Equal(150m, payload.GetProperty("amountTendered").GetDecimal());
+        Assert.Equal(25m, payload.GetProperty("changeDue").GetDecimal());
         Assert.Equal(nameof(CashTenderState.TenderStarted), payload.GetProperty("currentLocalState").GetString());
     }
 
