@@ -6,6 +6,7 @@ import type {
   StatutorySalesInvoicePresentationResponse,
 } from "./api/centralPmsTypes";
 import { createCorrelationId } from "./correlation";
+import { CanonicalSalesInvoiceWithAptQr } from "./CanonicalSalesInvoiceWithAptQr";
 
 type PresentationState =
   | { status: "loading" }
@@ -76,6 +77,7 @@ export function ZeroPayableSalesInvoicePanel({
   const presentation = state.receipt.authoritativePresentation;
   const canonicalText = presentation.canonicalText?.trim();
   const sections = presentation.presentation?.sections ?? [];
+  const aptExitQr = state.receipt.aptExitQr;
 
   async function printSalesInvoice() {
     if (!client.printStatutorySalesInvoice) {
@@ -107,7 +109,14 @@ export function ZeroPayableSalesInvoicePanel({
       {printState.status === "failed" && <p role="alert">{printState.message}</p>}
       <article className="receipt-paper receipt-paper-80 zero-payable-sales-invoice-print" aria-label="Printable Sales Invoice">
         {canonicalText
-          ? <pre className="zero-payable-sales-invoice-text">{canonicalText}</pre>
+          ? aptExitQr
+            ? <CanonicalSalesInvoiceWithAptQr
+                canonicalText={canonicalText}
+                ticketNumber={aptExitQr.ticketNumber}
+                qrCodeDataUrl={aptExitQr.qrCodeDataUrl}
+                appendExitQr
+              />
+            : <pre className="zero-payable-sales-invoice-text">{canonicalText}</pre>
           : <StructuredPresentation sections={sections} documentNumber={state.receipt.fiscalDocumentNumber} />}
       </article>
     </section>

@@ -59,6 +59,61 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
     }
 
     [Fact]
+    public async Task StatutoryReceiptPreviewIncludesExitQrForAptReceipt()
+    {
+        var transport = new CapturingHandler(HttpStatusCode.OK, StatutoryReceiptPayload());
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")));
+
+        var result = await handler.HandleWebMessageAsync(ReceiptRequest());
+
+        Assert.NotNull(result);
+        using var response = JsonDocument.Parse(result);
+        var exitQr = response.RootElement.GetProperty("payload").GetProperty("aptExitQr");
+        Assert.Equal("14741195731701", exitQr.GetProperty("ticketNumber").GetString());
+        Assert.StartsWith("data:image/png;base64,", exitQr.GetProperty("qrCodeDataUrl").GetString());
+        Assert.Equal(
+            "https://central-pms.example.test/v1/webpay/statutory-applications/44444444-4444-4444-8444-444444444444/receipt-presentation?decisionCommandId=55555555-5555-4555-8555-555555555555&parkingSessionId=66666666-6666-4666-8666-666666666666",
+            transport.Request!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task StatutoryDecisionSubmitIsNotAnAcceptedAptBridgeCommand()
+    {
+        var transport = new CapturingHandler();
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")));
+
+        var result = await handler.HandleWebMessageAsync(StatutoryDecisionSubmitRequest());
+
+        Assert.Contains("INVALID_PAYABLE_BASIS_REQUEST", result, StringComparison.Ordinal);
+        Assert.Null(transport.Request);
+    }
+
+    [Fact]
+    public async Task StatutoryDecisionReadUsesHostOwnedAuthorityAndFixedDecisionPath()
+    {
+        var transport = new CapturingHandler();
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")));
+
+        await handler.HandleWebMessageAsync(StatutoryDecisionReadRequest());
+
+        Assert.Equal(HttpMethod.Get, transport.Request!.Method);
+        Assert.Equal(
+            "https://central-pms.example.test/v1/statutory-discounts/decisions/55555555-5555-4555-8555-555555555555",
+            transport.Request.RequestUri!.ToString());
+        Assert.Null(transport.Request.Content);
+        Assert.Equal("opaque-session-token", transport.Request.Headers.Authorization!.Parameter);
+    }
+
+    [Fact]
     public async Task StatutoryReceiptPrintSubmitsVerifiedZeroPayableOriginalToNativePrinter()
     {
         var transport = new CapturingHandler(HttpStatusCode.OK, StatutoryReceiptPayload());
@@ -89,6 +144,31 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
         Assert.Equal("SI-00000073", document.FiscalDocumentNumber);
         Assert.Equal("14741195731701", document.AptTicketNumber);
         Assert.Contains("NOTHING FOLLOWS", document.Lines);
+        Assert.True(document.AppendExitQr);
+    }
+
+    [Fact]
+    public async Task StatutoryReceiptPrintAppendsExitQrForAptReceipt()
+    {
+        var transport = new CapturingHandler(HttpStatusCode.OK, StatutoryReceiptPayload());
+        var printer = new ControlledReceiptPrinter();
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")),
+            receiptPrintingEnabled: true,
+            receiptPrinterName: "TSC TTP-225",
+            receiptPaperWidthMm: "57",
+            receiptPrinter: printer);
+
+        var result = await handler.HandleWebMessageAsync(ReceiptRequest(
+            CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentationPrint));
+
+        Assert.Contains("\"submitted\":true", result, StringComparison.Ordinal);
+        Assert.Equal(
+            "https://central-pms.example.test/v1/webpay/statutory-applications/44444444-4444-4444-8444-444444444444/receipt-presentation?decisionCommandId=55555555-5555-4555-8555-555555555555&parkingSessionId=66666666-6666-4666-8666-666666666666",
+            transport.Request!.RequestUri!.ToString());
+        Assert.True(printer.SubmittedDocuments.Single().AppendExitQr);
     }
 
     [Fact]
@@ -185,6 +265,29 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
         }
     });
 
+    private static string StatutoryDecisionSubmitRequest() => JsonSerializer.Serialize(new
+    {
+        source = CentralPmsPayableBasisBridgeCommand.Source,
+        command = "statutoryDecision.submit",
+        correlationId = CorrelationId.ToString("D"),
+        siteId = SiteId.ToString("D"),
+        idempotencyKey = "apt-statutory-idempotency",
+        body = new
+        {
+            sourceChannel = "ASSISTED_PAYMENT_TERMINAL",
+            siteId = SiteId.ToString("D")
+        }
+    });
+
+    private static string StatutoryDecisionReadRequest() => JsonSerializer.Serialize(new
+    {
+        source = CentralPmsPayableBasisBridgeCommand.Source,
+        command = CentralPmsPayableBasisBridgeCommand.StatutoryDecisionGet,
+        correlationId = CorrelationId.ToString("D"),
+        siteId = SiteId.ToString("D"),
+        body = new { decisionCommandId = "55555555-5555-4555-8555-555555555555" }
+    });
+
     private static string StatutoryReceiptPayload(Guid? paymentAttemptId = null)
     {
         const string canonicalText = "SALES INVOICE\r\nSI No: SI-00000073\r\nTicket Number: 14741195731701\r\nPHP 0.00\r\nNOTHING FOLLOWS\r\n";
@@ -266,4 +369,5 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
             };
         }
     }
+
 }

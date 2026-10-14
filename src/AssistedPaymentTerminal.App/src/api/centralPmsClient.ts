@@ -107,15 +107,21 @@ export class LiveCentralPmsClient implements CentralPmsClient {
   }
 
   async submitStatutoryDiscountDecision(
-    request: StatutoryDiscountDecisionSubmitRequest,
+    _request: StatutoryDiscountDecisionSubmitRequest,
     correlationId: string,
-    idempotencyKey: string,
+    _idempotencyKey: string,
   ): Promise<StatutoryDiscountDecisionResult> {
-    return this.requestStatutoryDiscountDecision("POST", "/v1/statutory-discounts/decisions", correlationId, idempotencyKey, request);
+    return failure(
+      "invalid_request",
+      "STATUTORY_DISCOUNT_APT_REQUEST_ORIGIN_PROHIBITED",
+      "Statutory-discount requests must be submitted through WebPay or Operator Console.",
+      correlationId,
+      false,
+    );
   }
 
   async getStatutoryDiscountDecision(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult> {
-    return this.requestStatutoryDiscountDecision("GET", `/v1/statutory-discounts/decisions/${encodeURIComponent(decisionCommandId)}`, correlationId);
+    return this.requestStatutoryDiscountDecision(decisionCommandId, correlationId);
   }
 
   async getStatutorySalesInvoicePresentation(
@@ -173,7 +179,15 @@ export class LiveCentralPmsClient implements CentralPmsClient {
           false,
         );
       }
-      return { ok: true, response: payload };
+      return {
+        ok: true,
+        response: {
+          ...payload,
+          aptExitQr: isAptExitQrPresentation(bridged.payload.aptExitQr)
+            ? bridged.payload.aptExitQr
+            : null,
+        },
+      };
     }
 
     const result = await this.send(path, "GET", correlationId);
@@ -302,13 +316,55 @@ export class LiveCentralPmsClient implements CentralPmsClient {
   }
 
   private async requestStatutoryDiscountDecision(
-    method: "GET" | "POST",
-    path: string,
+    decisionCommandId: string,
     correlationId: string,
-    idempotencyKey?: string,
-    request?: unknown,
   ): Promise<StatutoryDiscountDecisionResult> {
-    const result = await this.send(path, method, correlationId, idempotencyKey, request);
+    const path = `/v1/statutory-discounts/decisions/${encodeURIComponent(decisionCommandId)}`;
+    const bridgeCommand: PayableBasisBridgeCommand = "statutoryDecision.get";
+    const bridged = await sendPayableBasisRequest(
+      bridgeCommand,
+      correlationId,
+      this.config.siteId,
+      { decisionCommandId },
+    );
+    if (bridged) {
+      if (!bridged.ok) {
+        const kind: CentralPmsFailureKind = bridged.error.code === "CENTRAL_PMS_TIMEOUT"
+          ? "timeout"
+          : bridged.error.code === "HUMAN_SESSION_REQUIRED"
+            ? "unauthorized"
+            : "service_unavailable";
+        return failure(kind, bridged.error.code, bridged.error.message, correlationId, kind !== "unauthorized");
+      }
+
+      const payload = bridged.payload.body;
+      if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300) {
+        return {
+          ok: false,
+          kind: mapFailureKind(
+            bridged.payload.statusCode,
+            typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+          ),
+          error: normalizeError(payload, correlationId),
+        };
+      }
+      if (!isStatutoryDiscountDecisionResponse(payload)) {
+        return {
+          ok: false,
+          kind: "malformed_response",
+          error: {
+            errorCode: "MALFORMED_STATUTORY_DISCOUNT_RESPONSE",
+            message: "Central PMS statutory-discount response did not match the APT contract.",
+            correlationId,
+            retryable: false,
+          },
+        };
+      }
+
+      return { ok: true, response: normalizeStatutoryDiscountDecisionResponse(payload) };
+    }
+
+    const result = await this.send(path, "GET", correlationId);
     if (!result.ok) {
       return result;
     }
@@ -544,6 +600,19 @@ function isStatutorySalesInvoicePresentationResponse(
       && (!completion.fiscalDocumentNumber || candidate.fiscalDocumentNumber === completion.fiscalDocumentNumber)
       && typeof candidate.correlationId === "string"
       && hasRenderablePresentation,
+  );
+}
+
+function isAptExitQrPresentation(
+  value: unknown,
+): value is NonNullable<StatutorySalesInvoicePresentationResponse["aptExitQr"]> {
+  const candidate = value as { ticketNumber?: unknown; qrCodeDataUrl?: unknown } | null;
+  return Boolean(
+    candidate
+      && typeof candidate.ticketNumber === "string"
+      && candidate.ticketNumber.trim().length > 0
+      && typeof candidate.qrCodeDataUrl === "string"
+      && candidate.qrCodeDataUrl.startsWith("data:image/png;base64,"),
   );
 }
 

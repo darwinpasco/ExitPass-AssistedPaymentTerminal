@@ -71,6 +71,97 @@ describe("CashCapturePanel", () => {
 
     expect(screen.getByLabelText("Change due")).toHaveValue("25.00");
   });
+
+  it("submits the cashier-entered tender unchanged through a non-incrementing decimal input", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({
+      config: enabledConfig(),
+      bridge,
+      session: { ...activeSession(), authoritativeAmountMinorUnits: 5000, netPayableMinorUnits: 5000 },
+    });
+    await screen.findByLabelText("Cash custody capture");
+
+    const input = screen.getByLabelText("Amount tendered");
+    expect(input).toHaveAttribute("type", "text");
+    expect(input).toHaveAttribute("inputmode", "decimal");
+    expect(input).toHaveAttribute("autocomplete", "off");
+    await userEvent.click(input);
+    await userEvent.type(input, "100");
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect(bridge.startTender).toHaveBeenCalledTimes(1);
+    expect(bridge.startTender.mock.calls[0][1]).toMatchObject({
+      amountDue: 50,
+      amountTendered: 100,
+    });
+  });
+
+  it("keeps matching denomination evidence separate from the entered tender", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({
+      config: enabledConfig(),
+      bridge,
+      session: { ...activeSession(), authoritativeAmountMinorUnits: 5000, netPayableMinorUnits: 5000 },
+    });
+    await screen.findByLabelText("Cash custody capture");
+
+    await userEvent.click(screen.getByLabelText("Amount tendered"));
+    await userEvent.type(screen.getByLabelText("Amount tendered"), "100");
+    await userEvent.clear(screen.getByLabelText("PHP-100"));
+    await userEvent.type(screen.getByLabelText("PHP-100"), "1");
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect(bridge.startTender.mock.calls[0][1].amountTendered).toBe(100);
+    expect(bridge.recordCashReceived.mock.calls[0][1].denominations).toEqual([
+      { denominationCode: "PHP-100", denominationValue: 100, quantity: 1 },
+    ]);
+  });
+
+  it("does not add mismatched denomination evidence to the entered tender", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({
+      config: enabledConfig(),
+      bridge,
+      session: { ...activeSession(), authoritativeAmountMinorUnits: 5000, netPayableMinorUnits: 5000 },
+    });
+    await screen.findByLabelText("Cash custody capture");
+
+    await userEvent.click(screen.getByLabelText("Amount tendered"));
+    await userEvent.type(screen.getByLabelText("Amount tendered"), "100");
+    for (const [label, quantity] of [["PHP-50", "1"], ["PHP-20", "2"], ["PHP-5", "1"], ["PHP-1", "4"]] as const) {
+      await userEvent.clear(screen.getByLabelText(label));
+      await userEvent.type(screen.getByLabelText(label), quantity);
+    }
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect(bridge.startTender.mock.calls[0][1].amountTendered).toBe(100);
+    const denominationTotal = bridge.recordCashReceived.mock.calls[0][1].denominations.reduce(
+      (total, denomination) => total + (denomination.denominationValue * denomination.quantity),
+      0,
+    );
+    expect(denominationTotal).toBe(99);
+  });
+
+  it("preserves exact cash and zero change", async () => {
+    const bridge = new FakeBridge();
+    renderPanel({
+      config: enabledConfig(),
+      bridge,
+      session: { ...activeSession(), authoritativeAmountMinorUnits: 5000, netPayableMinorUnits: 5000 },
+    });
+    await screen.findByLabelText("Cash custody capture");
+
+    await userEvent.click(screen.getByLabelText(/I attest/));
+    await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
+
+    expect(bridge.startTender.mock.calls[0][1]).toMatchObject({
+      amountDue: 50,
+      amountTendered: 50,
+    });
+  });
   it("creates no local custody record before the explicit command", async () => {
     const bridge = new FakeBridge();
     renderPanel({ config: enabledConfig(), bridge });
@@ -903,8 +994,10 @@ describe("CashCapturePanel", () => {
     expect(body).toHaveTextContent("THIS SERVES AS YOUR SALES INVOICE");
     expect(body).toHaveTextContent("ACCR-0001");
     const qr = within(body).getByRole("img", { name: "Ticket 1474119573117 QR code" });
-    expect(qr).toHaveAttribute("src", "data:image/png;base64,cXItMTQ3NDExOTU3MzExNw==");
-    expect(qr.compareDocumentPosition(within(body).getByText(/NOTHING FOLLOWS/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const closing = within(body).getByText(/NOTHING FOLLOWS/);
+    expect(closing.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(body).getByText(/EXIT QR/)).toBeInTheDocument();
+    expect(within(body).getByText(/Present at exit validator/)).toBeInTheDocument();
     expect(body.textContent ?? "").not.toMatch(/\[[A-Z -]+\]/);
     expect(body.textContent ?? "").not.toMatch(/authoritativePresentation|\{"presentation"/i);
     expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Print Sales Invoice" })).toBeDisabled();
@@ -1251,6 +1344,12 @@ describe("CashCapturePanel", () => {
     expect(screen.getByText("Configuration completeness: Complete")).toBeInTheDocument();
     expect(screen.getAllByText("Not printed")).not.toHaveLength(0);
     expect(screen.getByText("Exit Authorization: ISSUED")).toBeInTheDocument();
+    const body = screen.getByLabelText("Read-only receipt body");
+    const qr = within(body).getByRole("img", { name: "Ticket 1474119573117 QR code" });
+    const closing = within(body).getByText(/NOTHING FOLLOWS/);
+    expect(closing.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(body).getByText(/EXIT QR/)).toBeInTheDocument();
+    expect(within(body).getByText(/Present at exit validator/)).toBeInTheDocument();
     const details = screen.getByText("Receipt technical details").closest("details");
     expect(details).not.toHaveAttribute("open");
   });

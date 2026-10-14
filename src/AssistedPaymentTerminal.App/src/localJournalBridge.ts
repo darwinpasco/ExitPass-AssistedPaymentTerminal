@@ -321,6 +321,7 @@ export type ReceiptPrintDocument = {
   lines: string[];
   aptTicketNumber: string;
   aptTicketQrCodeDataUrl: string;
+  appendExitQr?: boolean;
 };
 
 export type CentralPmsCashReceiptPrintJob = {

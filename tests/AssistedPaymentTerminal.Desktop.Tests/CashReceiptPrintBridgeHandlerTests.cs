@@ -159,7 +159,8 @@ public sealed class CashReceiptPrintBridgeHandlerTests
             graphics,
             canonicalLines,
             availableWidth,
-            format);
+            appendExitQr: true,
+            format: format);
         using var enlargedFont = new System.Drawing.Font(
             "Consolas",
             layout.FontSizeInPoints,
@@ -172,13 +173,40 @@ public sealed class CashReceiptPrintBridgeHandlerTests
             line => Assert.True(
                 WindowsReceiptPrinter.MeasureTextBlockWidth(graphics, [line], enlargedFont, format) <= availableWidth,
                 $"Wrapped physical line exceeds {printableWidthMm} mm: '{line}'"));
-        Assert.Equal(canonicalLines, ReassemblePhysicalLines(canonicalLines, layout.Lines));
+        var fiscalLines = layout.Lines
+            .Where(line => !string.Equals(line, "EXIT QR", StringComparison.Ordinal)
+                && !string.Equals(line, "Present at exit validator", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(canonicalLines, ReassemblePhysicalLines(canonicalLines, fiscalLines));
         Assert.InRange(layout.QrInsertionLineIndex, 0, layout.Lines.Count - 1);
+        var closingIndex = Array.FindIndex(layout.Lines.ToArray(), ReceiptPrintDocumentBuilder.IsNothingFollowsLine);
+        Assert.True(layout.QrInsertionLineIndex > closingIndex);
+        Assert.Equal("EXIT QR", layout.Lines[layout.QrInsertionLineIndex]);
+        Assert.Equal("Present at exit validator", layout.Lines[layout.QrInsertionLineIndex + 1]);
+    }
+
+    [Fact]
+    public void PhysicalPrintOmitsExitQrWithoutPersistedExitAuthorization()
+    {
+        using var bitmap = new System.Drawing.Bitmap(1200, 600);
+        bitmap.SetResolution(203, 203);
+        using var graphics = System.Drawing.Graphics.FromImage(bitmap);
+        var canonicalLines = CanonicalLines(CashReceiptPreviewBridgeHandlerTests.CanonicalPrintableText);
+        var layout = WindowsReceiptPrinter.CreatePhysicalLayout(
+            graphics,
+            canonicalLines,
+            50.8f / 25.4f * graphics.DpiX,
+            appendExitQr: false);
+
+        Assert.Equal(-1, layout.QrInsertionLineIndex);
+        Assert.DoesNotContain("EXIT QR", layout.Lines);
+        Assert.DoesNotContain("Present at exit validator", layout.Lines);
+        Assert.Equal(canonicalLines, ReassemblePhysicalLines(canonicalLines, layout.Lines));
     }
 
     [Theory]
-    [InlineData(200f, 110f)]
-    [InlineData(284f, 110f)]
+    [InlineData(200f, 200f)]
+    [InlineData(284f, 220f)]
     public void AptTicketQrUsesAReadableBoundedSizeWithinThePrintableArea(float printableWidth, float expectedSize)
     {
         Assert.Equal(expectedSize, WindowsReceiptPrinter.ResolveQrSize(printableWidth), 2);

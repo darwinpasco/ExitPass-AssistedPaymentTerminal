@@ -61,9 +61,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
   const maskedIdFromRawInput = maskStatutoryId(rawIdInput);
   const rawIdHasManualMask = containsManualStatutoryIdMask(rawIdInput);
   const maskedIdForSubmission = rawIdInput.trim() ? maskedIdFromRawInput : draft.maskedIdReference.trim();
-  const canSubmitDecision = Boolean(status === "draft" && selectedEntitlementAllowed && draft.requesterAttested && maskedIdForSubmission && !rawIdHasManualMask && draft.entitlementType.trim());
   const canCheckReview = Boolean(decisionId) && ["awaiting_review", "retryable_failure"].includes(status);
-  const canSubmitApplication = status === "approved_application_not_requested" && Boolean(decisionId);
   const appliedComplete = status === "applied" && Boolean(state.appliedTariffSnapshotId) && state.finalPayableAmountMinorUnits != null && Boolean(state.currency);
   const statutoryCashReady = appliedComplete && state.amountAcknowledged === true;
 
@@ -87,15 +85,6 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     if (status === "none") {
       onStateChange({ status: "draft", ...currentStateEvidence(state), [key]: value });
     }
-  }
-
-  function startDraft() {
-    if (!selectedEntitlementAllowed) {
-      setMessage("The selected statutory entitlement is not configured for this Site.");
-      return;
-    }
-    const next = { status: "draft" as const, ...currentStateEvidence(state), ...draft, updatedAt: new Date().toISOString() };
-    onStateChange(next);
   }
 
   function commitStatutoryIdMask() {
@@ -212,18 +201,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
       </p>
       {!active && (
         <div className="statutory-draft-actions">
-          {availableEntitlements.length > 0 ? (
-            <>
-              <label>
-                Covered entitlement
-                <select data-testid="covered-entitlement-selector" value={draft.entitlementType} onChange={(event) => setDraft((current) => ({ ...current, entitlementType: event.target.value }))}>
-                  {availableEntitlements.map((entitlementType) => <option key={entitlementType} value={entitlementType}>{entitlementLabel(entitlementType)}</option>)}
-                </select>
-              </label>
-              <p>No statutory request is active for this payable basis.</p>
-              <button type="button" className="secondary-action" onClick={startDraft} disabled={!selectedEntitlementAllowed}>Start statutory request</button>
-            </>
-          ) : null}
+          <p>No statutory request is active for this payable basis. Submit the request through WebPay or Operator Console.</p>
         </div>
       )}
 
@@ -311,9 +289,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
       )}
 
       <div className="statutory-actions">
-        {status === "draft" && <button type="button" className="primary-action" disabled={!canSubmitDecision} onClick={() => void submitDecision(false)}>Submit for Operator Review</button>}
         {canCheckReview && <button type="button" className="secondary-action" onClick={() => void checkStatus()}>Check Review Status</button>}
-        {canSubmitApplication && <button type="button" className="primary-action" onClick={() => void submitDecision(true)}>Submit Statutory Application</button>}
         {status === "application_processing" && <button type="button" className="secondary-action" onClick={() => void checkStatus()}>Check Application Status</button>}
       </div>
     </section>

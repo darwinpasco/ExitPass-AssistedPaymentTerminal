@@ -134,7 +134,11 @@ export class MockCentralPmsClient implements CentralPmsClient {
           fiscalDocumentId: completion.posServerFiscalDocumentId,
           fiscalDocumentNumber,
           canonicalTextAuthority: "persisted_original_electronic_journal",
-          canonicalText: `SALES INVOICE\nSI No ${fiscalDocumentNumber}\nParking Fee PHP 0.00\nNo payment required`,
+          canonicalText: `SALES INVOICE\nSI No ${fiscalDocumentNumber}\nParking Fee PHP 0.00\nNo payment required\n===== NOTHING FOLLOWS =====`,
+        },
+        aptExitQr: {
+          ticketNumber: displayedBasis.ticketReference ?? "14741195731701",
+          qrCodeDataUrl: "data:image/png;base64,cXItMTQ3NDExOTU3MzE3MDE=",
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

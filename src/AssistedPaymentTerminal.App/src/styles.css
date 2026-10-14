@@ -1385,13 +1385,13 @@ dl {
 
 .apt-ticket-qr img {
   display: block;
-  width: min(28mm, 58%);
+  width: min(56mm, 100%);
   aspect-ratio: 1;
   image-rendering: pixelated;
 }
 
 .receipt-paper-80 .apt-ticket-qr img {
-  width: min(30mm, 46%);
+  width: min(60mm, 92%);
 }
 
 .cashier-header {

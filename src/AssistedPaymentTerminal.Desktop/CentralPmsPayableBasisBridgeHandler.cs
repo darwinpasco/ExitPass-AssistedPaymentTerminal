@@ -12,6 +12,7 @@ public static class CentralPmsPayableBasisBridgeCommand
     public const string Source = "apt-central-pms-payable-basis";
     public const string Resolve = "payableBasis.resolve";
     public const string Revalidate = "payableBasis.revalidate";
+    public const string StatutoryDecisionGet = "statutoryDecision.get";
     public const string StatutoryReceiptPresentation = "statutoryReceiptPresentation.get";
     public const string StatutoryReceiptPresentationPrint = "statutoryReceiptPresentation.print";
 }
@@ -76,6 +77,8 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         {
             CentralPmsPayableBasisBridgeCommand.Resolve => ResolvePath,
             CentralPmsPayableBasisBridgeCommand.Revalidate => RevalidatePath,
+            CentralPmsPayableBasisBridgeCommand.StatutoryDecisionGet =>
+                TryBuildStatutoryDecisionPath(request.Body, out var decisionPath) ? decisionPath : null,
             CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentation =>
                 TryBuildStatutoryReceiptPresentationPath(request.Body, out var receiptPath) ? receiptPath : null,
             CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentationPrint =>
@@ -102,10 +105,11 @@ public sealed class CentralPmsPayableBasisBridgeHandler
             return Failure(request.Command, request.CorrelationId, "FORBIDDEN_SITE", "The payable-basis request does not match this terminal Site.");
         }
 
-        var isStatutoryReceiptRead = request.Command is
+        var isRead = request.Command is
+            CentralPmsPayableBasisBridgeCommand.StatutoryDecisionGet or
             CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentation or
             CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentationPrint;
-        var method = isStatutoryReceiptRead
+        var method = isRead
             ? HttpMethod.Get
             : HttpMethod.Post;
         using var outbound = new HttpRequestMessage(method, new Uri(_baseUri, path));
@@ -136,7 +140,9 @@ public sealed class CentralPmsPayableBasisBridgeHandler
                 // Existing frontend validation maps an absent body to a safe malformed response.
             }
 
-            if (request.Command == CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentationPrint)
+            if (request.Command is
+                CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentation or
+                CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentationPrint)
             {
                 if (!response.IsSuccessStatusCode || body is null)
                 {
@@ -149,10 +155,28 @@ public sealed class CentralPmsPayableBasisBridgeHandler
                     }, JsonOptions);
                 }
 
+                var aptExitQr = TryCreateAptExitQr(body.Value);
+                if (request.Command == CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentation)
+                {
+                    return JsonSerializer.Serialize(new
+                    {
+                        ok = true,
+                        command = request.Command,
+                        correlationId = request.CorrelationId,
+                        payload = new
+                        {
+                            statusCode = (int)response.StatusCode,
+                            body,
+                            aptExitQr
+                        }
+                    }, JsonOptions);
+                }
+
                 return await PrintStatutoryReceiptAsync(
                     request.Command,
                     request.CorrelationId,
                     body.Value,
+                    aptExitQr is not null,
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -199,10 +223,24 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         return true;
     }
 
+    private static bool TryBuildStatutoryDecisionPath(JsonElement body, out string? path)
+    {
+        path = null;
+        if (body.ValueKind != JsonValueKind.Object ||
+            !TryReadGuid(body, "decisionCommandId", out var decisionCommandId))
+        {
+            return false;
+        }
+
+        path = $"/v1/statutory-discounts/decisions/{decisionCommandId:D}";
+        return true;
+    }
+
     private async Task<string> PrintStatutoryReceiptAsync(
         string command,
         string correlationId,
         JsonElement payload,
+        bool appendExitQr,
         CancellationToken cancellationToken)
     {
         if (!_receiptPrintingEnabled || string.IsNullOrWhiteSpace(_receiptPrinterName))
@@ -210,7 +248,7 @@ public sealed class CentralPmsPayableBasisBridgeHandler
             return Failure(command, correlationId, "RECEIPT_PRINTING_DISABLED", "Sales Invoice printing is not configured on this terminal.");
         }
 
-        if (!TryBuildZeroPayablePrintDocument(payload, out var document))
+        if (!TryBuildZeroPayablePrintDocument(payload, appendExitQr, out var document))
         {
             return Failure(command, correlationId, "STATUTORY_RECEIPT_NOT_AUTHORITATIVE", "The authoritative zero-payable Sales Invoice could not be validated for printing.");
         }
@@ -259,7 +297,10 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         }, JsonOptions);
     }
 
-    private bool TryBuildZeroPayablePrintDocument(JsonElement payload, out ReceiptPrintDocument document)
+    private bool TryBuildZeroPayablePrintDocument(
+        JsonElement payload,
+        bool appendExitQr,
+        out ReceiptPrintDocument document)
     {
         document = null!;
         if (payload.ValueKind != JsonValueKind.Object ||
@@ -293,13 +334,28 @@ public sealed class CentralPmsPayableBasisBridgeHandler
                 canonicalTextHash,
                 _receiptPaperProfile,
                 canonicalText,
-                ticketNumber);
+                ticketNumber,
+                appendExitQr);
             return true;
         }
         catch (InvalidOperationException)
         {
             return false;
         }
+    }
+
+    private static AptExitQrPresentation? TryCreateAptExitQr(JsonElement receiptPayload)
+    {
+        if (!receiptPayload.TryGetProperty("authoritativePresentation", out var presentation) ||
+            presentation.ValueKind != JsonValueKind.Object ||
+            !TryReadTicketNumber(presentation, out var ticketNumber))
+        {
+            return null;
+        }
+
+        return new AptExitQrPresentation(
+            ticketNumber,
+            AptTicketQrCode.CreateDataUrl(ticketNumber));
     }
 
     private static bool HasNonNullValue(JsonElement source, string propertyName) =>
@@ -374,5 +430,10 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         string Command,
         string CorrelationId,
         string SiteId,
-        JsonElement Body);
+        JsonElement Body,
+        string? IdempotencyKey = null);
+
+    private sealed record AptExitQrPresentation(
+        string TicketNumber,
+        string QrCodeDataUrl);
 }

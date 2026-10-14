@@ -1,12 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
-import type {
-  CentralPmsClient,
-  PayableBasisResponse,
-  StatutoryDiscountDecisionSubmitRequest,
-} from "./api/centralPmsTypes";
+import type { CentralPmsClient, PayableBasisResponse } from "./api/centralPmsTypes";
 import { containsManualStatutoryIdMask, maskStatutoryId } from "./statutoryIdMasking";
 import { buildTerminalContext } from "./terminalContext";
 import { mode1Config } from "./test/testConfig";
@@ -35,15 +31,11 @@ describe("statutory ID presentation masking", () => {
     expect(containsManualStatutoryIdMask("AB******7890")).toBe(true);
   });
 
-  it("accepts a raw ID, masks it automatically, and submits only the masked contract value", async () => {
+  it("masks a restored draft ID but does not expose APT statutory submission", async () => {
     const user = userEvent.setup();
     const rawId = "AB1234567890";
     const maskedId = "AB******7890";
-    const submitDecision = vi.fn(async (_request: StatutoryDiscountDecisionSubmitRequest) => ({
-      ok: false,
-      kind: "service",
-      error: { errorCode: "TEST_STOP", message: "Synthetic stop after request capture.", correlationId: "safe-test-reference", retryable: false },
-    }));
+    const submitDecision = vi.fn();
     const onStateChange = vi.fn();
 
     renderPanel({ submitStatutoryDiscountDecision: submitDecision } as unknown as CentralPmsClient, onStateChange);
@@ -58,18 +50,14 @@ describe("statutory ID presentation masking", () => {
     expect(document.body).not.toHaveTextContent(rawId);
     expect(cashierAccessibilityText()).not.toContain(rawId);
 
-    await user.click(screen.getByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: "Submit for Operator Review" }));
-
-    await waitFor(() => expect(submitDecision).toHaveBeenCalledTimes(1));
-    expect(submitDecision.mock.calls[0][0]).toEqual(expect.objectContaining({ maskedIdReference: maskedId }));
-    expect(JSON.stringify(submitDecision.mock.calls)).not.toContain(rawId);
+    expect(screen.queryByRole("button", { name: "Submit for Operator Review" })).not.toBeInTheDocument();
+    expect(submitDecision).not.toHaveBeenCalled();
     expect(JSON.stringify(onStateChange.mock.calls)).not.toContain(rawId);
     expect(window.localStorage.getItem("statutoryId")).toBeNull();
     expect(window.sessionStorage.getItem("statutoryId")).toBeNull();
   });
 
-  it("rejects manually entered asterisks and keeps submission disabled", async () => {
+  it("rejects manually entered asterisks without exposing a submission action", async () => {
     const user = userEvent.setup();
     renderPanel({ submitStatutoryDiscountDecision: vi.fn() } as unknown as CentralPmsClient, vi.fn());
 
@@ -79,7 +67,7 @@ describe("statutory ID presentation masking", () => {
     await user.click(screen.getByRole("checkbox"));
 
     expect(screen.getByText("Enter the statutory ID normally without asterisks. Masking is automatic.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Submit for Operator Review" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Submit for Operator Review" })).not.toBeInTheDocument();
   });
 
   it("restores only the masked recovery value and never reconstructs raw ID input", () => {
