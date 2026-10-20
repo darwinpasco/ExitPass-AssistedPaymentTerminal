@@ -1,6 +1,8 @@
 {
     "APT_PROFILE":  "CASHIER_ASSISTED_TERMINAL",
     "APT_TERMINAL_ID":  "apt-pitx-level-3-01",
+    "APT_TERMINAL_SERIAL_NUMBER":  "",
+    "APT_POS_VERSION_LABEL":  "Version No. ExitPass V1.0",
     "APT_TERMINAL_DISPLAY_NAME":  "PITX Level 3 APT",
     "APT_SITE_ID":  "2d1dcdf8-f563-537c-8542-0bde7cc9da97",
     "APT_SITE_NAME":  "PITX Level 3",
