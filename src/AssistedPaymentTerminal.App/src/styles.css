@@ -66,6 +66,26 @@ input:focus-visible {
   letter-spacing: 0;
 }
 
+.product-runtime-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.product-runtime-identity strong,
+.product-runtime-identity time {
+  display: block;
+}
+
+.product-runtime-identity time {
+  color: #667085;
+  font-variant-numeric: tabular-nums;
+}
+
 .eyebrow {
   margin: 0 0 3px;
   color: #51616f;

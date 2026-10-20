@@ -28,6 +28,7 @@ import {
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
 import { ZeroPayableSalesInvoicePanel } from "./ZeroPayableSalesInvoicePanel";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
+import { ProductRuntimeIdentity } from "./ProductRuntimeIdentity";
 import { createWebViewLocalJournalBridge, type LocalJournalBridge, type LocalJournalHealth, type PayableBasisStateSnapshot } from "./localJournalBridge";
 import { createWebViewStatutoryEvidenceBridge, type StatutoryEvidenceBridge, type StatutoryEvidenceChannelResponse } from "./statutoryEvidenceBridge";
 import {
@@ -757,6 +758,7 @@ export function TerminalShell({
           <p className="eyebrow">ExitPass Assisted Payment Terminal</p>
           <h1>Cashier-Assisted Terminal</h1>
         </div>
+        <ProductRuntimeIdentity versionLabel={config.posVersionLabel} />
       </header>
 
       <section className="workflow-stack">
@@ -980,6 +982,7 @@ export function HumanSessionPanel({
           <div><dt>Cashier</dt><dd>{state.displayName || state.username || "Cashier"}</dd></div>
           <div><dt>Site</dt><dd>{context?.siteName ?? "Unavailable"}</dd></div>
           <div><dt>Terminal</dt><dd>{context?.terminalDisplayName ?? "Unavailable"}</dd></div>
+          <div><dt>Terminal S/N</dt><dd>{context?.terminalSerialNumber ?? "Unavailable"}</dd></div>
           <div><dt>Shift</dt><dd data-testid="cashier-header-shift">{shiftOpen ? "OPEN" : "CLOSED"}</dd></div>
           <div><dt>Cash Custody</dt><dd data-testid="cashier-header-custody">{custodyOpen ? "OPEN" : "CLOSED"}</dd></div>
         </dl>

@@ -3,6 +3,7 @@ import type { HumanSessionState } from "./humanSessionBridge";
 
 export type TerminalContext = {
   terminalId: string;
+  terminalSerialNumber: string;
   terminalDisplayName: string;
   siteId: string;
   siteName: string;
@@ -19,6 +20,7 @@ export function buildTerminalContext(config: AptConfig, humanSession?: HumanSess
   const activeShift = humanSession?.activeShift;
   return {
     terminalId: config.terminalId,
+    terminalSerialNumber: config.terminalSerialNumber,
     terminalDisplayName: config.terminalDisplayName,
     siteId: config.siteId,
     siteName: config.siteName,

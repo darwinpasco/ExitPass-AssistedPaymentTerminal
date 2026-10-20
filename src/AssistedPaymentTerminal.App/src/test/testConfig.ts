@@ -4,6 +4,7 @@ import { parseAptConfig } from "../config";
 export const rawMode1Config: RawAptConfig = {
   APT_PROFILE: "CASHIER_ASSISTED_TERMINAL",
   APT_TERMINAL_ID: "APT-DEV-001",
+  APT_TERMINAL_SERIAL_NUMBER: "DEV-HARDWARE-SERIAL-001",
   APT_TERMINAL_DISPLAY_NAME: "Development Cashier Terminal 1",
   APT_SITE_ID: "11111111-1111-1111-1111-111111111111",
   APT_SITE_NAME: "ExitPass Demo Parking",

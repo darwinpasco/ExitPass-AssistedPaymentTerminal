@@ -1,10 +1,13 @@
 import { validateOperatingProfile, type ProfileValidation } from "./profile";
+import { DEFAULT_POS_VERSION_LABEL } from "./ProductRuntimeIdentity";
 
 export type RawAptConfig = Record<string, string | undefined>;
 
 export type AptConfig = {
   profile: string;
+  posVersionLabel: string;
   terminalId: string;
+  terminalSerialNumber: string;
   terminalDisplayName: string;
   siteId: string;
   siteName: string;
@@ -38,6 +41,7 @@ declare global {
 const requiredSettings = [
   "APT_PROFILE",
   "APT_TERMINAL_ID",
+  "APT_TERMINAL_SERIAL_NUMBER",
   "APT_TERMINAL_DISPLAY_NAME",
   "APT_SITE_ID",
   "APT_SITE_NAME",
@@ -50,6 +54,7 @@ const requiredSettings = [
 const fileSmokeConfig: RawAptConfig = {
   APT_PROFILE: "CASHIER_ASSISTED_TERMINAL",
   APT_TERMINAL_ID: "APT-DEV-001",
+  APT_TERMINAL_SERIAL_NUMBER: "DEV-HARDWARE-SERIAL-001",
   APT_TERMINAL_DISPLAY_NAME: "Development Cashier Terminal 1",
   APT_SITE_ID: "11111111-1111-1111-1111-111111111111",
   APT_SITE_NAME: "ExitPass Demo Parking",
@@ -89,7 +94,9 @@ export function parseAptConfig(raw: RawAptConfig): ConfigLoadResult {
     profileValidation,
     config: {
       profile: raw.APT_PROFILE!.trim(),
+      posVersionLabel: raw.APT_POS_VERSION_LABEL?.trim() || DEFAULT_POS_VERSION_LABEL,
       terminalId: raw.APT_TERMINAL_ID!.trim(),
+      terminalSerialNumber: raw.APT_TERMINAL_SERIAL_NUMBER!.trim(),
       terminalDisplayName: raw.APT_TERMINAL_DISPLAY_NAME!.trim(),
       siteId: raw.APT_SITE_ID!.trim(),
       siteName: raw.APT_SITE_NAME!.trim(),

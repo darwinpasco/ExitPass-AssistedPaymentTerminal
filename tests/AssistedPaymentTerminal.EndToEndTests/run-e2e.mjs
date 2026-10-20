@@ -12,6 +12,7 @@ const fixtureUrl = `${baseUrl}/?humanSessionFixture=1`;
 const e2eConfig = {
   APT_PROFILE: "CASHIER_ASSISTED_TERMINAL",
   APT_TERMINAL_ID: "APT-DEV-001",
+  APT_TERMINAL_SERIAL_NUMBER: "APT-E2E-TEST-0001",
   APT_TERMINAL_DISPLAY_NAME: "Development Cashier Terminal 1",
   APT_SITE_ID: "11111111-1111-1111-1111-111111111111",
   APT_SITE_NAME: "ExitPass Demo Parking",
@@ -27,15 +28,25 @@ const server = await startStaticServer();
 const browser = await chromium.launch();
 
 try {
+  await runMissingTerminalSerialRefusal();
   await runUnauthenticatedStartup();
   await runActiveAndExpiredWorkflow();
   await runNoActiveShiftWorkflow();
   await runUnsupportedProfileRefusal();
   await runServiceUnavailableFailure();
-  console.log("Playwright E2E passed: 5 scenarios");
+  console.log("Playwright E2E passed: 6 scenarios");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
+}
+
+async function runMissingTerminalSerialRefusal() {
+  const page = await newPage();
+  await page.goto(`${baseUrl}/?missingTerminalSerial=1`);
+
+  await expect(page.getByText("APT_TERMINAL_SERIAL_NUMBER is required.")).toBeVisible();
+  await expect(page.getByTestId("apt-human-login-shell")).toHaveCount(0);
+  await page.close();
 }
 
 async function runUnauthenticatedStartup() {
@@ -156,8 +167,12 @@ async function startStaticServer() {
     }
 
     if (relativePath === "apt-config.json") {
+      const referer = new URL(request.headers.referer ?? baseUrl);
+      const config = referer.searchParams.get("missingTerminalSerial") === "1"
+        ? { ...e2eConfig, APT_TERMINAL_SERIAL_NUMBER: undefined }
+        : e2eConfig;
       response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify(e2eConfig));
+      response.end(JSON.stringify(config));
       return;
     }
 
