@@ -28,6 +28,13 @@ public sealed record LocalOperationalStateRequest(
     string? SiteGroupId = null,
     string? PosServerId = null);
 
+public sealed record CashCustodyOverviewRequest(
+    string CashierId,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId);
+
 public sealed record CreateCashCustodySessionRequest(
     string CashierId,
     string AuthenticatedCashierSessionReference,

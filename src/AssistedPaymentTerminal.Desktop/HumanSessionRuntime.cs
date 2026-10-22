@@ -804,6 +804,9 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         var cashAuthorized = shiftAuthorized
             && custodyAuthorized
             && HasOperationalPermission(session, HumanSessionRuntimeOptions.CashReceivePermission);
+        var custodyOverview = custodyAuthorized
+            ? await LoadOwnCashCustodyOverviewAsync(session.UserReference, cancellationToken).ConfigureAwait(false)
+            : new CashCustodyOverviewSnapshot(null, Array.Empty<CashCustodySummarySnapshot>());
         var permissionErrorCode = !shiftAuthorized
             ? "SHIFT_PERMISSION_DENIED"
             : !custodyAuthorized
@@ -848,7 +851,10 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
                     : errorCode ?? permissionErrorCode,
             Retryable: false,
             ActiveShift: ownState.ActiveShift,
-            ActiveCashCustodySession: ownState.ActiveCashCustodySession);
+            ActiveCashCustodySession: ownState.ActiveCashCustodySession,
+            ActiveCashCustodySummary: custodyOverview.ActiveSession,
+            LatestClosedCashCustody: custodyOverview.ClosedSessions.FirstOrDefault(),
+            ClosedCashCustodyHistory: custodyOverview.ClosedSessions);
     }
 
     private Task<LocalOperationalStateSnapshot> LoadOwnOperationalStateAsync(Guid userReference, CancellationToken cancellationToken) =>
@@ -861,6 +867,16 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
 
     private Task<LocalOperationalStateSnapshot> LoadTerminalOperationalStateAsync(CancellationToken cancellationToken) =>
         _journal.GetLocalOperationalStateAsync(new LocalOperationalStateRequest(
+            TerminalId: _options!.TerminalId,
+            SiteId: _options.SiteId.ToString("D"),
+            SiteGroupId: _options.SiteGroupId.ToString("D"),
+            PosServerId: _options.PosServerId), cancellationToken);
+
+    private Task<CashCustodyOverviewSnapshot> LoadOwnCashCustodyOverviewAsync(
+        Guid userReference,
+        CancellationToken cancellationToken) =>
+        _journal.GetCashCustodyOverviewAsync(new CashCustodyOverviewRequest(
+            CashierId: userReference.ToString("D"),
             TerminalId: _options!.TerminalId,
             SiteId: _options.SiteId.ToString("D"),
             SiteGroupId: _options.SiteGroupId.ToString("D"),
@@ -971,7 +987,10 @@ public sealed record HumanSessionSafeState(
     string? ErrorCode,
     bool Retryable,
     CashierShiftSnapshot? ActiveShift,
-    CashCustodySessionSnapshot? ActiveCashCustodySession)
+    CashCustodySessionSnapshot? ActiveCashCustodySession,
+    CashCustodySummarySnapshot? ActiveCashCustodySummary = null,
+    CashCustodySummarySnapshot? LatestClosedCashCustody = null,
+    IReadOnlyList<CashCustodySummarySnapshot>? ClosedCashCustodyHistory = null)
 {
     public static HumanSessionSafeState Unauthenticated(bool deviceTrusted, string message) =>
         new("UNAUTHENTICATED", false, deviceTrusted, false, false, false, null, null, null, null, null, false, false, null, null,

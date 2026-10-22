@@ -1,6 +1,21 @@
 import type { CashCustodySessionSnapshot, CashierShiftSnapshot } from "./localJournalBridge";
 import type { AptConfig } from "./config";
 
+export type CashCustodySubmissionSummary = {
+  physicalCashReceiptCount: number;
+  confirmedSubmissionCount: number;
+  pendingSubmissionCount: number;
+  conflictingSubmissionCount: number;
+  rejectedSubmissionCount: number;
+  unresolvedSubmissionCount: number;
+  pendingFiscalIssuanceCount: number;
+};
+
+export type CashCustodySummary = {
+  session: CashCustodySessionSnapshot;
+  submissions: CashCustodySubmissionSummary;
+};
+
 export type HumanSessionState = {
   authenticationState: "LOADING" | "UNAUTHENTICATED" | "AUTHENTICATED" | "LOCKED" | "UNAVAILABLE" | string;
   authenticated: boolean;
@@ -23,6 +38,9 @@ export type HumanSessionState = {
   retryable: boolean;
   activeShift: CashierShiftSnapshot | null;
   activeCashCustodySession: CashCustodySessionSnapshot | null;
+  activeCashCustodySummary?: CashCustodySummary | null;
+  latestClosedCashCustody?: CashCustodySummary | null;
+  closedCashCustodyHistory?: CashCustodySummary[] | null;
 };
 
 export type HumanSessionBridgeResult =
@@ -124,13 +142,49 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
           openedAt: now.toISOString(),
           status: "Open",
         },
+        activeCashCustodySummary: {
+          session: {
+            id: "00000000-0000-4000-8000-000000000008",
+            cashierId: state.userReference ?? "cashier-development-fixture",
+            authenticatedCashierSessionReference: "development-fixture-session",
+            cashierShiftId: shift.id,
+            terminalId: config.terminalId,
+            siteId: config.siteId,
+            siteGroupId: config.siteGroupId,
+            posServerId: config.posServerId,
+            openingCashAmount,
+            openedAt: now.toISOString(),
+            status: "Open",
+          },
+          submissions: emptySubmissionSummary(),
+        },
       };
       return success("humanSession.openOrResumeCustody", id);
     },
-    closeOwnCustody: async (id) => {
+    closeOwnCustody: async (id, closingCashAmount) => {
+      const active = state.activeCashCustodySession;
+      const summary = state.activeCashCustodySummary;
+      const expectedCash = (active?.openingCashAmount ?? 0);
+      const closed: CashCustodySummary | null = active ? {
+        session: {
+          ...active,
+          status: "Closed",
+          expectedClosingCashAmount: expectedCash,
+          closingCashAmount,
+          varianceAmount: closingCashAmount - expectedCash,
+          closedAt: new Date().toISOString(),
+          unresolvedSubmissionCountAtClose: summary?.submissions.unresolvedSubmissionCount ?? 0,
+        },
+        submissions: summary?.submissions ?? emptySubmissionSummary(),
+      } : null;
       state = {
         ...state,
         activeCashCustodySession: null,
+        activeCashCustodySummary: null,
+        latestClosedCashCustody: closed,
+        closedCashCustodyHistory: closed
+          ? [closed, ...(state.closedCashCustodyHistory ?? []).filter((item) => item.session.id !== closed.session.id)]
+          : state.closedCashCustodyHistory,
         cashOperationsAuthorized: false,
         safeMessage: "Cash custody closed. Closing cash and variance evidence were recorded.",
       };
@@ -146,6 +200,18 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       return success("humanSession.closeOwnShift", id);
     },
     authorizeCash: async (id) => success("humanSession.authorizeCash", id),
+  };
+}
+
+function emptySubmissionSummary(): CashCustodySubmissionSummary {
+  return {
+    physicalCashReceiptCount: 0,
+    confirmedSubmissionCount: 0,
+    pendingSubmissionCount: 0,
+    conflictingSubmissionCount: 0,
+    rejectedSubmissionCount: 0,
+    unresolvedSubmissionCount: 0,
+    pendingFiscalIssuanceCount: 0,
   };
 }
 

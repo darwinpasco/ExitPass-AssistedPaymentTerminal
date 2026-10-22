@@ -1501,6 +1501,80 @@ dl {
   gap: 4px;
 }
 
+.cash-custody-open {
+  display: grid;
+  gap: 10px;
+}
+
+.cash-custody-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.cash-custody-summary div {
+  min-width: 0;
+}
+
+.cash-custody-summary dt {
+  color: #53616f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cash-custody-summary dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.custody-close-result,
+.custody-history {
+  grid-column: 1 / -1;
+  border-top: 1px solid #d5dde3;
+  padding-top: 10px;
+}
+
+.custody-history-table-wrap {
+  overflow-x: auto;
+}
+
+.custody-history table {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.custody-history th,
+.custody-history td {
+  border-bottom: 1px solid #d5dde3;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.custody-history th {
+  color: #53616f;
+  font-size: 11px;
+}
+
+.custody-history tr.selected {
+  background: #edf6fb;
+}
+
+.history-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #075f78;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .end-shift {
   grid-column: 1 / -1;
   border-top: 1px solid #d7e0e5;
@@ -1539,5 +1613,9 @@ dl {
   .cashier-closing-grid {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .cash-custody-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

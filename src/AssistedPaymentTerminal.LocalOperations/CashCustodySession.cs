@@ -28,6 +28,8 @@ public sealed class CashCustodySession
 
     public decimal? VarianceAmount { get; set; }
 
+    public int? UnresolvedSubmissionCountAtClose { get; set; }
+
     public DateTimeOffset? ClosedAt { get; set; }
 
     public string? ClosedByAuthenticatedCashierSessionReference { get; set; }

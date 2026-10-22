@@ -38,6 +38,7 @@ import {
   type HumanSessionBridge,
   type HumanSessionBridgeResult,
   type HumanSessionState,
+  type CashCustodySummary,
 } from "./humanSessionBridge";
 
 type LookupState =
@@ -939,6 +940,7 @@ export function HumanSessionPanel({
   const [openingCashAmount, setOpeningCashAmount] = useState("0.00");
   const [closingCashAmount, setClosingCashAmount] = useState("0.00");
   const [busy, setBusy] = useState<string | null>(null);
+  const [selectedClosedCustodyId, setSelectedClosedCustodyId] = useState<string | null>(null);
   const shiftOpen = state.activeShift?.status === "Open";
   const custodyOpen = state.activeCashCustodySession?.status === "Open";
   const [expanded, setExpanded] = useState(!shiftOpen || !custodyOpen);
@@ -970,9 +972,13 @@ export function HumanSessionPanel({
     }
   }
 
-  const expectedCash = state.activeCashCustodySession?.expectedClosingCashAmount;
   const closingAmount = Number(closingCashAmount);
-  const variance = expectedCash != null && Number.isFinite(closingAmount) ? closingAmount - expectedCash : null;
+  const activeSummary = state.activeCashCustodySummary?.submissions;
+  const closedHistory = state.closedCashCustodyHistory ?? [];
+  const selectedClosedCustody = closedHistory.find((item) => item.session.id === selectedClosedCustodyId)
+    ?? state.latestClosedCashCustody
+    ?? closedHistory[0]
+    ?? null;
 
   return (
     <section className="human-session-panel" aria-labelledby="human-session-heading">
@@ -1028,22 +1034,61 @@ export function HumanSessionPanel({
                 </button>
               </div>
             ) : (
-              <div className="cashier-closing-grid">
-                <div><span>Opening Cash</span><strong>{formatCurrencyFromMajor(state.activeCashCustodySession?.openingCashAmount ?? 0)}</strong></div>
-                <div><span>Expected Cash</span><strong>{expectedCash == null ? "Calculated on close" : formatCurrencyFromMajor(expectedCash)}</strong></div>
-                <label htmlFor="closingCashAmount">Actual Closing Cash</label>
-                <input id="closingCashAmount" inputMode="decimal" value={closingCashAmount} onChange={(event) => setClosingCashAmount(event.target.value)} disabled={busy !== null} />
-                <div><span>Variance</span><strong>{variance == null ? "Calculated on close" : formatCurrencyFromMajor(variance)}</strong></div>
-                <button
-                  type="button"
-                  disabled={busy !== null || !state.custodyOperationsAuthorized || !Number.isFinite(closingAmount) || closingAmount < 0}
-                  onClick={() => void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), closingAmount))}
-                >
-                  Close Cash Custody
-                </button>
+              <div className="cash-custody-open">
+                <dl className="cash-custody-summary" aria-label="Open cash custody summary">
+                  <div><dt>Status</dt><dd>OPEN</dd></div>
+                  <div><dt>Opening Cash</dt><dd>{formatCurrencyFromMajor(state.activeCashCustodySession?.openingCashAmount ?? 0)}</dd></div>
+                  <div><dt>Physical cash receipts</dt><dd>{activeSummary?.physicalCashReceiptCount ?? 0}</dd></div>
+                  <div><dt>Confirmed submissions</dt><dd>{activeSummary?.confirmedSubmissionCount ?? 0}</dd></div>
+                  <div><dt>Pending submissions</dt><dd>{activeSummary?.pendingSubmissionCount ?? 0}</dd></div>
+                  <div><dt>Conflicting submissions</dt><dd>{activeSummary?.conflictingSubmissionCount ?? 0}</dd></div>
+                  <div><dt>Rejected submissions</dt><dd>{activeSummary?.rejectedSubmissionCount ?? 0}</dd></div>
+                  <div><dt>Unresolved submissions</dt><dd>{activeSummary?.unresolvedSubmissionCount ?? 0}</dd></div>
+                  <div><dt>Expected Cash</dt><dd>Calculated on close</dd></div>
+                  <div><dt>Variance</dt><dd>Calculated on close</dd></div>
+                </dl>
+                {(activeSummary?.unresolvedSubmissionCount ?? 0) > 0 && (
+                  <div className="status-notice danger" role="alert" data-testid="cash-custody-unresolved-warning">
+                    <strong>{receiptCountMessage(activeSummary?.unresolvedSubmissionCount ?? 0)}</strong>
+                    <p>{activeSummary?.pendingSubmissionCount ?? 0} pending, {activeSummary?.conflictingSubmissionCount ?? 0} conflicting, and {activeSummary?.rejectedSubmissionCount ?? 0} rejected Central PMS submissions.</p>
+                  </div>
+                )}
+                {(activeSummary?.pendingFiscalIssuanceCount ?? 0) > 0 && (
+                  <div className="status-notice info" role="status" data-testid="cash-custody-fiscal-warning">
+                    <strong>{activeSummary?.pendingFiscalIssuanceCount} confirmed payment{activeSummary?.pendingFiscalIssuanceCount === 1 ? "" : "s"} awaiting fiscal issuance</strong>
+                    <p>Cash is already recorded in physical custody. Fiscal recovery does not add another cash receipt.</p>
+                  </div>
+                )}
+                <div className="cashier-closing-grid">
+                  <label htmlFor="closingCashAmount">Actual Closing Cash</label>
+                  <input id="closingCashAmount" inputMode="decimal" value={closingCashAmount} onChange={(event) => setClosingCashAmount(event.target.value)} disabled={busy !== null} />
+                  <button
+                    type="button"
+                    disabled={busy !== null || !state.custodyOperationsAuthorized || !Number.isFinite(closingAmount) || closingAmount < 0}
+                    onClick={() => void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), closingAmount))}
+                  >
+                    Close Cash Custody
+                  </button>
+                </div>
               </div>
             )}
           </section>
+
+          {selectedClosedCustody && (
+            <CashCustodyCloseResult
+              summary={selectedClosedCustody}
+              cashier={state.displayName || state.username || "Cashier"}
+              terminalSerialNumber={context?.terminalSerialNumber ?? "Unavailable"}
+            />
+          )}
+
+          {closedHistory.length > 0 && (
+            <CashCustodyHistory
+              sessions={closedHistory}
+              selectedId={selectedClosedCustody?.session.id ?? null}
+              onSelect={setSelectedClosedCustodyId}
+            />
+          )}
 
           {shiftOpen && (
             <section className="cashier-session-group end-shift">
@@ -1057,6 +1102,84 @@ export function HumanSessionPanel({
       )}
     </section>
   );
+}
+
+function CashCustodyCloseResult({
+  summary,
+  cashier,
+  terminalSerialNumber,
+}: {
+  summary: CashCustodySummary;
+  cashier: string;
+  terminalSerialNumber: string;
+}) {
+  const session = summary.session;
+  return (
+    <section className="cashier-session-group custody-close-result" aria-label="Committed cash custody close result">
+      <h3>Closing Result</h3>
+      <dl className="cash-custody-summary">
+        <div><dt>Cashier</dt><dd>{cashier}</dd></div>
+        <div><dt>Terminal ID</dt><dd>{session.terminalId}</dd></div>
+        <div><dt>Terminal S/N</dt><dd>{terminalSerialNumber}</dd></div>
+        <div><dt>Custody reference</dt><dd>{cashCustodyReference(session.id)}</dd></div>
+        <div><dt>Opening Cash</dt><dd>{formatCurrencyFromMajor(session.openingCashAmount)}</dd></div>
+        <div><dt>Physical receipt count</dt><dd>{summary.submissions.physicalCashReceiptCount}</dd></div>
+        <div><dt>Expected Cash</dt><dd>{formatCommittedCurrency(session.expectedClosingCashAmount)}</dd></div>
+        <div><dt>Actual Cash</dt><dd>{formatCommittedCurrency(session.closingCashAmount)}</dd></div>
+        <div><dt>Cash Variance</dt><dd>{formatCommittedCurrency(session.varianceAmount)}</dd></div>
+        <div><dt>Closed At</dt><dd>{formatDate(session.closedAt)}</dd></div>
+        <div><dt>Status</dt><dd>{session.status.toUpperCase()}</dd></div>
+        <div><dt>Unresolved at close</dt><dd>{session.unresolvedSubmissionCountAtClose ?? summary.submissions.unresolvedSubmissionCount}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function CashCustodyHistory({
+  sessions,
+  selectedId,
+  onSelect,
+}: {
+  sessions: CashCustodySummary[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <section className="cashier-session-group custody-history" aria-label="Closed cash custody history">
+      <h3>Closed Custody History</h3>
+      <div className="custody-history-table-wrap">
+        <table>
+          <thead><tr><th>Custody reference</th><th>Opened At</th><th>Closed At</th><th>Status</th><th>Receipts</th><th>Expected</th><th>Actual</th><th>Variance</th></tr></thead>
+          <tbody>
+            {sessions.map((summary) => (
+              <tr key={summary.session.id} className={summary.session.id === selectedId ? "selected" : undefined}>
+                <td><button type="button" className="history-link" onClick={() => onSelect(summary.session.id)}>{cashCustodyReference(summary.session.id)}</button></td>
+                <td>{formatDate(summary.session.openedAt)}</td>
+                <td>{formatDate(summary.session.closedAt)}</td>
+                <td>{summary.session.status.toUpperCase()}</td>
+                <td>{summary.submissions.physicalCashReceiptCount}</td>
+                <td>{formatCommittedCurrency(summary.session.expectedClosingCashAmount)}</td>
+                <td>{formatCommittedCurrency(summary.session.closingCashAmount)}</td>
+                <td>{formatCommittedCurrency(summary.session.varianceAmount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function receiptCountMessage(count: number): string {
+  return `${count} cash receipt${count === 1 ? "" : "s"} require${count === 1 ? "s" : ""} reconciliation before custody close.`;
+}
+
+function cashCustodyReference(id: string): string {
+  return `CUST-${id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+}
+
+function formatCommittedCurrency(amount: number | null | undefined): string {
+  return amount == null ? "Unavailable" : formatCurrencyFromMajor(amount);
 }
 
 function OperationalContextPanel({ context, health }: { context: TerminalContext; health: LocalJournalHealth | null }) {

@@ -9,6 +9,7 @@ import {
   type HumanSessionBridge,
   type HumanSessionBridgeResult,
   type HumanSessionState,
+  type CashCustodySummary,
 } from "./humanSessionBridge";
 import { mode1Config } from "./test/testConfig";
 
@@ -351,6 +352,68 @@ describe("APT human-session presentation boundary", () => {
     expect(onStateChange).toHaveBeenCalledWith(shiftClosed);
   });
 
+  it("shows operational custody counts while preserving blind cash counting", async () => {
+    const state = {
+      ...authenticatedState(),
+      activeCashCustodySession: {
+        ...authenticatedState().activeCashCustodySession!,
+        expectedClosingCashAmount: 987_654,
+        varianceAmount: 123_456,
+      },
+      activeCashCustodySummary: {
+        session: authenticatedState().activeCashCustodySession!,
+        submissions: {
+          physicalCashReceiptCount: 36,
+          confirmedSubmissionCount: 34,
+          pendingSubmissionCount: 1,
+          conflictingSubmissionCount: 1,
+          rejectedSubmissionCount: 0,
+          unresolvedSubmissionCount: 2,
+          pendingFiscalIssuanceCount: 1,
+        },
+      },
+    };
+
+    render(<HumanSessionPanel state={state} bridge={bridgeStub()} onStateChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+
+    expect(screen.getByLabelText("Open cash custody summary")).toHaveTextContent("Physical cash receipts36");
+    expect(screen.getByLabelText("Open cash custody summary")).toHaveTextContent("Confirmed submissions34");
+    expect(screen.getByLabelText("Open cash custody summary")).toHaveTextContent("Pending submissions1");
+    expect(screen.getByLabelText("Open cash custody summary")).toHaveTextContent("Conflicting submissions1");
+    expect(screen.getAllByText("Calculated on close")).toHaveLength(2);
+    expect(document.body).not.toHaveTextContent("987,654");
+    expect(document.body).not.toHaveTextContent("123,456");
+    expect(screen.getByTestId("cash-custody-unresolved-warning")).toHaveTextContent("2 cash receipts require reconciliation before custody close.");
+    expect(screen.getByTestId("cash-custody-fiscal-warning")).toHaveTextContent("1 confirmed payment awaiting fiscal issuance");
+  });
+
+  it("renders committed close evidence and lets the cashier inspect immutable history", async () => {
+    const latest = closedCustodySummary("77777777-7777-4777-8777-777777777777", 1_100, 1_090, -10, 3, 1);
+    const prior = closedCustodySummary("88888888-8888-4888-8888-888888888888", 500, 505, 5, 2, 0);
+    const state = {
+      ...authenticatedState(),
+      activeCashCustodySession: null,
+      activeCashCustodySummary: null,
+      latestClosedCashCustody: latest,
+      closedCashCustodyHistory: [latest, prior],
+    };
+
+    render(<HumanSessionPanel state={state} bridge={bridgeStub()} onStateChange={vi.fn()} />);
+
+    const result = screen.getByLabelText("Committed cash custody close result");
+    expect(result).toHaveTextContent("CUST-77777777");
+    expect(result).toHaveTextContent("1,100.00");
+    expect(result).toHaveTextContent("1,090.00");
+    expect(result).toHaveTextContent("-₱10.00");
+    expect(result).toHaveTextContent("Unresolved at close1");
+    expect(screen.getByLabelText("Closed cash custody history")).toHaveTextContent("CUST-88888888");
+
+    await userEvent.click(screen.getByRole("button", { name: "CUST-88888888" }));
+    expect(screen.getByLabelText("Committed cash custody close result")).toHaveTextContent("CUST-88888888");
+    expect(screen.getByLabelText("Committed cash custody close result")).toHaveTextContent("505.00");
+  });
+
   it("recognizes an authenticated owned open shift and enables custody without a manual refresh", () => {
     const state = {
       ...authenticatedState(),
@@ -448,6 +511,37 @@ function authenticatedState(): HumanSessionState {
       openingCashAmount: 100,
       openedAt: now,
       status: "Open",
+    },
+  };
+}
+
+function closedCustodySummary(
+  id: string,
+  expected: number,
+  actual: number,
+  variance: number,
+  receipts: number,
+  unresolvedAtClose: number,
+): CashCustodySummary {
+  return {
+    session: {
+      ...authenticatedState().activeCashCustodySession!,
+      id,
+      status: "Closed",
+      expectedClosingCashAmount: expected,
+      closingCashAmount: actual,
+      varianceAmount: variance,
+      closedAt: "2026-10-21T08:00:00+08:00",
+      unresolvedSubmissionCountAtClose: unresolvedAtClose,
+    },
+    submissions: {
+      physicalCashReceiptCount: receipts,
+      confirmedSubmissionCount: receipts - unresolvedAtClose,
+      pendingSubmissionCount: unresolvedAtClose,
+      conflictingSubmissionCount: 0,
+      rejectedSubmissionCount: 0,
+      unresolvedSubmissionCount: unresolvedAtClose,
+      pendingFiscalIssuanceCount: 0,
     },
   };
 }

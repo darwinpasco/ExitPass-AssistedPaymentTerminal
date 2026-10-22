@@ -226,6 +226,35 @@ public sealed class CashJournalService
             activeSession is null ? null : CashCustodySessionSnapshot.FromEntity(activeSession));
     }
 
+    public async Task<CashCustodyOverviewSnapshot> GetCashCustodyOverviewAsync(
+        CashCustodyOverviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = CreateDbContext();
+        var sessions = await dbContext.CashCustodySessions
+            .AsNoTracking()
+            .Where(session => session.CashierId == request.CashierId)
+            .Where(session => session.TerminalId == request.TerminalId)
+            .Where(session => session.SiteId == request.SiteId)
+            .Where(session => session.SiteGroupId == request.SiteGroupId)
+            .Where(session => session.PosServerId == request.PosServerId)
+            .OrderByDescending(session => session.ClosedAt ?? session.OpenedAt)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var summaries = new List<CashCustodySummarySnapshot>(sessions.Count);
+        foreach (var session in sessions)
+        {
+            summaries.Add(await BuildCashCustodySummaryAsync(dbContext, session, cancellationToken).ConfigureAwait(false));
+        }
+
+        return new CashCustodyOverviewSnapshot(
+            summaries.FirstOrDefault(summary => summary.Session.Status == CashCustodySessionStatus.Open),
+            summaries.Where(summary => summary.Session.Status == CashCustodySessionStatus.Closed).ToArray());
+    }
+
     public async Task<CashJournalResult<CashCustodySessionSnapshot>> CreateCashCustodySessionAsync(
         CreateCashCustodySessionRequest request,
         CancellationToken cancellationToken = default)
@@ -370,10 +399,13 @@ public sealed class CashJournalService
             .ConfigureAwait(false);
         var receivedCash = receivedCashAmounts.Sum();
         var expectedClosingCash = session.OpeningCashAmount + receivedCash;
+        var submissionSummary = await BuildCashCustodySubmissionSummaryAsync(dbContext, session, cancellationToken)
+            .ConfigureAwait(false);
 
         session.ExpectedClosingCashAmount = expectedClosingCash;
         session.ClosingCashAmount = request.ClosingCashAmount;
         session.VarianceAmount = request.ClosingCashAmount - expectedClosingCash;
+        session.UnresolvedSubmissionCountAtClose = submissionSummary.UnresolvedSubmissionCount;
         session.ClosedAt = request.ClosedAt ?? DateTimeOffset.UtcNow;
         session.ClosedByAuthenticatedCashierSessionReference = request.AuthenticatedCashierSessionReference;
         session.Status = CashCustodySessionStatus.Closed;
@@ -934,6 +966,7 @@ public sealed class CashJournalService
         await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ExpectedClosingCashAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ClosingCashAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "VarianceAmount", "TEXT NULL", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "UnresolvedSubmissionCountAtClose", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(dbContext, "cash_custody_sessions", "ClosedAt", "INTEGER NULL", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(
             dbContext,
@@ -941,6 +974,78 @@ public sealed class CashJournalService
             "ClosedByAuthenticatedCashierSessionReference",
             "TEXT NULL",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<CashCustodySummarySnapshot> BuildCashCustodySummaryAsync(
+        CashJournalDbContext dbContext,
+        CashCustodySession session,
+        CancellationToken cancellationToken)
+    {
+        var submissions = await BuildCashCustodySubmissionSummaryAsync(dbContext, session, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (session.Status == CashCustodySessionStatus.Closed
+            && session.UnresolvedSubmissionCountAtClose is int unresolvedAtClose)
+        {
+            submissions = submissions with { UnresolvedSubmissionCount = unresolvedAtClose };
+        }
+
+        return new CashCustodySummarySnapshot(CashCustodySessionSnapshot.FromEntity(session), submissions);
+    }
+
+    private static async Task<CashCustodySubmissionSummarySnapshot> BuildCashCustodySubmissionSummaryAsync(
+        CashJournalDbContext dbContext,
+        CashCustodySession session,
+        CancellationToken cancellationToken)
+    {
+        var cashReceivedTenderIds = await dbContext.CashTenders
+            .AsNoTracking()
+            .Where(tender => tender.CashCustodySessionId == session.Id)
+            .Where(tender => tender.CurrentLocalState == CashTenderState.CashReceived)
+            .Select(tender => tender.Id)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (cashReceivedTenderIds.Length == 0)
+        {
+            return new CashCustodySubmissionSummarySnapshot(0, 0, 0, 0, 0, 0, 0);
+        }
+
+        var paymentCommands = await dbContext.TerminalCashPaymentOutboxCommands
+            .AsNoTracking()
+            .Where(command => cashReceivedTenderIds.Contains(command.TerminalCashTenderId))
+            .Select(command => new { command.TerminalCashTenderId, command.Status })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var paymentStatusByTender = paymentCommands.ToDictionary(command => command.TerminalCashTenderId, command => command.Status);
+
+        var confirmedTenderIds = cashReceivedTenderIds
+            .Where(tenderId => paymentStatusByTender.GetValueOrDefault(tenderId) == TerminalCashPaymentCommandStatus.Confirmed)
+            .ToArray();
+        var conflictingCount = cashReceivedTenderIds.Count(tenderId =>
+            paymentStatusByTender.GetValueOrDefault(tenderId) == TerminalCashPaymentCommandStatus.Conflict);
+        var rejectedCount = cashReceivedTenderIds.Count(tenderId =>
+            paymentStatusByTender.GetValueOrDefault(tenderId) == TerminalCashPaymentCommandStatus.Rejected);
+        var pendingCount = cashReceivedTenderIds.Length - confirmedTenderIds.Length - conflictingCount - rejectedCount;
+
+        var fiscalCommands = await dbContext.TerminalCashFiscalOutboxCommands
+            .AsNoTracking()
+            .Where(command => confirmedTenderIds.Contains(command.TerminalCashTenderId))
+            .Select(command => new { command.TerminalCashTenderId, command.Status })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var fiscalStatusByTender = fiscalCommands.ToDictionary(command => command.TerminalCashTenderId, command => command.Status);
+        var pendingFiscalCount = confirmedTenderIds.Count(tenderId =>
+            fiscalStatusByTender.GetValueOrDefault(tenderId) != TerminalCashFiscalCommandStatus.Recorded);
+
+        return new CashCustodySubmissionSummarySnapshot(
+            cashReceivedTenderIds.Length,
+            confirmedTenderIds.Length,
+            pendingCount,
+            conflictingCount,
+            rejectedCount,
+            pendingCount + conflictingCount + rejectedCount,
+            pendingFiscalCount);
     }
 
     private static Task EnsureTerminalCashFiscalSchemaAsync(

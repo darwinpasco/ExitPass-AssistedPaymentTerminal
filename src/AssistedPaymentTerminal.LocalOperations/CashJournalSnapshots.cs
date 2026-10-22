@@ -50,7 +50,8 @@ public sealed record CashCustodySessionSnapshot(
     decimal? ClosingCashAmount = null,
     decimal? VarianceAmount = null,
     DateTimeOffset? ClosedAt = null,
-    string? ClosedByAuthenticatedCashierSessionReference = null)
+    string? ClosedByAuthenticatedCashierSessionReference = null,
+    int? UnresolvedSubmissionCountAtClose = null)
 {
     public static CashCustodySessionSnapshot FromEntity(CashCustodySession session) =>
         new(
@@ -69,8 +70,26 @@ public sealed record CashCustodySessionSnapshot(
             session.ClosingCashAmount,
             session.VarianceAmount,
             session.ClosedAt,
-            session.ClosedByAuthenticatedCashierSessionReference);
+            session.ClosedByAuthenticatedCashierSessionReference,
+            session.UnresolvedSubmissionCountAtClose);
 }
+
+public sealed record CashCustodySubmissionSummarySnapshot(
+    int PhysicalCashReceiptCount,
+    int ConfirmedSubmissionCount,
+    int PendingSubmissionCount,
+    int ConflictingSubmissionCount,
+    int RejectedSubmissionCount,
+    int UnresolvedSubmissionCount,
+    int PendingFiscalIssuanceCount);
+
+public sealed record CashCustodySummarySnapshot(
+    CashCustodySessionSnapshot Session,
+    CashCustodySubmissionSummarySnapshot Submissions);
+
+public sealed record CashCustodyOverviewSnapshot(
+    CashCustodySummarySnapshot? ActiveSession,
+    IReadOnlyList<CashCustodySummarySnapshot> ClosedSessions);
 
 public sealed record CashTenderSnapshot(
     Guid Id,

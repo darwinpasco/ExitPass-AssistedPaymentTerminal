@@ -1,4 +1,5 @@
 ﻿using AssistedPaymentTerminal.LocalOperations;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace AssistedPaymentTerminal.LocalOperations.Tests;
@@ -63,6 +64,105 @@ public sealed class CashJournalServiceTests
         Assert.False(conflict.IsSuccess);
         Assert.Equal(CashJournalErrorCode.InvalidStateTransition, conflict.Error!.Code);
         Assert.Equal(1_000m, replay.Value!.ClosingCashAmount);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task OpenCustodyOverviewCountsPhysicalReceiptsAndSubmissionExceptionsWithoutCloseAmounts()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var confirmed = await StartAndCommitUniqueTenderAsync(service, session.Id, 1, 210m);
+        var pending = await StartAndCommitUniqueTenderAsync(service, session.Id, 2, 50m);
+        var conflicting = await StartAndCommitUniqueTenderAsync(service, session.Id, 3, 80m);
+        var rejected = await StartAndCommitUniqueTenderAsync(service, session.Id, 4, 90m);
+
+        await SetPaymentStatusAsync(database, confirmed.Id, TerminalCashPaymentCommandStatus.Confirmed);
+        await SetPaymentStatusAsync(database, pending.Id, TerminalCashPaymentCommandStatus.RetryPending);
+        await SetPaymentStatusAsync(database, conflicting.Id, TerminalCashPaymentCommandStatus.Conflict);
+        await SetPaymentStatusAsync(database, rejected.Id, TerminalCashPaymentCommandStatus.Rejected);
+
+        var overview = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+
+        Assert.NotNull(overview.ActiveSession);
+        Assert.Empty(overview.ClosedSessions);
+        Assert.Null(overview.ActiveSession!.Session.ExpectedClosingCashAmount);
+        Assert.Null(overview.ActiveSession.Session.VarianceAmount);
+        Assert.Equal(4, overview.ActiveSession.Submissions.PhysicalCashReceiptCount);
+        Assert.Equal(1, overview.ActiveSession.Submissions.ConfirmedSubmissionCount);
+        Assert.Equal(1, overview.ActiveSession.Submissions.PendingSubmissionCount);
+        Assert.Equal(1, overview.ActiveSession.Submissions.ConflictingSubmissionCount);
+        Assert.Equal(1, overview.ActiveSession.Submissions.RejectedSubmissionCount);
+        Assert.Equal(3, overview.ActiveSession.Submissions.UnresolvedSubmissionCount);
+        Assert.Equal(1, overview.ActiveSession.Submissions.PendingFiscalIssuanceCount);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task ZeroReceiptCustodyOverviewContainsNoSubmissionExceptions()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        await CreateSessionAsync(service);
+
+        var overview = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+
+        Assert.NotNull(overview.ActiveSession);
+        Assert.Equal(new CashCustodySubmissionSummarySnapshot(0, 0, 0, 0, 0, 0, 0), overview.ActiveSession!.Submissions);
+    }
+
+    [Theory]
+    [InlineData(1_110, 10)]
+    [InlineData(1_100, 0)]
+    [InlineData(1_090, -10)]
+    [Trait("Category", "LocalOperations")]
+    public async Task ClosePersistsCommittedVarianceAndUnresolvedCount(decimal actualCash, decimal expectedVariance)
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        var tender = await StartAndCommitUniqueTenderAsync(service, session.Id, 1, 100m);
+
+        var closed = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id, actualCash));
+        var replay = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id, actualCash));
+
+        Assert.True(closed.IsSuccess);
+        Assert.True(replay.IsSuccess);
+        Assert.Equal(1_100m, closed.Value!.ExpectedClosingCashAmount);
+        Assert.Equal(actualCash, closed.Value.ClosingCashAmount);
+        Assert.Equal(expectedVariance, closed.Value.VarianceAmount);
+        Assert.Equal(1, closed.Value.UnresolvedSubmissionCountAtClose);
+        Assert.Equal(closed.Value, replay.Value);
+
+        await SetPaymentStatusAsync(database, tender.Id, TerminalCashPaymentCommandStatus.Confirmed);
+        await AddRecordedFiscalCommandAsync(database, tender.Id);
+        var history = await database.CreateService().GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+
+        Assert.Null(history.ActiveSession);
+        var historical = Assert.Single(history.ClosedSessions);
+        Assert.Equal(1, historical.Session.UnresolvedSubmissionCountAtClose);
+        Assert.Equal(1, historical.Submissions.UnresolvedSubmissionCount);
+        Assert.Equal(1, historical.Submissions.ConfirmedSubmissionCount);
+        Assert.Equal(0, historical.Submissions.PendingFiscalIssuanceCount);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task ClosedCustodyHistoryIsLimitedToAuthenticatedCashierAndTerminalScope()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await CreateSessionAsync(service);
+        Assert.True((await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id))).IsSuccess);
+
+        var own = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        var otherCashier = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview() with { CashierId = "cashier-002" });
+        var otherTerminal = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview() with { TerminalId = "terminal-002" });
+
+        Assert.Single(own.ClosedSessions);
+        Assert.Empty(otherCashier.ClosedSessions);
+        Assert.Empty(otherTerminal.ClosedSessions);
     }
 
     [Fact]
@@ -529,5 +629,65 @@ public sealed class CashJournalServiceTests
 
         Assert.True(result.IsSuccess);
         return result.Value!;
+    }
+
+    private static async Task<CashTenderSnapshot> StartAndCommitUniqueTenderAsync(
+        CashJournalService service,
+        Guid cashCustodySessionId,
+        int sequence,
+        decimal amountDue)
+    {
+        var started = await service.StartCashTenderAsync(TestRequests.StartTender(
+            cashCustodySessionId,
+            parkingSessionId: $"33333333-3333-4333-8333-{sequence:D12}",
+            tariffSnapshotId: $"44444444-4444-4444-8444-{sequence:D12}",
+            localIdempotencyIdentity: $"idem-{sequence:D4}",
+            amountDue: amountDue,
+            amountTendered: amountDue));
+        Assert.True(started.IsSuccess);
+        var committed = await service.CommitCashReceivedAsync(TestRequests.CommitCashReceived(started.Value!.Id));
+        Assert.True(committed.IsSuccess);
+        return committed.Value!;
+    }
+
+    private static async Task SetPaymentStatusAsync(
+        TestDatabase database,
+        Guid tenderId,
+        TerminalCashPaymentCommandStatus status)
+    {
+        await using var dbContext = database.CreateService().CreateDbContext();
+        var command = await dbContext.TerminalCashPaymentOutboxCommands.SingleAsync(value => value.TerminalCashTenderId == tenderId);
+        command.Status = status;
+        if (status == TerminalCashPaymentCommandStatus.Confirmed)
+        {
+            command.CanonicalPaymentAttemptId = Guid.NewGuid();
+            command.CanonicalPaymentConfirmationId = Guid.NewGuid();
+            command.ConfirmedAt = DateTimeOffset.Parse("2026-07-15T00:03:00Z");
+        }
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddRecordedFiscalCommandAsync(TestDatabase database, Guid tenderId)
+    {
+        await using var dbContext = database.CreateService().CreateDbContext();
+        var payment = await dbContext.TerminalCashPaymentOutboxCommands.SingleAsync(value => value.TerminalCashTenderId == tenderId);
+        dbContext.TerminalCashFiscalOutboxCommands.Add(new TerminalCashFiscalOutboxCommand
+        {
+            Id = Guid.NewGuid(),
+            TerminalCashTenderId = tenderId,
+            RelatedCashPaymentOutboxCommandId = payment.Id,
+            CanonicalPaymentAttemptId = payment.CanonicalPaymentAttemptId!.Value,
+            CanonicalPaymentConfirmationId = payment.CanonicalPaymentConfirmationId!.Value,
+            RequestRepresentationJson = "{}",
+            RequestHash = $"hash-{tenderId:N}",
+            FiscalIdempotencyKey = $"fiscal-{tenderId:N}",
+            FiscalCorrelationId = Guid.NewGuid().ToString("D"),
+            CentralPmsTarget = "https://central-pms.example.invalid",
+            Status = TerminalCashFiscalCommandStatus.Recorded,
+            RecordedAt = DateTimeOffset.Parse("2026-07-15T00:04:00Z"),
+            CreatedAt = DateTimeOffset.Parse("2026-07-15T00:03:30Z"),
+            UpdatedAt = DateTimeOffset.Parse("2026-07-15T00:04:00Z")
+        });
+        await dbContext.SaveChangesAsync();
     }
 }

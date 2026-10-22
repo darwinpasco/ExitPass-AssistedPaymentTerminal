@@ -747,6 +747,7 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
             ALTER TABLE cash_custody_sessions DROP COLUMN VarianceAmount;
             ALTER TABLE cash_custody_sessions DROP COLUMN ClosedAt;
             ALTER TABLE cash_custody_sessions DROP COLUMN ClosedByAuthenticatedCashierSessionReference;
+            ALTER TABLE cash_custody_sessions DROP COLUMN UnresolvedSubmissionCountAtClose;
 
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountDecisionCommandId;
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountPayableBasisApplicationCommandId;
