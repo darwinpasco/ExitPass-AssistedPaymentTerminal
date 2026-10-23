@@ -63,6 +63,55 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task ExplicitMigrationPreservesCustodyDenominationEvidenceWhenPresent()
+    {
+        var databasePath = DatabasePath();
+        await CreatePlaintextSourceAsync(databasePath, includeCustody: true);
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var context = CreatePlaintextDbContext(connection);
+            var custodyId = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001");
+            var now = DateTimeOffset.Parse("2026-07-15T00:00:00Z");
+            foreach (var line in CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int>
+                     {
+                         ["PHP-200"] = 5
+                     }))
+            {
+                context.CashCustodyDenominationEntries.Add(new CashCustodyDenominationEntry
+                {
+                    Id = Guid.NewGuid(),
+                    CashCustodySessionId = custodyId,
+                    CaptureType = CashCustodyDenominationCaptureType.Opening,
+                    DenominationCode = line.DenominationCode,
+                    DenominationValueMinorUnits = line.DenominationValueMinorUnits,
+                    Quantity = line.Quantity,
+                    CalculatedAmountMinorUnits = (long)line.DenominationValueMinorUnits * line.Quantity,
+                    CreatedAt = now
+                });
+            }
+
+            await context.SaveChangesAsync();
+        }
+
+        var result = await CreateService(databasePath, authorized: true).MigrateAsync();
+
+        Assert.True(result.Succeeded, $"{result.Status} {result.Phase} {result.SafeMessage} {result.SafeAction}");
+        Assert.Equal(13, result.SourceRowCounts["cash_custody_denomination_entries"]);
+        Assert.Equal(13, result.TargetRowCounts["cash_custody_denomination_entries"]);
+        await using var encrypted = CreateCashJournalService(databasePath).CreateDbContext();
+        var evidence = await encrypted.CashCustodyDenominationEntries.AsNoTracking().ToArrayAsync();
+        Assert.Equal(13, evidence.Length);
+        Assert.Equal(100_000, evidence.Sum(value => value.CalculatedAmountMinorUnits));
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task HistoricalReceiptRetrievalSchemaClassifiesAsMigrationRequired()
     {
         var databasePath = DatabasePath();

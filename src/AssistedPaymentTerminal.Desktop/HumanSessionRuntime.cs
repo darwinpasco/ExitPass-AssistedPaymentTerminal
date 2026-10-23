@@ -300,7 +300,9 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         }
     }
 
-    public async Task<HumanSessionSafeState> OpenOrResumeCustodyAsync(decimal openingCashAmount, CancellationToken cancellationToken = default)
+    public async Task<HumanSessionSafeState> OpenOrResumeCustodyAsync(
+        IReadOnlyCollection<CashCustodyDenominationLine> denominations,
+        CancellationToken cancellationToken = default)
     {
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -324,11 +326,6 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             {
                 return refreshed;
             }
-            if (openingCashAmount < 0)
-            {
-                return _lastState = refreshed with { ErrorCode = "INVALID_OPENING_CASH_AMOUNT", SafeMessage = "Opening cash amount cannot be negative." };
-            }
-
             var ownState = await LoadOwnOperationalStateAsync(_session.UserReference, cancellationToken).ConfigureAwait(false);
             if (ownState.ActiveShift is null)
             {
@@ -353,7 +350,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
                 SiteId: _options.SiteId.ToString("D"),
                 SiteGroupId: _options.SiteGroupId.ToString("D"),
                 PosServerId: _options.PosServerId,
-                OpeningCashAmount: openingCashAmount), cancellationToken).ConfigureAwait(false);
+                Denominations: denominations), cancellationToken).ConfigureAwait(false);
             if (!opened.IsSuccess)
             {
                 return _lastState = await BuildSafeStateAsync(_session, "Cash custody could not be opened safely.", cancellationToken, "CUSTODY_OPEN_FAILED").ConfigureAwait(false);
@@ -368,7 +365,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
     }
 
     public async Task<HumanSessionSafeState> CloseOwnCustodyAsync(
-        decimal closingCashAmount,
+        IReadOnlyCollection<CashCustodyDenominationLine> denominations,
         CancellationToken cancellationToken = default)
     {
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -390,15 +387,6 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
                     SafeMessage = "This cashier is not currently authorized to close cash custody."
                 };
             }
-            if (closingCashAmount < 0)
-            {
-                return _lastState = refreshed with
-                {
-                    ErrorCode = "INVALID_CLOSING_CASH_AMOUNT",
-                    SafeMessage = "Closing cash amount cannot be negative."
-                };
-            }
-
             var ownState = await LoadOwnOperationalStateAsync(_session.UserReference, cancellationToken).ConfigureAwait(false);
             if (ownState.ActiveShift is null || ownState.ActiveCashCustodySession is null)
             {
@@ -418,7 +406,7 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
                 SiteId: _options.SiteId.ToString("D"),
                 SiteGroupId: _options.SiteGroupId.ToString("D"),
                 PosServerId: _options.PosServerId,
-                ClosingCashAmount: closingCashAmount), cancellationToken).ConfigureAwait(false);
+                Denominations: denominations), cancellationToken).ConfigureAwait(false);
             if (!closed.IsSuccess)
             {
                 return _lastState = await BuildSafeStateAsync(
@@ -854,7 +842,8 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             ActiveCashCustodySession: ownState.ActiveCashCustodySession,
             ActiveCashCustodySummary: custodyOverview.ActiveSession,
             LatestClosedCashCustody: custodyOverview.ClosedSessions.FirstOrDefault(),
-            ClosedCashCustodyHistory: custodyOverview.ClosedSessions);
+            ClosedCashCustodyHistory: custodyOverview.ClosedSessions,
+            CashCustodyDenominations: CashCustodyDenominationCatalog.Supported);
     }
 
     private Task<LocalOperationalStateSnapshot> LoadOwnOperationalStateAsync(Guid userReference, CancellationToken cancellationToken) =>
@@ -990,7 +979,8 @@ public sealed record HumanSessionSafeState(
     CashCustodySessionSnapshot? ActiveCashCustodySession,
     CashCustodySummarySnapshot? ActiveCashCustodySummary = null,
     CashCustodySummarySnapshot? LatestClosedCashCustody = null,
-    IReadOnlyList<CashCustodySummarySnapshot>? ClosedCashCustodyHistory = null)
+    IReadOnlyList<CashCustodySummarySnapshot>? ClosedCashCustodyHistory = null,
+    IReadOnlyList<CashCustodyDenominationDefinition>? CashCustodyDenominations = null)
 {
     public static HumanSessionSafeState Unauthenticated(bool deviceTrusted, string message) =>
         new("UNAUTHENTICATED", false, deviceTrusted, false, false, false, null, null, null, null, null, false, false, null, null,

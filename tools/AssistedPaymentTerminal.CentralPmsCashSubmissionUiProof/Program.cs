@@ -106,7 +106,7 @@ static async Task<Guid> CreateLocalCashReceivedAsync(LocalJournalBridgeHandler h
         siteId = "11111111-1111-4111-8111-111111111111",
         siteGroupId = "22222222-2222-4222-8222-222222222222",
         posServerId = "pos-proof",
-        openingCashAmount = 0m
+        denominations = CashCustodyDenominationCatalog.CreateCount()
     });
     RequireBridgeSuccess(session, "Session creation failed");
     var sessionId = session.RootElement.GetProperty("payload").GetProperty("id").GetGuid();

@@ -51,9 +51,24 @@ public sealed record CashCustodySessionSnapshot(
     decimal? VarianceAmount = null,
     DateTimeOffset? ClosedAt = null,
     string? ClosedByAuthenticatedCashierSessionReference = null,
-    int? UnresolvedSubmissionCountAtClose = null)
+    int? UnresolvedSubmissionCountAtClose = null,
+    IReadOnlyList<CashCustodyDenominationEntrySnapshot>? OpeningDenominations = null,
+    IReadOnlyList<CashCustodyDenominationEntrySnapshot>? ClosingDenominations = null)
 {
-    public static CashCustodySessionSnapshot FromEntity(CashCustodySession session) =>
+    public static CashCustodySessionSnapshot FromEntity(CashCustodySession session)
+    {
+        var openingDenominations = session.DenominationEntries
+            .Where(entry => entry.CaptureType == CashCustodyDenominationCaptureType.Opening)
+            .OrderByDescending(entry => entry.DenominationValueMinorUnits)
+            .Select(CashCustodyDenominationEntrySnapshot.FromEntity)
+            .ToArray();
+        var closingDenominations = session.DenominationEntries
+            .Where(entry => entry.CaptureType == CashCustodyDenominationCaptureType.Closing)
+            .OrderByDescending(entry => entry.DenominationValueMinorUnits)
+            .Select(CashCustodyDenominationEntrySnapshot.FromEntity)
+            .ToArray();
+
+        return
         new(
             session.Id,
             session.CashierId,
@@ -71,7 +86,24 @@ public sealed record CashCustodySessionSnapshot(
             session.VarianceAmount,
             session.ClosedAt,
             session.ClosedByAuthenticatedCashierSessionReference,
-            session.UnresolvedSubmissionCountAtClose);
+            session.UnresolvedSubmissionCountAtClose,
+            openingDenominations,
+            closingDenominations);
+    }
+}
+
+public sealed record CashCustodyDenominationEntrySnapshot(
+    string DenominationCode,
+    int DenominationValueMinorUnits,
+    int Quantity,
+    long CalculatedAmountMinorUnits)
+{
+    public static CashCustodyDenominationEntrySnapshot FromEntity(CashCustodyDenominationEntry entry) =>
+        new(
+            entry.DenominationCode,
+            entry.DenominationValueMinorUnits,
+            entry.Quantity,
+            entry.CalculatedAmountMinorUnits);
 }
 
 public sealed record CashCustodySubmissionSummarySnapshot(

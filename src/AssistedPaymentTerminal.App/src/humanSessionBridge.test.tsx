@@ -11,6 +11,7 @@ import {
   type HumanSessionState,
   type CashCustodySummary,
 } from "./humanSessionBridge";
+import type { CashCustodyDenominationLine } from "./cashCustodyDenominations";
 import { mode1Config } from "./test/testConfig";
 
 const cashierGuid = "44444444-4444-4444-8444-444444444444";
@@ -324,13 +325,14 @@ describe("APT human-session presentation boundary", () => {
     };
     rerender(<HumanSessionPanel state={noCustodyAuthority} bridge={bridgeStub()} onStateChange={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Open Cash Custody" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Review opening count" })).toBeDisabled();
   });
 
   it("closes only owned custody before allowing the owned shift to close", async () => {
     const custodyClosed = { ...authenticatedState(), activeCashCustodySession: null };
     const shiftClosed = { ...custodyClosed, activeShift: null };
-    const closeOwnCustody = vi.fn(async () => successResult("humanSession.closeOwnCustody", custodyClosed));
+    const closeOwnCustody = vi.fn(async (_correlationId: string, _denominations: CashCustodyDenominationLine[]) =>
+      successResult("humanSession.closeOwnCustody", custodyClosed));
     const closeOwnShift = vi.fn(async () => successResult("humanSession.closeOwnShift", shiftClosed));
     const onStateChange = vi.fn();
     const bridge = bridgeStub({ closeOwnCustody, closeOwnShift });
@@ -338,11 +340,19 @@ describe("APT human-session presentation boundary", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
     expect(screen.getByRole("button", { name: "Close Cashier Shift" })).toBeDisabled();
-    await userEvent.clear(screen.getByLabelText("Actual Closing Cash"));
-    await userEvent.type(screen.getByLabelText("Actual Closing Cash"), "100.00");
-    await userEvent.click(screen.getByRole("button", { name: "Close Cash Custody" }));
+    await userEvent.clear(screen.getByLabelText("PHP 100 quantity"));
+    await userEvent.type(screen.getByLabelText("PHP 100 quantity"), "1");
+    await userEvent.click(screen.getByRole("button", { name: "Review actual count" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm and close" }));
 
-    await waitFor(() => expect(closeOwnCustody).toHaveBeenCalledWith(expect.any(String), 100));
+    await waitFor(() => expect(closeOwnCustody).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining([
+        { denominationCode: "PHP-100", denominationValueMinorUnits: 10_000, quantity: 1 },
+        { denominationCode: "PHP-0.01", denominationValueMinorUnits: 1, quantity: 0 },
+      ]),
+    ));
+    expect(closeOwnCustody.mock.calls[0][1]).toHaveLength(13);
     expect(onStateChange).toHaveBeenCalledWith(custodyClosed);
     rerender(<HumanSessionPanel state={custodyClosed} bridge={bridge} onStateChange={onStateChange} />);
     expect(screen.getByRole("button", { name: "Close Cashier Shift" })).toBeEnabled();
@@ -390,6 +400,14 @@ describe("APT human-session presentation boundary", () => {
 
   it("renders committed close evidence and lets the cashier inspect immutable history", async () => {
     const latest = closedCustodySummary("77777777-7777-4777-8777-777777777777", 1_100, 1_090, -10, 3, 1);
+    latest.session.openingDenominations = [
+      { denominationCode: "PHP-200", denominationValueMinorUnits: 20_000, quantity: 5, calculatedAmountMinorUnits: 100_000 },
+    ];
+    latest.session.closingDenominations = [
+      { denominationCode: "PHP-200", denominationValueMinorUnits: 20_000, quantity: 5, calculatedAmountMinorUnits: 100_000 },
+      { denominationCode: "PHP-50", denominationValueMinorUnits: 5_000, quantity: 1, calculatedAmountMinorUnits: 5_000 },
+      { denominationCode: "PHP-20", denominationValueMinorUnits: 2_000, quantity: 2, calculatedAmountMinorUnits: 4_000 },
+    ];
     const prior = closedCustodySummary("88888888-8888-4888-8888-888888888888", 500, 505, 5, 2, 0);
     const state = {
       ...authenticatedState(),
@@ -407,6 +425,8 @@ describe("APT human-session presentation boundary", () => {
     expect(result).toHaveTextContent("1,090.00");
     expect(result).toHaveTextContent("-₱10.00");
     expect(result).toHaveTextContent("Unresolved at close1");
+    expect(screen.getByLabelText("Opening denomination breakdown")).toHaveTextContent("PHP-200");
+    expect(screen.getByLabelText("Closing denomination breakdown")).toHaveTextContent("PHP-50");
     expect(screen.getByLabelText("Closed cash custody history")).toHaveTextContent("CUST-88888888");
 
     await userEvent.click(screen.getByRole("button", { name: "CUST-88888888" }));
@@ -424,7 +444,47 @@ describe("APT human-session presentation boundary", () => {
 
     expect(screen.getByTestId("cashier-header-shift")).toHaveTextContent("OPEN");
     expect(screen.getByTestId("cashier-header-custody")).toHaveTextContent("CLOSED");
-    expect(screen.getByRole("button", { name: "Open Cash Custody" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review opening count" })).toBeEnabled();
+  });
+
+  it("captures every opening denomination and calculates exact centavo totals before confirmation", async () => {
+    const openOrResumeCustody = vi.fn(async (_correlationId: string, _denominations: CashCustodyDenominationLine[]) =>
+      successResult("humanSession.openOrResumeCustody", authenticatedState()));
+    const state = { ...authenticatedState(), activeCashCustodySession: null };
+    render(<HumanSessionPanel state={state} bridge={bridgeStub({ openOrResumeCustody })} onStateChange={vi.fn()} />);
+
+    await userEvent.clear(screen.getByLabelText("PHP 200 quantity"));
+    await userEvent.type(screen.getByLabelText("PHP 200 quantity"), "1");
+    for (const label of ["PHP 0.25", "PHP 0.10", "PHP 0.05", "PHP 0.01"]) {
+      await userEvent.clear(screen.getByLabelText(`${label} quantity`));
+      await userEvent.type(screen.getByLabelText(`${label} quantity`), "1");
+    }
+
+    expect(screen.getByTestId("opening-denomination-total")).toHaveTextContent("₱200.41");
+    await userEvent.click(screen.getByRole("button", { name: "Review opening count" }));
+    expect(screen.getByRole("status")).toHaveTextContent("₱200.41");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm opening" }));
+
+    await waitFor(() => expect(openOrResumeCustody).toHaveBeenCalledTimes(1));
+    const submitted = openOrResumeCustody.mock.calls[0][1];
+    expect(submitted).toHaveLength(13);
+    expect(submitted).toContainEqual({ denominationCode: "PHP-200", denominationValueMinorUnits: 20_000, quantity: 1 });
+    expect(submitted).toContainEqual({ denominationCode: "PHP-1000", denominationValueMinorUnits: 100_000, quantity: 0 });
+    expect(submitted).toContainEqual({ denominationCode: "PHP-0.01", denominationValueMinorUnits: 1, quantity: 1 });
+  });
+
+  it("labels historical custody without denomination evidence as a legacy record", async () => {
+    const history = closedCustodySummary("88888888-8888-4888-8888-888888888888", 500, 505, 5, 2, 0);
+    const state = {
+      ...authenticatedState(),
+      latestClosedCashCustody: history,
+      closedCashCustodyHistory: [history],
+    };
+    render(<HumanSessionPanel state={state} bridge={bridgeStub()} onStateChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+
+    expect(screen.getAllByText("Legacy record — denomination breakdown unavailable")).toHaveLength(2);
   });
 
   it("does not let mock Central PMS mode bypass the host without an explicit loopback fixture flag", () => {

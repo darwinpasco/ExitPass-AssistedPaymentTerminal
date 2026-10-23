@@ -1,0 +1,15 @@
+[
+  { "code": "PHP-1000", "displayLabel": "PHP 1,000", "valueMinorUnits": 100000 },
+  { "code": "PHP-500", "displayLabel": "PHP 500", "valueMinorUnits": 50000 },
+  { "code": "PHP-200", "displayLabel": "PHP 200", "valueMinorUnits": 20000 },
+  { "code": "PHP-100", "displayLabel": "PHP 100", "valueMinorUnits": 10000 },
+  { "code": "PHP-50", "displayLabel": "PHP 50", "valueMinorUnits": 5000 },
+  { "code": "PHP-20", "displayLabel": "PHP 20", "valueMinorUnits": 2000 },
+  { "code": "PHP-10", "displayLabel": "PHP 10", "valueMinorUnits": 1000 },
+  { "code": "PHP-5", "displayLabel": "PHP 5", "valueMinorUnits": 500 },
+  { "code": "PHP-1", "displayLabel": "PHP 1", "valueMinorUnits": 100 },
+  { "code": "PHP-0.25", "displayLabel": "PHP 0.25", "valueMinorUnits": 25 },
+  { "code": "PHP-0.10", "displayLabel": "PHP 0.10", "valueMinorUnits": 10 },
+  { "code": "PHP-0.05", "displayLabel": "PHP 0.05", "valueMinorUnits": 5 },
+  { "code": "PHP-0.01", "displayLabel": "PHP 0.01", "valueMinorUnits": 1 }
+]

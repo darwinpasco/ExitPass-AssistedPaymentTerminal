@@ -164,7 +164,7 @@ static async Task<TerminalCashPaymentOutboxCommand> CreatePaymentCommandAsync(
         SiteId: "11111111-1111-4111-8111-111111111111",
         SiteGroupId: "22222222-2222-4222-8222-222222222222",
         PosServerId: "proof-pos-server",
-        OpeningCashAmount: 500m)));
+        Denominations: CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int> { ["PHP-500"] = 1 }))));
 
     var tender = await RequireSuccess(service.StartCashTenderAsync(new StartCashTenderRequest(
         CashCustodySessionId: session.Id,

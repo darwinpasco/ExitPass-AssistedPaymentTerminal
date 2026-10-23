@@ -37,4 +37,6 @@ public sealed class CashCustodySession
     public CashCustodySessionStatus Status { get; set; }
 
     public ICollection<CashTender> CashTenders { get; } = new List<CashTender>();
+
+    public ICollection<CashCustodyDenominationEntry> DenominationEntries { get; } = new List<CashCustodyDenominationEntry>();
 }

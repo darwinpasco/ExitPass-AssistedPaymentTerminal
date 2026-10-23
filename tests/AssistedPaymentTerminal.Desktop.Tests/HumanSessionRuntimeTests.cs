@@ -179,7 +179,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
 
         var login = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         var shift = await runtime.OpenOrResumeShiftAsync();
-        var custody = await runtime.OpenOrResumeCustodyAsync(100m);
+        var custody = await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var cash = await runtime.AuthorizeCashAsync();
 
         Assert.True(login.Authenticated);
@@ -197,7 +197,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
 
         var login = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         var shift = await runtime.OpenOrResumeShiftAsync();
-        var custody = await runtime.OpenOrResumeCustodyAsync(500m);
+        var custody = await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(500m));
         var authorization = await runtime.AuthorizeCashAsync();
         var logout = await runtime.LogoutAsync();
         var refreshed = await runtime.RefreshAsync();
@@ -229,10 +229,10 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var getCallsBeforeClose = client.GetCalls;
 
-        var closedCustody = await runtime.CloseOwnCustodyAsync(100m);
+        var closedCustody = await runtime.CloseOwnCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var closedShift = await runtime.CloseOwnShiftAsync();
 
         Assert.True(closedCustody.Authenticated);
@@ -267,8 +267,8 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var juanRuntime = CreateRuntime(juanClient, new MemoryCredentialStore(), journal);
         await juanRuntime.LoginAsync("JuanDC01", Credential(juanRuntime));
         await juanRuntime.OpenOrResumeShiftAsync();
-        await juanRuntime.OpenOrResumeCustodyAsync(100m);
-        var juanClose = await juanRuntime.CloseOwnCustodyAsync(100m);
+        await juanRuntime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
+        var juanClose = await juanRuntime.CloseOwnCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var juanLogout = await juanRuntime.LogoutAsync();
 
         var mariaSecondLogin = await mariaRuntime.LoginAsync(
@@ -297,10 +297,10 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         client.GetResult = Success(CashierId, permissions: Without(HumanSessionRuntimeOptions.CustodyOperatePermission));
 
-        var denied = await runtime.CloseOwnCustodyAsync(100m);
+        var denied = await runtime.CloseOwnCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
 
         Assert.Equal("CUSTODY_PERMISSION_DENIED", denied.ErrorCode);
         Assert.NotNull(denied.ActiveCashCustodySession);
@@ -317,9 +317,9 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var handler = new HumanSessionBridgeHandler(runtime, new FakeHumanCredentialPrompt());
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
-        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(100m));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
 
-        using var custody = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnCustody, new CloseCustodyPayload(100m));
+        using var custody = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnCustody, new CloseCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
         using var shift = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnShift, new { });
 
         Assert.Equal(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeCashCustodySession").ValueKind);
@@ -327,6 +327,53 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.Single(custody.RootElement.GetProperty("payload").GetProperty("closedCashCustodyHistory").EnumerateArray());
         Assert.NotEqual(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
         Assert.Equal(JsonValueKind.Null, shift.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
+    }
+
+    [Fact]
+    public async Task AuthenticatedStatePublishesTheAuthoritativeCustodyDenominationCatalogue()
+    {
+        var runtime = CreateRuntime(new FakeHumanSessionClient(Success(CashierId)), new MemoryCredentialStore(), out _);
+
+        var state = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+
+        Assert.Equal(13, state.CashCustodyDenominations!.Count);
+        Assert.Contains(state.CashCustodyDenominations, value => value.Code == "PHP-200" && value.ValueMinorUnits == 20_000);
+        Assert.Contains(state.CashCustodyDenominations, value => value.Code == "PHP-0.01" && value.ValueMinorUnits == 1);
+    }
+
+    [Fact]
+    public async Task BridgeRejectsFractionalCustodyQuantitiesBeforeCreatingCustody()
+    {
+        var runtime = CreateRuntime(new FakeHumanSessionClient(Success(CashierId)), new MemoryCredentialStore(), out var journal);
+        var handler = new HumanSessionBridgeHandler(runtime, new FakeHumanCredentialPrompt());
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
+        var message = JsonSerializer.Serialize(new
+        {
+            source = HumanSessionBridgeCommand.Source,
+            command = HumanSessionBridgeCommand.OpenOrResumeCustody,
+            correlationId = Guid.NewGuid().ToString("N"),
+            payload = new
+            {
+                denominations = new[]
+                {
+                    new { denominationCode = "PHP-1000", denominationValueMinorUnits = 100_000, quantity = 0.5m }
+                }
+            }
+        });
+
+        var responseJson = await handler.HandleWebMessageAsync(message);
+        using var response = JsonDocument.Parse(responseJson!);
+        var durable = await journal.GetLocalOperationalStateAsync(new LocalOperationalStateRequest(
+            CashierId: CashierId.ToString("D"),
+            TerminalId: "APT-TERMINAL-001",
+            SiteId: SiteId.ToString("D"),
+            SiteGroupId: SiteGroupId.ToString("D"),
+            PosServerId: "POS-001"));
+
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("MALFORMED_REQUEST", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Null(durable.ActiveCashCustodySession);
     }
 
     [Fact]
@@ -342,7 +389,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(new FakeHumanSessionClient(Success(CashierId)), new MemoryCredentialStore(), journal);
         var login = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         var attemptedShift = await runtime.OpenOrResumeShiftAsync();
-        var attemptedCustody = await runtime.OpenOrResumeCustodyAsync(0m);
+        var attemptedCustody = await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(0m));
 
         Assert.False(login.CashOperationsAuthorized);
         Assert.Equal("CROSS_CASHIER_CUSTODY_BLOCKED", login.ErrorCode);
@@ -361,7 +408,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, store, out var journal);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         client.GetResult = Failure(errorCode);
 
         var authorization = await runtime.AuthorizeCashAsync();
@@ -391,7 +438,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, store, out var journal);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         client.GetResult = Failure(errorCode);
 
         var locked = await runtime.RefreshAsync();
@@ -539,7 +586,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             out _);
         await custodyRuntime.LoginAsync("cashier.synthetic", Credential(custodyRuntime));
         var shift = await custodyRuntime.OpenOrResumeShiftAsync();
-        var custodyDenied = await custodyRuntime.OpenOrResumeCustodyAsync(100m);
+        var custodyDenied = await custodyRuntime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         Assert.NotNull(shift.ActiveShift);
         Assert.False(custodyDenied.CustodyOperationsAuthorized);
         Assert.Equal("CUSTODY_PERMISSION_DENIED", custodyDenied.ErrorCode);
@@ -551,7 +598,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             out _);
         await receiveRuntime.LoginAsync("cashier.synthetic", Credential(receiveRuntime));
         await receiveRuntime.OpenOrResumeShiftAsync();
-        await receiveRuntime.OpenOrResumeCustodyAsync(100m);
+        await receiveRuntime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var receiveDenied = await receiveRuntime.AuthorizeCashAsync();
         Assert.False(receiveDenied.Authorized);
         Assert.Equal("CASH_RECEIVE_PERMISSION_DENIED", receiveDenied.Code);
@@ -648,7 +695,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
 
         var login = await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         var shift = await runtime.OpenOrResumeShiftAsync();
-        var custody = await runtime.OpenOrResumeCustodyAsync(100m);
+        var custody = await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         var cash = await runtime.AuthorizeCashAsync();
 
         Assert.True(login.Authenticated);
@@ -685,7 +732,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         await custodyRuntime.LoginAsync("cashier.synthetic", Credential(custodyRuntime));
         await custodyRuntime.OpenOrResumeShiftAsync();
         custodyClient.GetResult = Success(CashierId, permissions: Without(HumanSessionRuntimeOptions.CustodyOperatePermission));
-        var custodyDenied = await custodyRuntime.OpenOrResumeCustodyAsync(100m);
+        var custodyDenied = await custodyRuntime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         Assert.Equal("CUSTODY_PERMISSION_DENIED", custodyDenied.ErrorCode);
         Assert.Null(custodyDenied.ActiveCashCustodySession);
 
@@ -693,7 +740,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var receiveRuntime = CreateRuntime(receiveClient, new MemoryCredentialStore(), out _);
         await receiveRuntime.LoginAsync("cashier.synthetic", Credential(receiveRuntime));
         await receiveRuntime.OpenOrResumeShiftAsync();
-        await receiveRuntime.OpenOrResumeCustodyAsync(100m);
+        await receiveRuntime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         receiveClient.GetResult = Success(CashierId, permissions: Without(HumanSessionRuntimeOptions.CashReceivePermission));
         var receiveDenied = await receiveRuntime.AuthorizeCashAsync();
         Assert.False(receiveDenied.Authorized);
@@ -727,7 +774,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, store, out _);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         client.GetResult = Failure(errorCode);
 
         var locked = await runtime.RefreshAsync();
@@ -753,7 +800,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var runtime = CreateRuntime(client, store, out _);
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
         client.GetResult = Failure("CENTRAL_PMS_UNAVAILABLE", retryable: true);
 
         var unavailable = await runtime.RefreshAsync();
@@ -937,7 +984,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var handler = new HumanSessionBridgeHandler(runtime, prompt);
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
-        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(100m));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
         client.GetResult = Failure(errorCode, retryable);
 
         var locked = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Refresh, new { });
@@ -990,7 +1037,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var handler = new HumanSessionBridgeHandler(runtime, prompt);
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
         await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
-        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(100m));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
 
         var pendingReauthentication = SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Reauthenticate, new { });
         await prompt.WaitForCallAsync(2);
@@ -1160,7 +1207,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             new HumanSessionRuntimeOptions("APT-TERMINAL-001", SiteId, SiteGroupId, "POS-001", DeviceId));
         await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
         await runtime.OpenOrResumeShiftAsync();
-        await runtime.OpenOrResumeCustodyAsync(100m);
+        await runtime.OpenOrResumeCustodyAsync(TestCashCustodyDenominations.ForAmount(100m));
 
         var locked = await runtime.RefreshAsync();
 
@@ -1260,7 +1307,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         new(shiftId, cashierId.ToString("D"), Guid.NewGuid().ToString("D"), "APT-TERMINAL-001", SiteId.ToString("D"), SiteGroupId.ToString("D"), "POS-001");
 
     private static CreateCashCustodySessionRequest CreateCustody(Guid cashierId, string shiftId) =>
-        new(cashierId.ToString("D"), Guid.NewGuid().ToString("D"), shiftId, "APT-TERMINAL-001", SiteId.ToString("D"), SiteGroupId.ToString("D"), "POS-001", 100m);
+        new(cashierId.ToString("D"), Guid.NewGuid().ToString("D"), shiftId, "APT-TERMINAL-001", SiteId.ToString("D"), SiteGroupId.ToString("D"), "POS-001", TestCashCustodyDenominations.ForAmount(100m));
 
     private static HumanSessionClientResult Success(
         Guid cashierId,

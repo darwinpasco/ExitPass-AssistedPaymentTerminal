@@ -15,6 +15,8 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<CashDenominationEntry> CashDenominationEntries => Set<CashDenominationEntry>();
 
+    public DbSet<CashCustodyDenominationEntry> CashCustodyDenominationEntries => Set<CashCustodyDenominationEntry>();
+
     public DbSet<TerminalCashPaymentOutboxCommand> TerminalCashPaymentOutboxCommands => Set<TerminalCashPaymentOutboxCommand>();
 
     public DbSet<TerminalCashPaymentSubmissionAttempt> TerminalCashPaymentSubmissionAttempts => Set<TerminalCashPaymentSubmissionAttempt>();
@@ -80,6 +82,39 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(session => session.ClosedByAuthenticatedCashierSessionReference).HasMaxLength(256);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.HasIndex(session => new { session.TerminalId, session.CashierId, session.Status });
+        });
+
+        modelBuilder.Entity<CashCustodyDenominationEntry>(entity =>
+        {
+            entity.ToTable("cash_custody_denomination_entries", table =>
+            {
+                table.UseSqlReturningClause(false);
+                table.HasCheckConstraint(
+                    "CK_cash_custody_denomination_entries_CaptureType",
+                    "CaptureType IN ('Opening', 'Closing')");
+                table.HasCheckConstraint(
+                    "CK_cash_custody_denomination_entries_Value",
+                    "DenominationValueMinorUnits > 0");
+                table.HasCheckConstraint(
+                    "CK_cash_custody_denomination_entries_Quantity",
+                    "Quantity >= 0");
+                table.HasCheckConstraint(
+                    "CK_cash_custody_denomination_entries_CalculatedAmount",
+                    "CalculatedAmountMinorUnits = DenominationValueMinorUnits * Quantity");
+            });
+            entity.HasKey(entry => entry.Id);
+            entity.Property(entry => entry.CaptureType).HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(entry => entry.DenominationCode).HasMaxLength(32).IsRequired();
+            entity.Property(entry => entry.DenominationValueMinorUnits).IsRequired();
+            entity.Property(entry => entry.Quantity).IsRequired();
+            entity.Property(entry => entry.CalculatedAmountMinorUnits).IsRequired();
+            entity.Property(entry => entry.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(entry => entry.CashCustodySession)
+                .WithMany(session => session.DenominationEntries)
+                .HasForeignKey(entry => entry.CashCustodySessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(entry => new { entry.CashCustodySessionId, entry.CaptureType, entry.DenominationCode })
+                .IsUnique();
         });
 
         modelBuilder.Entity<CashTender>(entity =>

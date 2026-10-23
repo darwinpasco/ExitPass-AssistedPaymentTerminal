@@ -292,7 +292,7 @@ public sealed class LocalJournalBridgeHandler
             SiteId: payload.SiteId,
             SiteGroupId: payload.SiteGroupId,
             PosServerId: payload.PosServerId,
-            OpeningCashAmount: payload.OpeningCashAmount), cancellationToken).ConfigureAwait(false);
+            Denominations: payload.Denominations), cancellationToken).ConfigureAwait(false);
 
         return BridgeResult(request, result);
     }
@@ -1266,7 +1266,7 @@ public sealed record CreateDevelopmentSessionPayload(
     string SiteId,
     string SiteGroupId,
     string PosServerId,
-    decimal OpeningCashAmount);
+    IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
 
 public sealed record StartTenderPayload(
     Guid? LocalCashTenderId,

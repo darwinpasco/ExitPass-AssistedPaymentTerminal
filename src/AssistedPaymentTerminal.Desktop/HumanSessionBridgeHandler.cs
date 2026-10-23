@@ -1,3 +1,4 @@
+using AssistedPaymentTerminal.LocalOperations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO;
@@ -283,17 +284,18 @@ public sealed class HumanSessionBridgeHandler
 
     private async Task<HumanSessionSafeState> OpenCustodyAsync(HumanSessionBridgeRequest request, CancellationToken cancellationToken)
     {
+        EnsureExactPayload(request.Payload, "denominations");
         var payload = request.Payload.Deserialize<OpenCustodyPayload>(JsonOptions)
             ?? throw new JsonException();
-        return await _runtime.OpenOrResumeCustodyAsync(payload.OpeningCashAmount, cancellationToken).ConfigureAwait(false);
+        return await _runtime.OpenOrResumeCustodyAsync(payload.Denominations, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HumanSessionSafeState> CloseCustodyAsync(HumanSessionBridgeRequest request, CancellationToken cancellationToken)
     {
-        EnsureExactPayload(request.Payload, "closingCashAmount");
+        EnsureExactPayload(request.Payload, "denominations");
         var payload = request.Payload.Deserialize<CloseCustodyPayload>(JsonOptions)
             ?? throw new JsonException();
-        return await _runtime.CloseOwnCustodyAsync(payload.ClosingCashAmount, cancellationToken).ConfigureAwait(false);
+        return await _runtime.CloseOwnCustodyAsync(payload.Denominations, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HumanSessionSafeState> AuthorizeCashAsync(CancellationToken cancellationToken)
@@ -314,8 +316,8 @@ public sealed class HumanSessionBridgeHandler
 
 public sealed record HumanSessionBridgeRequest(string Source, string Command, string CorrelationId, JsonElement Payload);
 public sealed record LoginPayload(string Username);
-public sealed record OpenCustodyPayload(decimal OpeningCashAmount);
-public sealed record CloseCustodyPayload(decimal ClosingCashAmount);
+public sealed record OpenCustodyPayload(IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
+public sealed record CloseCustodyPayload(IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
 
 public sealed class HumanCredentialPromptException : Exception
 {

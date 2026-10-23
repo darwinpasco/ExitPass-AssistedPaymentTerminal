@@ -42,7 +42,7 @@ if (args.Any(value => string.Equals(value, "--seed-closed-shift", StringComparis
         SiteId: "11111111-1111-1111-1111-111111111111",
         SiteGroupId: "22222222-2222-2222-2222-222222222222",
         PosServerId: "POS-DEV-001",
-        ClosingCashAmount: 500m,
+        Denominations: CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int> { ["PHP-500"] = 1 }),
         ClosedAt: DateTimeOffset.Parse("2026-07-29T08:29:00Z"))));
     await RequireSuccess(service.CloseCashierShiftAsync(new CloseCashierShiftRequest(
         CashierShiftId: "SHIFT-DEV-20260714-A",
@@ -81,7 +81,7 @@ var session = await RequireSuccess(service.CreateCashCustodySessionAsync(new Cre
     SiteId: "11111111-1111-4111-8111-111111111111",
     SiteGroupId: "22222222-2222-4222-8222-222222222222",
     PosServerId: "proof-pos-server",
-    OpeningCashAmount: 500m)));
+    Denominations: CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int> { ["PHP-500"] = 1 }))));
 
 Console.WriteLine($"cash-custody session created: {session.Id}");
 
@@ -197,7 +197,7 @@ static CreateCashCustodySessionRequest DevelopmentCustody() =>
         SiteId: "11111111-1111-1111-1111-111111111111",
         SiteGroupId: "22222222-2222-2222-2222-222222222222",
         PosServerId: "POS-DEV-001",
-        OpeningCashAmount: 500m,
+        Denominations: CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int> { ["PHP-500"] = 1 }),
         CashCustodySessionId: Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001"),
         OpenedAt: DateTimeOffset.Parse("2026-07-29T08:05:00Z"));
 

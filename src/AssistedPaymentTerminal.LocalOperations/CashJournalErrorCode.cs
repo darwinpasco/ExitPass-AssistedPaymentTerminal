@@ -6,5 +6,7 @@ public enum CashJournalErrorCode
     DuplicateUnresolvedTender = 2,
     AmountTenderedBelowAmountDue = 3,
     CashierAttestationRequired = 4,
-    InvalidStateTransition = 5
+    InvalidStateTransition = 5,
+    InvalidDenominationEvidence = 6,
+    ConflictingDenominationEvidence = 7
 }
