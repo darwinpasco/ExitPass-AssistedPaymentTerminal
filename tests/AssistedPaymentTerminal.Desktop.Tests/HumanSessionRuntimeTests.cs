@@ -238,6 +238,13 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.True(closedCustody.Authenticated);
         Assert.NotNull(closedCustody.ActiveShift);
         Assert.Null(closedCustody.ActiveCashCustodySession);
+        Assert.Null(closedCustody.ActiveCashCustodySummary);
+        Assert.NotNull(closedCustody.LatestClosedCashCustody);
+        Assert.Single(closedCustody.ClosedCashCustodyHistory!);
+        Assert.Equal(100m, closedCustody.LatestClosedCashCustody!.Session.ExpectedClosingCashAmount);
+        Assert.Equal(100m, closedCustody.LatestClosedCashCustody.Session.ClosingCashAmount);
+        Assert.Equal(0m, closedCustody.LatestClosedCashCustody.Session.VarianceAmount);
+        Assert.Equal(0, closedCustody.LatestClosedCashCustody.Submissions.PhysicalCashReceiptCount);
         Assert.True(closedShift.Authenticated);
         Assert.Null(closedShift.ActiveShift);
         Assert.Null(closedShift.ActiveCashCustodySession);
@@ -277,6 +284,8 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.Equal("AUTHENTICATED", mariaSecondLogin.AuthenticationState);
         Assert.Equal("CROSS_CASHIER_SHIFT_BLOCKED", mariaSecondLogin.ErrorCode);
         Assert.Null(mariaSecondLogin.ActiveCashCustodySession);
+        Assert.Null(mariaSecondLogin.LatestClosedCashCustody);
+        Assert.Empty(mariaSecondLogin.ClosedCashCustodyHistory!);
         Assert.Equal(2, mariaClient.LoginCalls);
         Assert.Equal(new[] { "replacement-password", "replacement-password" }, mariaClient.LoginPasswords);
     }
@@ -295,6 +304,8 @@ public sealed class HumanSessionRuntimeTests : IDisposable
 
         Assert.Equal("CUSTODY_PERMISSION_DENIED", denied.ErrorCode);
         Assert.NotNull(denied.ActiveCashCustodySession);
+        Assert.Null(denied.ActiveCashCustodySummary);
+        Assert.Empty(denied.ClosedCashCustodyHistory!);
         Assert.False(denied.CustodyOperationsAuthorized);
         Assert.False(denied.CashOperationsAuthorized);
     }
@@ -312,6 +323,8 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         using var shift = await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.CloseOwnShift, new { });
 
         Assert.Equal(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeCashCustodySession").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("latestClosedCashCustody").ValueKind);
+        Assert.Single(custody.RootElement.GetProperty("payload").GetProperty("closedCashCustodyHistory").EnumerateArray());
         Assert.NotEqual(JsonValueKind.Null, custody.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
         Assert.Equal(JsonValueKind.Null, shift.RootElement.GetProperty("payload").GetProperty("activeShift").ValueKind);
     }

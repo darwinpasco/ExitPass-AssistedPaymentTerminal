@@ -31,10 +31,11 @@ try {
   await runMissingTerminalSerialRefusal();
   await runUnauthenticatedStartup();
   await runActiveAndExpiredWorkflow();
+  await runCashCustodyVisibilityWorkflow();
   await runNoActiveShiftWorkflow();
   await runUnsupportedProfileRefusal();
   await runServiceUnavailableFailure();
-  console.log("Playwright E2E passed: 6 scenarios");
+  console.log("Playwright E2E passed: 7 scenarios");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
@@ -113,6 +114,31 @@ async function runNoActiveShiftWorkflow() {
   await expectActivePayableBasisReady(page);
   await expect(page.getByTestId("local-cash-prerequisites-notice")).toContainText("Open or resume your cashier shift.");
   await expect(page.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
+  await page.close();
+}
+
+async function runCashCustodyVisibilityWorkflow() {
+  const page = await newPage({ activeShift: true, activeCustody: true });
+  await page.goto(fixtureUrl);
+
+  await page.getByRole("button", { name: "Open Shift" }).click();
+  await page.getByRole("button", { name: "Open Cash Custody" }).click();
+  await page.getByRole("button", { name: "Cashier Session" }).click();
+
+  const openSummary = page.getByLabel("Open cash custody summary");
+  await expect(openSummary).toContainText("Physical cash receipts0");
+  await expect(openSummary.getByText("Calculated on close")).toHaveCount(2);
+
+  await page.getByLabel("Actual Closing Cash").fill("0.00");
+  await page.getByRole("button", { name: "Close Cash Custody" }).click();
+
+  const closeResult = page.getByLabel("Committed cash custody close result");
+  await expect(closeResult).toContainText("Closing Result");
+  await expect(closeResult).toContainText("Expected Cash");
+  await expect(closeResult).toContainText("Actual Cash");
+  await expect(closeResult).toContainText("Cash Variance");
+  await expect(page.getByLabel("Closed cash custody history")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^CUST-/ })).toBeVisible();
   await page.close();
 }
 

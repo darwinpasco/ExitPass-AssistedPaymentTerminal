@@ -80,6 +80,8 @@ export type CashCustodySessionSnapshot = {
   expectedClosingCashAmount?: number | null;
   closingCashAmount?: number | null;
   varianceAmount?: number | null;
+  closedAt?: string | null;
+  unresolvedSubmissionCountAtClose?: number | null;
 };
 
 export type LocalOperationalState = {

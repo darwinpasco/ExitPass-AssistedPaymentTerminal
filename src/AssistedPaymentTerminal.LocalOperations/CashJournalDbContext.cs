@@ -75,6 +75,7 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(session => session.ExpectedClosingCashAmount).HasPrecision(18, 2);
             entity.Property(session => session.ClosingCashAmount).HasPrecision(18, 2);
             entity.Property(session => session.VarianceAmount).HasPrecision(18, 2);
+            entity.Property(session => session.UnresolvedSubmissionCountAtClose);
             entity.Property(session => session.ClosedAt).HasConversion(nullableDateTimeOffsetConverter);
             entity.Property(session => session.ClosedByAuthenticatedCashierSessionReference).HasMaxLength(256);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
