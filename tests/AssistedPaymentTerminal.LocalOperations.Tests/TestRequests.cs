@@ -49,7 +49,7 @@ internal static class TestRequests
             SiteGroupId: "22222222-2222-4222-8222-222222222222",
             PosServerId: "pos-server-001");
 
-    public static CreateCashCustodySessionRequest CreateSession() =>
+    public static CreateCashCustodySessionRequest CreateSession(decimal openingCashAmount = 1_000m) =>
         new(
             CashierId: "cashier-001",
             AuthenticatedCashierSessionReference: "auth-session-001",
@@ -58,7 +58,7 @@ internal static class TestRequests
             SiteId: "11111111-1111-4111-8111-111111111111",
             SiteGroupId: "22222222-2222-4222-8222-222222222222",
             PosServerId: "pos-server-001",
-            OpeningCashAmount: 1_000m,
+            Denominations: CustodyDenominations(openingCashAmount),
             OpenedAt: DateTimeOffset.Parse("2026-07-15T00:00:00Z"));
 
     public static CloseCashCustodySessionRequest CloseSession(
@@ -73,8 +73,27 @@ internal static class TestRequests
             SiteId: "11111111-1111-4111-8111-111111111111",
             SiteGroupId: "22222222-2222-4222-8222-222222222222",
             PosServerId: "pos-server-001",
-            ClosingCashAmount: closingCashAmount,
+            Denominations: CustodyDenominations(closingCashAmount),
             ClosedAt: DateTimeOffset.Parse("2026-07-15T08:00:00Z"));
+
+    public static IReadOnlyCollection<CashCustodyDenominationLine> CustodyDenominations(decimal amount)
+    {
+        var minorUnits = decimal.ToInt64(amount * 100m);
+        var lines = new List<CashCustodyDenominationLine>(CashCustodyDenominationCatalog.Supported.Count);
+        foreach (var denomination in CashCustodyDenominationCatalog.Supported)
+        {
+            var quantity = checked((int)(minorUnits / denomination.ValueMinorUnits));
+            minorUnits %= denomination.ValueMinorUnits;
+            lines.Add(new CashCustodyDenominationLine(denomination.Code, denomination.ValueMinorUnits, quantity));
+        }
+
+        if (minorUnits != 0)
+        {
+            throw new InvalidOperationException("The test amount cannot be represented by the custody denomination catalogue.");
+        }
+
+        return lines;
+    }
 
     public static CloseCashierShiftRequest CloseShift() =>
         new(

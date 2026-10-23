@@ -1,3 +1,5 @@
+import type { CashCustodyDenominationLine } from "./cashCustodyDenominations";
+
 export type BridgeResult<T> =
   | { ok: true; command: string; correlationId: string; payload: T }
   | { ok: false; command: string; correlationId: string; error: BridgeError };
@@ -82,6 +84,12 @@ export type CashCustodySessionSnapshot = {
   varianceAmount?: number | null;
   closedAt?: string | null;
   unresolvedSubmissionCountAtClose?: number | null;
+  openingDenominations?: CashCustodyDenominationEvidence[] | null;
+  closingDenominations?: CashCustodyDenominationEvidence[] | null;
+};
+
+export type CashCustodyDenominationEvidence = CashCustodyDenominationLine & {
+  calculatedAmountMinorUnits: number;
 };
 
 export type LocalOperationalState = {
@@ -467,7 +475,7 @@ export type CreateDevelopmentSessionPayload = {
   siteId: string;
   siteGroupId: string;
   posServerId: string;
-  openingCashAmount: number;
+  denominations: CashCustodyDenominationLine[];
 };
 
 export type StartTenderPayload = {

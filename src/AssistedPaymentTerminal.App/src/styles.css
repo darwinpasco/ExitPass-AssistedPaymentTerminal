@@ -1506,6 +1506,84 @@ dl {
   gap: 10px;
 }
 
+.custody-denomination-capture {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 620px);
+}
+
+.denomination-grid-header,
+.denomination-grid-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 112px minmax(130px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.denomination-grid-header {
+  color: #53616f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.denomination-grid-row input {
+  width: 100%;
+  min-height: 38px;
+  border: 2px solid #aebbc5;
+  border-radius: 5px;
+  padding: 0 8px;
+}
+
+.denomination-grid-row strong,
+.denomination-grid-header span:last-child {
+  text-align: right;
+}
+
+.denomination-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #d5dde3;
+  padding-top: 10px;
+  font-size: 15px;
+}
+
+.denomination-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.custody-denomination-evidence {
+  margin-top: 12px;
+  border-top: 1px solid #d5dde3;
+  padding-top: 10px;
+}
+
+.custody-denomination-evidence h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.custody-denomination-evidence dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.custody-denomination-evidence dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.custody-denomination-evidence dd {
+  margin: 0;
+  text-align: right;
+}
+
 .cash-custody-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1617,5 +1695,14 @@ dl {
 
   .cash-custody-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .denomination-grid-header,
+  .denomination-grid-row {
+    grid-template-columns: minmax(100px, 1fr) 88px minmax(112px, 1fr);
+  }
+
+  .custody-denomination-evidence dl {
+    grid-template-columns: 1fr;
   }
 }

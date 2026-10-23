@@ -43,7 +43,7 @@ public sealed record CreateCashCustodySessionRequest(
     string SiteId,
     string SiteGroupId,
     string PosServerId,
-    decimal OpeningCashAmount,
+    IReadOnlyCollection<CashCustodyDenominationLine> Denominations,
     Guid? CashCustodySessionId = null,
     DateTimeOffset? OpenedAt = null);
 
@@ -56,8 +56,13 @@ public sealed record CloseCashCustodySessionRequest(
     string SiteId,
     string SiteGroupId,
     string PosServerId,
-    decimal ClosingCashAmount,
+    IReadOnlyCollection<CashCustodyDenominationLine> Denominations,
     DateTimeOffset? ClosedAt = null);
+
+public sealed record CashCustodyDenominationLine(
+    string DenominationCode,
+    int DenominationValueMinorUnits,
+    int Quantity);
 
 public sealed record StartCashTenderRequest(
     Guid CashCustodySessionId,

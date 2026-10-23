@@ -185,7 +185,7 @@ static async Task<Guid> SeedScenarioAsync(
         SiteId: "11111111-1111-4111-8111-111111111111",
         SiteGroupId: "22222222-2222-4222-8222-222222222222",
         PosServerId: "pos-preview",
-        OpeningCashAmount: 0m)).ConfigureAwait(false);
+        Denominations: CashCustodyDenominationCatalog.CreateCount())).ConfigureAwait(false);
     Require(session.IsSuccess, "Cash-custody session was not created.");
 
     var parkingSessionId = useResolvedTicketReference || scenario == ReceiptPreviewProofScenario.Available

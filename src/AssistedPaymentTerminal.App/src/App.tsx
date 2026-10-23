@@ -16,6 +16,8 @@ import type {
 } from "./api/centralPmsTypes";
 import { isProjectedSessionResponse } from "./api/centralPmsClient";
 import { CashCapturePanel } from "./CashCapturePanel";
+import { CashDenominationGrid } from "./CashDenominationGrid";
+import { CASH_CUSTODY_DENOMINATIONS, type CashCustodyDenominationLine } from "./cashCustodyDenominations";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import {
   PayableBasisVisualSmokeShell,
@@ -937,8 +939,6 @@ export function HumanSessionPanel({
   context?: TerminalContext;
   onStateChange: (state: HumanSessionState) => void;
 }) {
-  const [openingCashAmount, setOpeningCashAmount] = useState("0.00");
-  const [closingCashAmount, setClosingCashAmount] = useState("0.00");
   const [busy, setBusy] = useState<string | null>(null);
   const [selectedClosedCustodyId, setSelectedClosedCustodyId] = useState<string | null>(null);
   const shiftOpen = state.activeShift?.status === "Open";
@@ -972,8 +972,8 @@ export function HumanSessionPanel({
     }
   }
 
-  const closingAmount = Number(closingCashAmount);
   const activeSummary = state.activeCashCustodySummary?.submissions;
+  const custodyDenominations = state.cashCustodyDenominations ?? CASH_CUSTODY_DENOMINATIONS;
   const closedHistory = state.closedCashCustodyHistory ?? [];
   const selectedClosedCustody = closedHistory.find((item) => item.session.id === selectedClosedCustodyId)
     ?? state.latestClosedCashCustody
@@ -1022,17 +1022,13 @@ export function HumanSessionPanel({
           <section className="cashier-session-group">
             <h3>Cash Custody</h3>
             {!custodyOpen ? (
-              <div className="session-form-row">
-                <label htmlFor="openingCashAmount">Opening Cash Amount</label>
-                <input id="openingCashAmount" inputMode="decimal" value={openingCashAmount} onChange={(event) => setOpeningCashAmount(event.target.value)} disabled={busy !== null} />
-                <button
-                  type="button"
-                  disabled={busy !== null || !shiftOpen || !state.custodyOperationsAuthorized || !Number.isFinite(Number(openingCashAmount)) || Number(openingCashAmount) < 0}
-                  onClick={() => void invoke("custody", () => bridge.openOrResumeCustody(createCorrelationId(), Number(openingCashAmount)))}
-                >
-                  Open Cash Custody
-                </button>
-              </div>
+              <CashDenominationGrid
+                purpose="opening"
+                catalogue={custodyDenominations}
+                disabled={busy !== null || !shiftOpen || !state.custodyOperationsAuthorized}
+                onConfirm={(denominations: CashCustodyDenominationLine[]) =>
+                  void invoke("custody", () => bridge.openOrResumeCustody(createCorrelationId(), denominations))}
+              />
             ) : (
               <div className="cash-custody-open">
                 <dl className="cash-custody-summary" aria-label="Open cash custody summary">
@@ -1059,17 +1055,13 @@ export function HumanSessionPanel({
                     <p>Cash is already recorded in physical custody. Fiscal recovery does not add another cash receipt.</p>
                   </div>
                 )}
-                <div className="cashier-closing-grid">
-                  <label htmlFor="closingCashAmount">Actual Closing Cash</label>
-                  <input id="closingCashAmount" inputMode="decimal" value={closingCashAmount} onChange={(event) => setClosingCashAmount(event.target.value)} disabled={busy !== null} />
-                  <button
-                    type="button"
-                    disabled={busy !== null || !state.custodyOperationsAuthorized || !Number.isFinite(closingAmount) || closingAmount < 0}
-                    onClick={() => void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), closingAmount))}
-                  >
-                    Close Cash Custody
-                  </button>
-                </div>
+                <CashDenominationGrid
+                  purpose="closing"
+                  catalogue={custodyDenominations}
+                  disabled={busy !== null || !state.custodyOperationsAuthorized}
+                  onConfirm={(denominations: CashCustodyDenominationLine[]) =>
+                    void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), denominations))}
+                />
               </div>
             )}
           </section>
@@ -1131,6 +1123,34 @@ function CashCustodyCloseResult({
         <div><dt>Status</dt><dd>{session.status.toUpperCase()}</dd></div>
         <div><dt>Unresolved at close</dt><dd>{session.unresolvedSubmissionCountAtClose ?? summary.submissions.unresolvedSubmissionCount}</dd></div>
       </dl>
+      <CustodyDenominationEvidence label="Opening denomination breakdown" entries={session.openingDenominations} />
+      <CustodyDenominationEvidence label="Closing denomination breakdown" entries={session.closingDenominations} />
+    </section>
+  );
+}
+
+function CustodyDenominationEvidence({
+  label,
+  entries,
+}: {
+  label: string;
+  entries: CashCustodySummary["session"]["openingDenominations"];
+}) {
+  return (
+    <section className="custody-denomination-evidence" aria-label={label}>
+      <h4>{label}</h4>
+      {!entries || entries.length === 0 ? (
+        <p>{"Legacy record \u2014 denomination breakdown unavailable"}</p>
+      ) : (
+        <dl>
+          {entries.map((entry) => (
+            <div key={entry.denominationCode}>
+              <dt>{entry.denominationCode}</dt>
+              <dd>{entry.quantity} x {formatCurrencyFromMajor(entry.denominationValueMinorUnits / 100)} = {formatCurrencyFromMajor(entry.calculatedAmountMinorUnits / 100)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }

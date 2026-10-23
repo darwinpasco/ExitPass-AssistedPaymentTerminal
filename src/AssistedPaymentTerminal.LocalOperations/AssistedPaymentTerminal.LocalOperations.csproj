@@ -6,4 +6,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="CashCustodyDenominations.json" />
+  </ItemGroup>
 </Project>

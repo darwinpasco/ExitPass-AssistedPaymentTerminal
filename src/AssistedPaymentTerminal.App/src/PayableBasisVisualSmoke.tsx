@@ -16,6 +16,7 @@ import type {
   RecordCashReceivedPayload,
   StartTenderPayload,
 } from "./localJournalBridge";
+import { denominationTotalMinorUnits } from "./cashCustodyDenominations";
 
 export type PayableBasisVisualSmokeScenarioId =
   | "ticket-ready"
@@ -346,7 +347,7 @@ export function createPayableBasisVisualSmokeBridge(storageKey = "exitpass-apt-p
         siteId: payload.siteId,
         siteGroupId: payload.siteGroupId,
         posServerId: payload.posServerId,
-        openingCashAmount: payload.openingCashAmount,
+        openingCashAmount: denominationTotalMinorUnits(payload.denominations) / 100,
         openedAt: nowIso(),
         status: "Open",
       };

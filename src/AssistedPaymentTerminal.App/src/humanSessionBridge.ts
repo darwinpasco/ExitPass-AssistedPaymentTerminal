@@ -1,5 +1,11 @@
 import type { CashCustodySessionSnapshot, CashierShiftSnapshot } from "./localJournalBridge";
 import type { AptConfig } from "./config";
+import {
+  CASH_CUSTODY_DENOMINATIONS,
+  denominationTotalMinorUnits,
+  type CashCustodyDenominationDefinition,
+  type CashCustodyDenominationLine,
+} from "./cashCustodyDenominations";
 
 export type CashCustodySubmissionSummary = {
   physicalCashReceiptCount: number;
@@ -41,6 +47,7 @@ export type HumanSessionState = {
   activeCashCustodySummary?: CashCustodySummary | null;
   latestClosedCashCustody?: CashCustodySummary | null;
   closedCashCustodyHistory?: CashCustodySummary[] | null;
+  cashCustodyDenominations?: CashCustodyDenominationDefinition[] | null;
 };
 
 export type HumanSessionBridgeResult =
@@ -54,8 +61,8 @@ export interface HumanSessionBridge {
   reauthenticate(correlationId: string): Promise<HumanSessionBridgeResult>;
   logout(correlationId: string): Promise<HumanSessionBridgeResult>;
   openOrResumeShift(correlationId: string): Promise<HumanSessionBridgeResult>;
-  openOrResumeCustody(correlationId: string, openingCashAmount: number): Promise<HumanSessionBridgeResult>;
-  closeOwnCustody(correlationId: string, closingCashAmount: number): Promise<HumanSessionBridgeResult>;
+  openOrResumeCustody(correlationId: string, denominations: CashCustodyDenominationLine[]): Promise<HumanSessionBridgeResult>;
+  closeOwnCustody(correlationId: string, denominations: CashCustodyDenominationLine[]): Promise<HumanSessionBridgeResult>;
   closeOwnShift(correlationId: string): Promise<HumanSessionBridgeResult>;
   authorizeCash(correlationId: string): Promise<HumanSessionBridgeResult>;
 }
@@ -68,8 +75,8 @@ export function createWebViewHumanSessionBridge(): HumanSessionBridge {
     reauthenticate: (correlationId) => send("humanSession.reauthenticate", correlationId, {}),
     logout: (correlationId) => send("humanSession.logout", correlationId, {}),
     openOrResumeShift: (correlationId) => send("humanSession.openOrResumeShift", correlationId, {}),
-    openOrResumeCustody: (correlationId, openingCashAmount) => send("humanSession.openOrResumeCustody", correlationId, { openingCashAmount }),
-    closeOwnCustody: (correlationId, closingCashAmount) => send("humanSession.closeOwnCustody", correlationId, { closingCashAmount }),
+    openOrResumeCustody: (correlationId, denominations) => send("humanSession.openOrResumeCustody", correlationId, { denominations }),
+    closeOwnCustody: (correlationId, denominations) => send("humanSession.closeOwnCustody", correlationId, { denominations }),
     closeOwnShift: (correlationId) => send("humanSession.closeOwnShift", correlationId, {}),
     authorizeCash: (correlationId) => send("humanSession.authorizeCash", correlationId, {}),
   };
@@ -99,6 +106,7 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
     retryable: false,
     activeShift: null,
     activeCashCustodySession: null,
+    cashCustodyDenominations: CASH_CUSTODY_DENOMINATIONS,
   };
   const success = (command: string, correlationId: string): HumanSessionBridgeResult => ({ ok: true, command, correlationId, payload: state });
   return {
@@ -124,8 +132,13 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       };
       return success("humanSession.openOrResumeShift", id);
     },
-    openOrResumeCustody: async (id, openingCashAmount) => {
+    openOrResumeCustody: async (id, denominations) => {
       const shift = state.activeShift ?? developmentShift(config, state.userReference ?? "cashier-development-fixture");
+      const openingCashAmount = denominationTotalMinorUnits(denominations) / 100;
+      const openingDenominations = denominations.map((line) => ({
+        ...line,
+        calculatedAmountMinorUnits: line.denominationValueMinorUnits * line.quantity,
+      }));
       state = {
         ...state,
         activeShift: shift,
@@ -139,6 +152,8 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
           siteGroupId: config.siteGroupId,
           posServerId: config.posServerId,
           openingCashAmount,
+          openingDenominations,
+          closingDenominations: [],
           openedAt: now.toISOString(),
           status: "Open",
         },
@@ -153,6 +168,8 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
             siteGroupId: config.siteGroupId,
             posServerId: config.posServerId,
             openingCashAmount,
+            openingDenominations,
+            closingDenominations: [],
             openedAt: now.toISOString(),
             status: "Open",
           },
@@ -161,10 +178,15 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       };
       return success("humanSession.openOrResumeCustody", id);
     },
-    closeOwnCustody: async (id, closingCashAmount) => {
+    closeOwnCustody: async (id, denominations) => {
       const active = state.activeCashCustodySession;
       const summary = state.activeCashCustodySummary;
       const expectedCash = (active?.openingCashAmount ?? 0);
+      const closingCashAmount = denominationTotalMinorUnits(denominations) / 100;
+      const closingDenominations = denominations.map((line) => ({
+        ...line,
+        calculatedAmountMinorUnits: line.denominationValueMinorUnits * line.quantity,
+      }));
       const closed: CashCustodySummary | null = active ? {
         session: {
           ...active,
@@ -172,6 +194,7 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
           expectedClosingCashAmount: expectedCash,
           closingCashAmount,
           varianceAmount: closingCashAmount - expectedCash,
+          closingDenominations,
           closedAt: new Date().toISOString(),
           unresolvedSubmissionCountAtClose: summary?.submissions.unresolvedSubmissionCount ?? 0,
         },

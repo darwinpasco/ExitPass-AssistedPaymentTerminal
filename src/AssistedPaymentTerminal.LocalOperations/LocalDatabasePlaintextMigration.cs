@@ -171,6 +171,11 @@ public sealed class LocalDatabasePlaintextMigrationService
         "terminal_cash_receipt_retrieval_attempts"
     ];
 
+    private static readonly string[] OptionalEvidenceTables =
+    [
+        "cash_custody_denomination_entries"
+    ];
+
     private readonly LocalDatabasePlaintextMigrationOptions _options;
     private readonly ILocalDatabaseKeyProtector _keyProtector;
     private readonly ILocalDatabasePlaintextMigrationFaultInjector _faultInjector;
@@ -850,7 +855,8 @@ public sealed class LocalDatabasePlaintextMigrationService
                 return SourceSchemaVariant.Current;
             }
 
-            var fingerprint = await ComputeStructuralSchemaFingerprintAsync(connection, tables, cancellationToken).ConfigureAwait(false);
+            var fingerprintTables = tables.Except(OptionalEvidenceTables, StringComparer.OrdinalIgnoreCase);
+            var fingerprint = await ComputeStructuralSchemaFingerprintAsync(connection, fingerprintTables, cancellationToken).ConfigureAwait(false);
             if (string.Equals(fingerprint, LegacyReceiptRetrievalSchemaFingerprint, StringComparison.Ordinal))
             {
                 return SourceSchemaVariant.LegacyReceiptRetrieval;
@@ -1141,6 +1147,13 @@ public sealed class LocalDatabasePlaintextMigrationService
             result[table] = tables.Contains(table)
                 ? Convert.ToInt64(await ExecuteScalarAsync(connection, $"SELECT COUNT(*) FROM {table};", cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture)
                 : 0;
+        }
+
+        foreach (var table in OptionalEvidenceTables.Where(tables.Contains))
+        {
+            result[table] = Convert.ToInt64(
+                await ExecuteScalarAsync(connection, $"SELECT COUNT(*) FROM {table};", cancellationToken).ConfigureAwait(false),
+                CultureInfo.InvariantCulture);
         }
 
         return result;

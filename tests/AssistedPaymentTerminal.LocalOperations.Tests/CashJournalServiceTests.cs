@@ -62,7 +62,7 @@ public sealed class CashJournalServiceTests
         Assert.True(first.IsSuccess);
         Assert.True(replay.IsSuccess);
         Assert.False(conflict.IsSuccess);
-        Assert.Equal(CashJournalErrorCode.InvalidStateTransition, conflict.Error!.Code);
+        Assert.Equal(CashJournalErrorCode.ConflictingDenominationEvidence, conflict.Error!.Code);
         Assert.Equal(1_000m, replay.Value!.ClosingCashAmount);
     }
 
@@ -133,7 +133,12 @@ public sealed class CashJournalServiceTests
         Assert.Equal(actualCash, closed.Value.ClosingCashAmount);
         Assert.Equal(expectedVariance, closed.Value.VarianceAmount);
         Assert.Equal(1, closed.Value.UnresolvedSubmissionCountAtClose);
-        Assert.Equal(closed.Value, replay.Value);
+        Assert.Equal(closed.Value.Id, replay.Value!.Id);
+        Assert.Equal(closed.Value.ClosedAt, replay.Value.ClosedAt);
+        Assert.Equal(closed.Value.ExpectedClosingCashAmount, replay.Value.ExpectedClosingCashAmount);
+        Assert.Equal(closed.Value.ClosingCashAmount, replay.Value.ClosingCashAmount);
+        Assert.Equal(closed.Value.VarianceAmount, replay.Value.VarianceAmount);
+        Assert.Equal(closed.Value.ClosingDenominations, replay.Value.ClosingDenominations);
 
         await SetPaymentStatusAsync(database, tender.Id, TerminalCashPaymentCommandStatus.Confirmed);
         await AddRecordedFiscalCommandAsync(database, tender.Id);

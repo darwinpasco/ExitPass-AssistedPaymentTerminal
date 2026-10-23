@@ -76,7 +76,7 @@ public sealed class LocalJournalBridgeHandlerTests
             SiteId,
             SiteGroupId,
             "pos-bridge",
-            0m,
+            TestCashCustodyDenominations.ForAmount(0m),
             OpenedAt: DateTimeOffset.Parse("2026-07-15T00:01:00Z")));
         var handler = database.CreateHandler();
 
@@ -352,7 +352,7 @@ public sealed class LocalJournalBridgeHandlerTests
             siteId = SiteId,
             siteGroupId = SiteGroupId,
             posServerId = "pos-bridge",
-            openingCashAmount = 0m
+            denominations = TestCashCustodyDenominations.ForAmount(0m)
         });
 
         Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
@@ -419,7 +419,7 @@ public sealed class LocalJournalBridgeHandlerTests
                 siteId = SiteId,
                 siteGroupId = SiteGroupId,
                 posServerId = "pos-bridge",
-                openingCashAmount = 500m
+                denominations = TestCashCustodyDenominations.ForAmount(500m)
             });
 
         Assert.True(response.RootElement.GetProperty("ok").GetBoolean());

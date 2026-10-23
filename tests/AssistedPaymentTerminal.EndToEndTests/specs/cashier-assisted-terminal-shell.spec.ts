@@ -24,7 +24,9 @@ test("starts under CASHIER_ASSISTED_TERMINAL and resolves active and expired tic
   await expect(page.getByTestId("cashier-header-shift")).toHaveText("CLOSED");
   await expect(page.getByTestId("cashier-header-custody")).toHaveText("CLOSED");
   await page.getByRole("button", { name: "Open Shift" }).click();
-  await page.getByRole("button", { name: "Open Cash Custody" }).click();
+  await page.getByRole("button", { name: "Review opening count" }).click();
+  await expect(page.getByRole("status")).toContainText("₱0.00");
+  await page.getByRole("button", { name: "Confirm opening" }).click();
   await expect(page.getByTestId("cashier-header-shift")).toHaveText("OPEN");
   await expect(page.getByTestId("cashier-header-custody")).toHaveText("OPEN");
   await expect(page.getByRole("button", { name: "Cashier Session" })).toHaveAttribute("aria-expanded", "false");

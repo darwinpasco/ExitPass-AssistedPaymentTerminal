@@ -332,7 +332,7 @@ internal sealed class SubmissionBridgeTestDatabase : IDisposable
             SiteId: "11111111-1111-4111-8111-111111111111",
             SiteGroupId: "22222222-2222-4222-8222-222222222222",
             PosServerId: "pos-bridge",
-            OpeningCashAmount: 500m));
+            Denominations: TestCashCustodyDenominations.ForAmount(500m)));
         Assert.True(session.IsSuccess);
 
         var tender = await service.StartCashTenderAsync(new StartCashTenderRequest(

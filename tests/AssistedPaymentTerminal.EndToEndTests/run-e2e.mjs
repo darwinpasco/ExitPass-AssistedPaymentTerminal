@@ -72,7 +72,7 @@ async function runActiveAndExpiredWorkflow() {
   await expect(page.getByTestId("cashier-header-shift")).toHaveText("CLOSED");
   await expect(page.getByTestId("cashier-header-custody")).toHaveText("CLOSED");
   await page.getByRole("button", { name: "Open Shift" }).click();
-  await page.getByRole("button", { name: "Open Cash Custody" }).click();
+  await openZeroCashCustody(page);
   await expect(page.getByTestId("cashier-header-shift")).toHaveText("OPEN");
   await expect(page.getByTestId("cashier-header-custody")).toHaveText("OPEN");
   await expect(page.getByRole("button", { name: "Cashier Session" })).toHaveAttribute("aria-expanded", "false");
@@ -122,15 +122,16 @@ async function runCashCustodyVisibilityWorkflow() {
   await page.goto(fixtureUrl);
 
   await page.getByRole("button", { name: "Open Shift" }).click();
-  await page.getByRole("button", { name: "Open Cash Custody" }).click();
+  await openZeroCashCustody(page);
   await page.getByRole("button", { name: "Cashier Session" }).click();
 
   const openSummary = page.getByLabel("Open cash custody summary");
   await expect(openSummary).toContainText("Physical cash receipts0");
   await expect(openSummary.getByText("Calculated on close")).toHaveCount(2);
 
-  await page.getByLabel("Actual Closing Cash").fill("0.00");
-  await page.getByRole("button", { name: "Close Cash Custody" }).click();
+  await page.getByRole("button", { name: "Review actual count" }).click();
+  await expect(page.getByRole("status")).toContainText("₱0.00");
+  await page.getByRole("button", { name: "Confirm and close" }).click();
 
   const closeResult = page.getByLabel("Committed cash custody close result");
   await expect(closeResult).toContainText("Closing Result");
@@ -140,6 +141,14 @@ async function runCashCustodyVisibilityWorkflow() {
   await expect(page.getByLabel("Closed cash custody history")).toBeVisible();
   await expect(page.getByRole("button", { name: /^CUST-/ })).toBeVisible();
   await page.close();
+}
+
+async function openZeroCashCustody(page) {
+  await expect(page.getByLabel("PHP 200 quantity")).toHaveValue("0");
+  await expect(page.getByLabel("PHP 0.01 quantity")).toHaveValue("0");
+  await page.getByRole("button", { name: "Review opening count" }).click();
+  await expect(page.getByRole("status")).toContainText("₱0.00");
+  await page.getByRole("button", { name: "Confirm opening" }).click();
 }
 
 async function expectActivePayableBasisReady(page) {
