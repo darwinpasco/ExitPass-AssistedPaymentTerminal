@@ -13,7 +13,7 @@ if ($hits) {
 
 $contentHits = Get-ChildItem -Path . -Recurse -File -Include *.json,*.ts,*.tsx,*.cs,*.config,*.yml,*.yaml,*.md,*.ps1 -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch "\\node_modules\\" -and $_.FullName -notmatch "\\.git\\" -and $_.Name -ne "check-no-secrets.ps1" } |
-    Select-String -Pattern "BEGIN (RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY|password\s*=|client_secret|api[_-]?key\s*[:=]" -CaseSensitive:$false
+    Select-String -Pattern "BEGIN (RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY|password\s*=(?!>)|client_secret|api[_-]?key\s*[:=]" -CaseSensitive:$false
 
 if ($contentHits) {
     $contentHits | ForEach-Object { Write-Error "Potential secret pattern found: $($_.Path):$($_.LineNumber)" }
