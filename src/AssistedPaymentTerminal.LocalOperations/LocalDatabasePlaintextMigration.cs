@@ -173,7 +173,10 @@ public sealed class LocalDatabasePlaintextMigrationService
 
     private static readonly string[] OptionalEvidenceTables =
     [
-        "cash_custody_denomination_entries"
+        "cash_custody_denomination_entries",
+        "cash_custody_movements",
+        "cash_custody_movement_denominations",
+        "cash_custody_movement_events"
     ];
 
     private readonly LocalDatabasePlaintextMigrationOptions _options;

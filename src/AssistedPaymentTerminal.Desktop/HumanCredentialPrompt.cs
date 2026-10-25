@@ -8,7 +8,8 @@ public enum HumanCredentialOperation
 {
     Login,
     Reauthenticate,
-    ChangePassword
+    ChangePassword,
+    MovementCounterpartyAuthentication
 }
 
 public sealed record HumanPasswordChangeCredentials(
@@ -318,7 +319,12 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
         var newPasswordBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 12), MinWidth = 320 };
         var confirmPasswordBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 12), MinWidth = 320 };
         var totpBox = new PasswordBox { Margin = new Thickness(0, 6, 0, 16), MinWidth = 160, MaxLength = 12 };
-        AutomationProperties.SetName(passwordBox, request.Operation == HumanCredentialOperation.ChangePassword ? "Current temporary password" : "Cashier password");
+        AutomationProperties.SetName(passwordBox, request.Operation switch
+        {
+            HumanCredentialOperation.ChangePassword => "Current temporary password",
+            HumanCredentialOperation.MovementCounterpartyAuthentication => "Authorized receiver password",
+            _ => "Cashier password"
+        });
         AutomationProperties.SetName(newPasswordBox, "New password");
         AutomationProperties.SetName(confirmPasswordBox, "Confirm new password");
         AutomationProperties.SetName(totpBox, "Authenticator code");
@@ -328,17 +334,23 @@ public sealed class WpfHumanCredentialPrompt : IHumanCredentialPrompt
             ? "Change password and sign in"
             : request.Operation == HumanCredentialOperation.Login
                 ? "Sign in"
-                : "Reauthenticate";
+                : request.Operation == HumanCredentialOperation.MovementCounterpartyAuthentication
+                    ? "Authenticate and confirm"
+                    : "Reauthenticate";
         var promptText = isPasswordChange
             ? "Change the temporary password before cashier authority can be established. Central PMS validates the password policy and authenticator code."
             : request.Operation == HumanCredentialOperation.Login
                 ? "Enter the cashier password to sign in to Central PMS."
-                : "Enter the cashier password for fresh Central PMS authentication.";
+                : request.Operation == HumanCredentialOperation.MovementCounterpartyAuthentication
+                    ? "The authorized counterparty must enter their own password to confirm this physical cash handover."
+                    : "Enter the cashier password for fresh Central PMS authentication.";
         var dialogTitle = isPasswordChange
             ? "Change temporary password"
             : request.Operation == HumanCredentialOperation.Login
                 ? "Cashier sign in"
-                : "Fresh authentication";
+                : request.Operation == HumanCredentialOperation.MovementCounterpartyAuthentication
+                    ? "Cash movement acknowledgment"
+                    : "Fresh authentication";
 
         var acceptButton = new Button
         {

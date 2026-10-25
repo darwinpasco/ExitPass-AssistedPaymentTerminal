@@ -32,10 +32,11 @@ try {
   await runUnauthenticatedStartup();
   await runActiveAndExpiredWorkflow();
   await runCashCustodyVisibilityWorkflow();
+  await runCashCustodyMovementWorkflow();
   await runNoActiveShiftWorkflow();
   await runUnsupportedProfileRefusal();
   await runServiceUnavailableFailure();
-  console.log("Playwright E2E passed: 7 scenarios");
+  console.log("Playwright E2E passed: 8 scenarios");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
@@ -140,6 +141,34 @@ async function runCashCustodyVisibilityWorkflow() {
   await expect(closeResult).toContainText("Cash Variance");
   await expect(page.getByLabel("Closed cash custody history")).toBeVisible();
   await expect(page.getByRole("button", { name: /^CUST-/ })).toBeVisible();
+  await page.close();
+}
+
+async function runCashCustodyMovementWorkflow() {
+  const page = await newPage({ activeShift: true, activeCustody: true });
+  await page.goto(fixtureUrl);
+
+  await page.getByRole("button", { name: "Open Shift" }).click();
+  await openZeroCashCustody(page);
+  await page.getByRole("button", { name: "Cashier Session" }).click();
+  const panel = page.getByLabel("Cash custody movements");
+
+  await panel.getByLabel("Authorized counterparty username").fill("receiver.fixture");
+  await panel.getByLabel("Handover or remittance reference").fill("DROP-E2E-001");
+  await panel.getByLabel("PHP 100 quantity").fill("1");
+  await panel.getByRole("button", { name: "Review movement count" }).click();
+  await expect(panel.getByRole("status")).toContainText("100.00");
+  await panel.getByRole("button", { name: "Confirm movement count" }).click();
+
+  await page.getByRole("button", { name: "Cashier Session" }).click();
+  await expect(page.getByText("1 movement awaiting acknowledgment")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review actual count" })).toBeDisabled();
+  await panel.getByRole("button", { name: "Receiver Acknowledgment" }).click();
+
+  await page.getByRole("button", { name: "Cashier Session" }).click();
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review actual count" })).toBeEnabled();
+  await expect(page.getByText("Available Cash")).toHaveCount(0);
   await page.close();
 }
 

@@ -86,6 +86,10 @@ export type CashCustodySessionSnapshot = {
   unresolvedSubmissionCountAtClose?: number | null;
   openingDenominations?: CashCustodyDenominationEvidence[] | null;
   closingDenominations?: CashCustodyDenominationEvidence[] | null;
+  completedMovementCountAtClose?: number | null;
+  completedCashInMinorUnitsAtClose?: number | null;
+  completedCashOutMinorUnitsAtClose?: number | null;
+  completedMovementReferencesAtClose?: string[] | null;
 };
 
 export type CashCustodyDenominationEvidence = CashCustodyDenominationLine & {

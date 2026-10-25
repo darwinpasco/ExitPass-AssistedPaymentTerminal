@@ -17,6 +17,7 @@ import type {
 import { isProjectedSessionResponse } from "./api/centralPmsClient";
 import { CashCapturePanel } from "./CashCapturePanel";
 import { CashDenominationGrid } from "./CashDenominationGrid";
+import { CashCustodyMovementPanel } from "./CashCustodyMovementPanel";
 import { CASH_CUSTODY_DENOMINATIONS, type CashCustodyDenominationLine } from "./cashCustodyDenominations";
 import { ReceiptVisualSmokeShell, shouldUseReceiptVisualSmoke } from "./ReceiptVisualSmoke";
 import {
@@ -945,7 +946,7 @@ export function HumanSessionPanel({
   const custodyOpen = state.activeCashCustodySession?.status === "Open";
   const [expanded, setExpanded] = useState(!shiftOpen || !custodyOpen);
 
-  async function invoke(name: string, action: () => Promise<HumanSessionBridgeResult>) {
+  async function invoke(name: string, action: () => Promise<HumanSessionBridgeResult>): Promise<HumanSessionBridgeResult> {
     setBusy(name);
     try {
       const result = await action();
@@ -967,12 +968,15 @@ export function HumanSessionPanel({
           retryable: false,
         });
       }
+      return result;
     } finally {
       setBusy(null);
     }
   }
 
   const activeSummary = state.activeCashCustodySummary?.submissions;
+  const pendingMovementCount = (state.activeCashCustodySummary?.movements ?? [])
+    .filter((movement) => movement.status === "PendingAcknowledgment").length;
   const custodyDenominations = state.cashCustodyDenominations ?? CASH_CUSTODY_DENOMINATIONS;
   const closedHistory = state.closedCashCustodyHistory ?? [];
   const selectedClosedCustody = closedHistory.find((item) => item.session.id === selectedClosedCustodyId)
@@ -1058,13 +1062,24 @@ export function HumanSessionPanel({
                 <CashDenominationGrid
                   purpose="closing"
                   catalogue={custodyDenominations}
-                  disabled={busy !== null || !state.custodyOperationsAuthorized}
+                  disabled={busy !== null || !state.custodyOperationsAuthorized || pendingMovementCount > 0}
                   onConfirm={(denominations: CashCustodyDenominationLine[]) =>
                     void invoke("close-custody", () => bridge.closeOwnCustody(createCorrelationId(), denominations))}
                 />
+                {pendingMovementCount > 0 && <p className="cash-error" role="alert">Resolve all pending cash movements before closing custody.</p>}
               </div>
             )}
           </section>
+
+          {custodyOpen && (
+            <CashCustodyMovementPanel
+              state={state}
+              bridge={bridge}
+              catalogue={custodyDenominations}
+              disabled={busy !== null || !state.custodyOperationsAuthorized}
+              invoke={invoke}
+            />
+          )}
 
           {selectedClosedCustody && (
             <CashCustodyCloseResult
@@ -1122,7 +1137,20 @@ function CashCustodyCloseResult({
         <div><dt>Closed At</dt><dd>{formatDate(session.closedAt)}</dd></div>
         <div><dt>Status</dt><dd>{session.status.toUpperCase()}</dd></div>
         <div><dt>Unresolved at close</dt><dd>{session.unresolvedSubmissionCountAtClose ?? summary.submissions.unresolvedSubmissionCount}</dd></div>
+        <div><dt>Completed movements</dt><dd>{session.completedMovementCountAtClose ?? 0}</dd></div>
+        <div><dt>Cash returned</dt><dd>{formatCurrencyFromMajor((session.completedCashInMinorUnitsAtClose ?? 0) / 100)}</dd></div>
+        <div><dt>Cash transferred out</dt><dd>{formatCurrencyFromMajor((session.completedCashOutMinorUnitsAtClose ?? 0) / 100)}</dd></div>
       </dl>
+      {(session.completedMovementReferencesAtClose?.length ?? 0) > 0 && (
+        <section className="custody-movement-evidence" aria-label="Completed cash movement references">
+          <h4>Completed cash movement references</h4>
+          <ul>
+            {session.completedMovementReferencesAtClose!.map((reference) => (
+              <li key={reference}>{movementReference(reference)}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       <CustodyDenominationEvidence label="Opening denomination breakdown" entries={session.openingDenominations} />
       <CustodyDenominationEvidence label="Closing denomination breakdown" entries={session.closingDenominations} />
     </section>
@@ -1196,6 +1224,10 @@ function receiptCountMessage(count: number): string {
 
 function cashCustodyReference(id: string): string {
   return `CUST-${id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+}
+
+function movementReference(id: string): string {
+  return `MOV-${id.replace(/-/g, "").slice(0, 12).toUpperCase()}`;
 }
 
 function formatCommittedCurrency(amount: number | null | undefined): string {

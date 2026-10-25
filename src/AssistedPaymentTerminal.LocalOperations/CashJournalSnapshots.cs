@@ -53,7 +53,11 @@ public sealed record CashCustodySessionSnapshot(
     string? ClosedByAuthenticatedCashierSessionReference = null,
     int? UnresolvedSubmissionCountAtClose = null,
     IReadOnlyList<CashCustodyDenominationEntrySnapshot>? OpeningDenominations = null,
-    IReadOnlyList<CashCustodyDenominationEntrySnapshot>? ClosingDenominations = null)
+    IReadOnlyList<CashCustodyDenominationEntrySnapshot>? ClosingDenominations = null,
+    int? CompletedMovementCountAtClose = null,
+    long? CompletedCashInMinorUnitsAtClose = null,
+    long? CompletedCashOutMinorUnitsAtClose = null,
+    IReadOnlyList<Guid>? CompletedMovementReferencesAtClose = null)
 {
     public static CashCustodySessionSnapshot FromEntity(CashCustodySession session)
     {
@@ -88,7 +92,13 @@ public sealed record CashCustodySessionSnapshot(
             session.ClosedByAuthenticatedCashierSessionReference,
             session.UnresolvedSubmissionCountAtClose,
             openingDenominations,
-            closingDenominations);
+            closingDenominations,
+            session.CompletedMovementCountAtClose,
+            session.CompletedCashInMinorUnitsAtClose,
+            session.CompletedCashOutMinorUnitsAtClose,
+            string.IsNullOrWhiteSpace(session.CompletedMovementReferencesAtCloseJson)
+                ? Array.Empty<Guid>()
+                : System.Text.Json.JsonSerializer.Deserialize<Guid[]>(session.CompletedMovementReferencesAtCloseJson) ?? Array.Empty<Guid>());
     }
 }
 
@@ -117,7 +127,38 @@ public sealed record CashCustodySubmissionSummarySnapshot(
 
 public sealed record CashCustodySummarySnapshot(
     CashCustodySessionSnapshot Session,
-    CashCustodySubmissionSummarySnapshot Submissions);
+    CashCustodySubmissionSummarySnapshot Submissions,
+    IReadOnlyList<CashCustodyMovementSnapshot>? Movements = null);
+
+public sealed record CashCustodyMovementDenominationSnapshot(
+    string DenominationCode,
+    int DenominationValueMinorUnits,
+    int Quantity,
+    long CalculatedAmountMinorUnits);
+
+public sealed record CashCustodyMovementEventSnapshot(
+    Guid Id,
+    CashCustodyMovementEventType EventType,
+    string AuthorizedActorId,
+    string ActorSessionReference,
+    string CorrelationId,
+    string? ReasonCode,
+    string? ControlledMetadata,
+    DateTimeOffset OccurredAt);
+
+public sealed record CashCustodyMovementSnapshot(
+    Guid Id,
+    Guid CashCustodySessionId,
+    CashCustodyMovementType MovementType,
+    CashCustodyMovementStatus Status,
+    long AmountMinorUnits,
+    Guid? OriginalMovementId,
+    string InitiatingCashierId,
+    string IntendedCounterpartyReference,
+    string ExternalHandoverReference,
+    DateTimeOffset CreatedAt,
+    IReadOnlyList<CashCustodyMovementDenominationSnapshot> Denominations,
+    IReadOnlyList<CashCustodyMovementEventSnapshot> Events);
 
 public sealed record CashCustodyOverviewSnapshot(
     CashCustodySummarySnapshot? ActiveSession,

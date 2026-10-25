@@ -30,6 +30,14 @@ public sealed class CashCustodySession
 
     public int? UnresolvedSubmissionCountAtClose { get; set; }
 
+    public int? CompletedMovementCountAtClose { get; set; }
+
+    public long? CompletedCashInMinorUnitsAtClose { get; set; }
+
+    public long? CompletedCashOutMinorUnitsAtClose { get; set; }
+
+    public string? CompletedMovementReferencesAtCloseJson { get; set; }
+
     public DateTimeOffset? ClosedAt { get; set; }
 
     public string? ClosedByAuthenticatedCashierSessionReference { get; set; }
@@ -39,4 +47,6 @@ public sealed class CashCustodySession
     public ICollection<CashTender> CashTenders { get; } = new List<CashTender>();
 
     public ICollection<CashCustodyDenominationEntry> DenominationEntries { get; } = new List<CashCustodyDenominationEntry>();
+
+    public ICollection<CashCustodyMovement> Movements { get; } = new List<CashCustodyMovement>();
 }

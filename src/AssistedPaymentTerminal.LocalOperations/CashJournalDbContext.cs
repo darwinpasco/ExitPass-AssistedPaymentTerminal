@@ -17,6 +17,12 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
 
     public DbSet<CashCustodyDenominationEntry> CashCustodyDenominationEntries => Set<CashCustodyDenominationEntry>();
 
+    public DbSet<CashCustodyMovement> CashCustodyMovements => Set<CashCustodyMovement>();
+
+    public DbSet<CashCustodyMovementDenomination> CashCustodyMovementDenominations => Set<CashCustodyMovementDenomination>();
+
+    public DbSet<CashCustodyMovementEvent> CashCustodyMovementEvents => Set<CashCustodyMovementEvent>();
+
     public DbSet<TerminalCashPaymentOutboxCommand> TerminalCashPaymentOutboxCommands => Set<TerminalCashPaymentOutboxCommand>();
 
     public DbSet<TerminalCashPaymentSubmissionAttempt> TerminalCashPaymentSubmissionAttempts => Set<TerminalCashPaymentSubmissionAttempt>();
@@ -78,6 +84,10 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
             entity.Property(session => session.ClosingCashAmount).HasPrecision(18, 2);
             entity.Property(session => session.VarianceAmount).HasPrecision(18, 2);
             entity.Property(session => session.UnresolvedSubmissionCountAtClose);
+            entity.Property(session => session.CompletedMovementCountAtClose);
+            entity.Property(session => session.CompletedCashInMinorUnitsAtClose);
+            entity.Property(session => session.CompletedCashOutMinorUnitsAtClose);
+            entity.Property(session => session.CompletedMovementReferencesAtCloseJson);
             entity.Property(session => session.ClosedAt).HasConversion(nullableDateTimeOffsetConverter);
             entity.Property(session => session.ClosedByAuthenticatedCashierSessionReference).HasMaxLength(256);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
@@ -115,6 +125,81 @@ public sealed class CashJournalDbContext(DbContextOptions<CashJournalDbContext> 
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(entry => new { entry.CashCustodySessionId, entry.CaptureType, entry.DenominationCode })
                 .IsUnique();
+        });
+
+        modelBuilder.Entity<CashCustodyMovement>(entity =>
+        {
+            entity.ToTable("cash_custody_movements", table =>
+            {
+                table.UseSqlReturningClause(false);
+                table.HasCheckConstraint(
+                    "CK_cash_custody_movements_MovementType",
+                    "MovementType IN ('SafeDrop', 'DirectRemittance', 'CashReturn')");
+                table.HasCheckConstraint("CK_cash_custody_movements_Amount", "AmountMinorUnits > 0");
+                table.HasCheckConstraint(
+                    "CK_cash_custody_movements_OriginalReference",
+                    "(MovementType = 'CashReturn' AND OriginalMovementId IS NOT NULL) OR (MovementType <> 'CashReturn' AND OriginalMovementId IS NULL)");
+            });
+            entity.HasKey(movement => movement.Id);
+            entity.Property(movement => movement.MovementType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(movement => movement.InitiatingCashierId).HasMaxLength(128).IsRequired();
+            entity.Property(movement => movement.InitiatingCashierSessionReference).HasMaxLength(256).IsRequired();
+            entity.Property(movement => movement.IntendedCounterpartyReference).HasMaxLength(256).IsRequired();
+            entity.Property(movement => movement.ExternalHandoverReference).HasMaxLength(256).IsRequired();
+            entity.Property(movement => movement.IdempotencyKey).HasMaxLength(256).IsRequired();
+            entity.Property(movement => movement.CanonicalRequestPayloadHash).HasMaxLength(128).IsRequired();
+            entity.Property(movement => movement.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(movement => movement.CashCustodySession)
+                .WithMany(session => session.Movements)
+                .HasForeignKey(movement => movement.CashCustodySessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(movement => movement.OriginalMovement)
+                .WithMany(movement => movement.Returns)
+                .HasForeignKey(movement => movement.OriginalMovementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(movement => movement.IdempotencyKey).IsUnique();
+            entity.HasIndex(movement => new { movement.CashCustodySessionId, movement.CreatedAt });
+        });
+
+        modelBuilder.Entity<CashCustodyMovementDenomination>(entity =>
+        {
+            entity.ToTable("cash_custody_movement_denominations", table =>
+            {
+                table.UseSqlReturningClause(false);
+                table.HasCheckConstraint("CK_cash_custody_movement_denominations_Value", "DenominationValueMinorUnits > 0");
+                table.HasCheckConstraint("CK_cash_custody_movement_denominations_Quantity", "Quantity >= 0");
+                table.HasCheckConstraint(
+                    "CK_cash_custody_movement_denominations_Amount",
+                    "CalculatedAmountMinorUnits = DenominationValueMinorUnits * Quantity");
+            });
+            entity.HasKey(denomination => denomination.Id);
+            entity.Property(denomination => denomination.DenominationCode).HasMaxLength(32).IsRequired();
+            entity.Property(denomination => denomination.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(denomination => denomination.Movement)
+                .WithMany(movement => movement.Denominations)
+                .HasForeignKey(denomination => denomination.MovementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(denomination => new { denomination.MovementId, denomination.DenominationCode }).IsUnique();
+        });
+
+        modelBuilder.Entity<CashCustodyMovementEvent>(entity =>
+        {
+            entity.ToTable("cash_custody_movement_events");
+            entity.HasKey(movementEvent => movementEvent.Id);
+            entity.Property(movementEvent => movementEvent.EventType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(movementEvent => movementEvent.AuthorizedActorId).HasMaxLength(128).IsRequired();
+            entity.Property(movementEvent => movementEvent.ActorSessionReference).HasMaxLength(256).IsRequired();
+            entity.Property(movementEvent => movementEvent.CorrelationId).HasMaxLength(128).IsRequired();
+            entity.Property(movementEvent => movementEvent.IdempotencyKey).HasMaxLength(256).IsRequired();
+            entity.Property(movementEvent => movementEvent.ReasonCode).HasMaxLength(128);
+            entity.Property(movementEvent => movementEvent.ControlledMetadata).HasMaxLength(2048);
+            entity.Property(movementEvent => movementEvent.OccurredAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasOne(movementEvent => movementEvent.Movement)
+                .WithMany(movement => movement.Events)
+                .HasForeignKey(movementEvent => movementEvent.MovementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(movementEvent => movementEvent.IdempotencyKey).IsUnique();
+            entity.HasIndex(movementEvent => new { movementEvent.MovementId, movementEvent.OccurredAt });
         });
 
         modelBuilder.Entity<CashTender>(entity =>

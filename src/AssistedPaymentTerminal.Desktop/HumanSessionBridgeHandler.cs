@@ -18,6 +18,10 @@ public static class HumanSessionBridgeCommand
     public const string CloseOwnCustody = "humanSession.closeOwnCustody";
     public const string CloseOwnShift = "humanSession.closeOwnShift";
     public const string AuthorizeCash = "humanSession.authorizeCash";
+    public const string InitiateCashCustodyMovement = "humanSession.initiateCashCustodyMovement";
+    public const string AcknowledgeCashCustodyMovement = "humanSession.acknowledgeCashCustodyMovement";
+    public const string CancelCashCustodyMovement = "humanSession.cancelCashCustodyMovement";
+    public const string AppendCashCustodyMovementNote = "humanSession.appendCashCustodyMovementNote";
 }
 
 public sealed class HumanSessionBridgeHandler
@@ -90,6 +94,10 @@ public sealed class HumanSessionBridgeHandler
                 HumanSessionBridgeCommand.CloseOwnCustody => await CloseCustodyAsync(request, cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.CloseOwnShift => await _runtime.CloseOwnShiftAsync(cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.AuthorizeCash => await AuthorizeCashAsync(cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.InitiateCashCustodyMovement => await InitiateCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.AcknowledgeCashCustodyMovement => await AcknowledgeCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.CancelCashCustodyMovement => await CancelCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.AppendCashCustodyMovementNote => await AppendCashCustodyMovementNoteAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => null
             };
             if (state is not null
@@ -307,6 +315,105 @@ public sealed class HumanSessionBridgeHandler
             : state with { CashOperationsAuthorized = false, ErrorCode = authorization.Code, SafeMessage = authorization.SafeMessage };
     }
 
+    private async Task<HumanSessionSafeState> InitiateCashCustodyMovementAsync(
+        HumanSessionBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(
+            request.Payload,
+            "movementType",
+            "originalMovementId",
+            "intendedCounterpartyReference",
+            "externalHandoverReference",
+            "idempotencyKey",
+            "denominations");
+        var payload = request.Payload.Deserialize<InitiateCashCustodyMovementPayload>(JsonOptions)
+            ?? throw new JsonException();
+        return await _runtime.InitiateCashCustodyMovementAsync(
+            payload.MovementType,
+            payload.OriginalMovementId,
+            payload.IntendedCounterpartyReference,
+            payload.ExternalHandoverReference,
+            payload.IdempotencyKey,
+            request.CorrelationId,
+            payload.Denominations,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HumanSessionSafeState> AcknowledgeCashCustodyMovementAsync(
+        HumanSessionBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(request.Payload, "movementId", "counterpartyUsername", "reject", "reasonCode", "idempotencyKey");
+        var payload = request.Payload.Deserialize<AcknowledgeCashCustodyMovementPayload>(JsonOptions)
+            ?? throw new JsonException();
+        if (string.IsNullOrWhiteSpace(payload.CounterpartyUsername))
+        {
+            throw new JsonException();
+        }
+
+        return await RunExplicitCredentialOperationAsync(
+            HumanCredentialOperation.MovementCounterpartyAuthentication,
+            payload.CounterpartyUsername.Trim(),
+            request.CorrelationId,
+            credential => _runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
+                payload.MovementId,
+                payload.CounterpartyUsername,
+                payload.Reject,
+                payload.ReasonCode,
+                payload.IdempotencyKey,
+                request.CorrelationId,
+                credential,
+                cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HumanSessionSafeState> CancelCashCustodyMovementAsync(
+        HumanSessionBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(request.Payload, "movementId", "reasonCode", "idempotencyKey");
+        var payload = request.Payload.Deserialize<CancelCashCustodyMovementPayload>(JsonOptions)
+            ?? throw new JsonException();
+        return await _runtime.CancelCashCustodyMovementAsync(
+            payload.MovementId,
+            payload.ReasonCode,
+            payload.IdempotencyKey,
+            request.CorrelationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HumanSessionSafeState> AppendCashCustodyMovementNoteAsync(
+        HumanSessionBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(
+            request.Payload,
+            "movementId",
+            "noteType",
+            "counterpartyUsername",
+            "reasonCode",
+            "controlledMetadata",
+            "idempotencyKey");
+        var payload = request.Payload.Deserialize<AppendCashCustodyMovementNotePayload>(JsonOptions)
+            ?? throw new JsonException();
+        return await RunExplicitCredentialOperationAsync(
+            HumanCredentialOperation.MovementCounterpartyAuthentication,
+            payload.CounterpartyUsername.Trim(),
+            request.CorrelationId,
+            credential => _runtime.AppendCashCustodyMovementNoteAsync(
+                payload.MovementId,
+                payload.NoteType,
+                payload.CounterpartyUsername,
+                payload.ReasonCode,
+                payload.ControlledMetadata,
+                payload.IdempotencyKey,
+                request.CorrelationId,
+                credential,
+                cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static string Success(string command, string correlationId, HumanSessionSafeState payload) =>
         JsonSerializer.Serialize(new { source = HumanSessionBridgeCommand.Source, ok = true, command, correlationId, payload }, JsonOptions);
 
@@ -318,6 +425,27 @@ public sealed record HumanSessionBridgeRequest(string Source, string Command, st
 public sealed record LoginPayload(string Username);
 public sealed record OpenCustodyPayload(IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
 public sealed record CloseCustodyPayload(IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
+public sealed record InitiateCashCustodyMovementPayload(
+    CashCustodyMovementType MovementType,
+    Guid? OriginalMovementId,
+    string IntendedCounterpartyReference,
+    string ExternalHandoverReference,
+    string IdempotencyKey,
+    IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
+public sealed record AcknowledgeCashCustodyMovementPayload(
+    Guid MovementId,
+    string CounterpartyUsername,
+    bool Reject,
+    string? ReasonCode,
+    string IdempotencyKey);
+public sealed record CancelCashCustodyMovementPayload(Guid MovementId, string ReasonCode, string IdempotencyKey);
+public sealed record AppendCashCustodyMovementNotePayload(
+    Guid MovementId,
+    CashCustodyMovementEventType NoteType,
+    string CounterpartyUsername,
+    string ReasonCode,
+    string ControlledMetadata,
+    string IdempotencyKey);
 
 public sealed class HumanCredentialPromptException : Exception
 {
