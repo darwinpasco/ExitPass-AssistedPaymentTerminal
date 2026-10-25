@@ -3,7 +3,7 @@ import type { CashCustodyDenominationDefinition, CashCustodyDenominationLine } f
 import { denominationTotalMinorUnits } from "./cashCustodyDenominations";
 
 type CashDenominationGridProps = {
-  purpose: "opening" | "closing";
+  purpose: "opening" | "closing" | "movement";
   catalogue: CashCustodyDenominationDefinition[];
   disabled: boolean;
   onConfirm: (lines: CashCustodyDenominationLine[]) => void;
@@ -30,10 +30,11 @@ export function CashDenominationGrid({ purpose, catalogue, disabled, onConfirm }
     return result;
   }, [catalogue, quantities]);
   const totalMinorUnits = lines ? denominationTotalMinorUnits(lines) : 0;
-  const label = purpose === "opening" ? "opening cash" : "actual cash";
+  const label = purpose === "opening" ? "opening cash" : purpose === "closing" ? "actual cash" : "movement cash";
+  const title = purpose === "opening" ? "Opening" : purpose === "closing" ? "Closing" : "Movement";
 
   return (
-    <div className="custody-denomination-capture" aria-label={`${purpose === "opening" ? "Opening" : "Closing"} denomination count`}>
+    <div className="custody-denomination-capture" aria-label={`${title} denomination count`}>
       <div className="denomination-grid-header" aria-hidden="true">
         <span>Denomination</span><span>Quantity</span><span>Subtotal</span>
       </div>
@@ -74,12 +75,12 @@ export function CashDenominationGrid({ purpose, catalogue, disabled, onConfirm }
           <>
             <button type="button" className="secondary-action" disabled={disabled} onClick={() => setReviewing(false)}>Edit count</button>
             <button type="button" disabled={disabled || !lines} onClick={() => lines && onConfirm(lines)}>
-              {purpose === "opening" ? "Confirm opening" : "Confirm and close"}
+              {purpose === "opening" ? "Confirm opening" : purpose === "closing" ? "Confirm and close" : "Confirm movement count"}
             </button>
           </>
         ) : (
           <button type="button" disabled={disabled || !lines || catalogue.length === 0} onClick={() => setReviewing(true)}>
-            {purpose === "opening" ? "Review opening count" : "Review actual count"}
+            {purpose === "opening" ? "Review opening count" : purpose === "closing" ? "Review actual count" : "Review movement count"}
           </button>
         )}
       </div>

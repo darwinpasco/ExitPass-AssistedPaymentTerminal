@@ -28,9 +28,13 @@ public sealed record HumanSessionRuntimeOptions(
     public const string ShiftOperatePermission = "cashier-shifts.operate";
     public const string CustodyOperatePermission = "cash-custody.operate";
     public const string CashReceivePermission = "terminal-cash.receive";
+    public const string MovementInitiatePermission = "cash-custody-movements.initiate";
+    public const string MovementAcknowledgePermission = "cash-custody-movements.acknowledge";
+    public const string MovementCorrectPermission = "cash-custody-movements.correct";
+    public const string MovementReadPermission = "cash-custody-movements.read";
 }
 
-public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRequestAuthority
+public sealed partial class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRequestAuthority
 {
     private readonly ICentralPmsHumanSessionClient _client;
     private readonly IHumanSessionCredentialStore _credentialStore;
@@ -792,9 +796,27 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
         var cashAuthorized = shiftAuthorized
             && custodyAuthorized
             && HasOperationalPermission(session, HumanSessionRuntimeOptions.CashReceivePermission);
+        var movementInitiationAuthorized = custodyAuthorized
+            && HasPermission(session, HumanSessionRuntimeOptions.MovementInitiatePermission);
+        var movementReadAuthorized = custodyAuthorized
+            && HasPermission(session, HumanSessionRuntimeOptions.MovementReadPermission);
+        var movementCorrectionAuthorized = custodyAuthorized
+            && HasPermission(session, HumanSessionRuntimeOptions.MovementCorrectPermission);
         var custodyOverview = custodyAuthorized
             ? await LoadOwnCashCustodyOverviewAsync(session.UserReference, cancellationToken).ConfigureAwait(false)
             : new CashCustodyOverviewSnapshot(null, Array.Empty<CashCustodySummarySnapshot>());
+        if (!movementReadAuthorized)
+        {
+            custodyOverview = custodyOverview with
+            {
+                ActiveSession = custodyOverview.ActiveSession is null
+                    ? null
+                    : custodyOverview.ActiveSession with { Movements = Array.Empty<CashCustodyMovementSnapshot>() },
+                ClosedSessions = custodyOverview.ClosedSessions
+                    .Select(summary => summary with { Movements = Array.Empty<CashCustodyMovementSnapshot>() })
+                    .ToArray()
+            };
+        }
         var permissionErrorCode = !shiftAuthorized
             ? "SHIFT_PERMISSION_DENIED"
             : !custodyAuthorized
@@ -843,7 +865,10 @@ public sealed class HumanSessionRuntime : IHumanCashAuthorization, ICentralPmsRe
             ActiveCashCustodySummary: custodyOverview.ActiveSession,
             LatestClosedCashCustody: custodyOverview.ClosedSessions.FirstOrDefault(),
             ClosedCashCustodyHistory: custodyOverview.ClosedSessions,
-            CashCustodyDenominations: CashCustodyDenominationCatalog.Supported);
+            CashCustodyDenominations: CashCustodyDenominationCatalog.Supported,
+            MovementInitiationAuthorized: movementInitiationAuthorized,
+            MovementReadAuthorized: movementReadAuthorized,
+            MovementCorrectionAuthorized: movementCorrectionAuthorized);
     }
 
     private Task<LocalOperationalStateSnapshot> LoadOwnOperationalStateAsync(Guid userReference, CancellationToken cancellationToken) =>
@@ -980,7 +1005,10 @@ public sealed record HumanSessionSafeState(
     CashCustodySummarySnapshot? ActiveCashCustodySummary = null,
     CashCustodySummarySnapshot? LatestClosedCashCustody = null,
     IReadOnlyList<CashCustodySummarySnapshot>? ClosedCashCustodyHistory = null,
-    IReadOnlyList<CashCustodyDenominationDefinition>? CashCustodyDenominations = null)
+    IReadOnlyList<CashCustodyDenominationDefinition>? CashCustodyDenominations = null,
+    bool MovementInitiationAuthorized = false,
+    bool MovementReadAuthorized = false,
+    bool MovementCorrectionAuthorized = false)
 {
     public static HumanSessionSafeState Unauthenticated(bool deviceTrusted, string message) =>
         new("UNAUTHENTICATED", false, deviceTrusted, false, false, false, null, null, null, null, null, false, false, null, null,

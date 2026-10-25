@@ -20,6 +20,44 @@ export type CashCustodySubmissionSummary = {
 export type CashCustodySummary = {
   session: CashCustodySessionSnapshot;
   submissions: CashCustodySubmissionSummary;
+  movements?: CashCustodyMovement[] | null;
+};
+
+export type CashCustodyMovementType = "SafeDrop" | "DirectRemittance" | "CashReturn";
+export type CashCustodyMovementStatus = "PendingAcknowledgment" | "Completed" | "Cancelled" | "Rejected";
+export type CashCustodyMovementEventType = "Initiated" | "Completed" | "Cancelled" | "Rejected" | "CorrectionNoted" | "DisputeRaised" | "DisputeResolved";
+
+export type CashCustodyMovement = {
+  id: string;
+  cashCustodySessionId: string;
+  movementType: CashCustodyMovementType;
+  status: CashCustodyMovementStatus;
+  amountMinorUnits: number;
+  originalMovementId?: string | null;
+  initiatingCashierId: string;
+  intendedCounterpartyReference: string;
+  externalHandoverReference: string;
+  createdAt: string;
+  denominations: Array<CashCustodyDenominationLine & { calculatedAmountMinorUnits: number }>;
+  events: Array<{
+    id: string;
+    eventType: CashCustodyMovementEventType;
+    authorizedActorId: string;
+    actorSessionReference: string;
+    correlationId: string;
+    reasonCode?: string | null;
+    controlledMetadata?: string | null;
+    occurredAt: string;
+  }>;
+};
+
+export type InitiateCashCustodyMovementPayload = {
+  movementType: CashCustodyMovementType;
+  originalMovementId: string | null;
+  intendedCounterpartyReference: string;
+  externalHandoverReference: string;
+  idempotencyKey: string;
+  denominations: CashCustodyDenominationLine[];
 };
 
 export type HumanSessionState = {
@@ -29,6 +67,9 @@ export type HumanSessionState = {
   shiftOperationsAuthorized: boolean;
   custodyOperationsAuthorized: boolean;
   cashOperationsAuthorized: boolean;
+  movementInitiationAuthorized?: boolean;
+  movementReadAuthorized?: boolean;
+  movementCorrectionAuthorized?: boolean;
   userReference: string | null;
   username: string | null;
   displayName: string | null;
@@ -65,6 +106,10 @@ export interface HumanSessionBridge {
   closeOwnCustody(correlationId: string, denominations: CashCustodyDenominationLine[]): Promise<HumanSessionBridgeResult>;
   closeOwnShift(correlationId: string): Promise<HumanSessionBridgeResult>;
   authorizeCash(correlationId: string): Promise<HumanSessionBridgeResult>;
+  initiateCashCustodyMovement(correlationId: string, payload: InitiateCashCustodyMovementPayload): Promise<HumanSessionBridgeResult>;
+  acknowledgeCashCustodyMovement(correlationId: string, movementId: string, counterpartyUsername: string, reject: boolean, reasonCode: string | null, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
+  cancelCashCustodyMovement(correlationId: string, movementId: string, reasonCode: string, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
+  appendCashCustodyMovementNote(correlationId: string, movementId: string, noteType: CashCustodyMovementEventType, counterpartyUsername: string, reasonCode: string, controlledMetadata: string, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
 }
 
 export function createWebViewHumanSessionBridge(): HumanSessionBridge {
@@ -79,6 +124,13 @@ export function createWebViewHumanSessionBridge(): HumanSessionBridge {
     closeOwnCustody: (correlationId, denominations) => send("humanSession.closeOwnCustody", correlationId, { denominations }),
     closeOwnShift: (correlationId) => send("humanSession.closeOwnShift", correlationId, {}),
     authorizeCash: (correlationId) => send("humanSession.authorizeCash", correlationId, {}),
+    initiateCashCustodyMovement: (correlationId, payload) => send("humanSession.initiateCashCustodyMovement", correlationId, payload),
+    acknowledgeCashCustodyMovement: (correlationId, movementId, counterpartyUsername, reject, reasonCode, idempotencyKey) =>
+      send("humanSession.acknowledgeCashCustodyMovement", correlationId, { movementId, counterpartyUsername, reject, reasonCode, idempotencyKey }),
+    cancelCashCustodyMovement: (correlationId, movementId, reasonCode, idempotencyKey) =>
+      send("humanSession.cancelCashCustodyMovement", correlationId, { movementId, reasonCode, idempotencyKey }),
+    appendCashCustodyMovementNote: (correlationId, movementId, noteType, counterpartyUsername, reasonCode, controlledMetadata, idempotencyKey) =>
+      send("humanSession.appendCashCustodyMovementNote", correlationId, { movementId, noteType, counterpartyUsername, reasonCode, controlledMetadata, idempotencyKey }),
   };
 }
 
@@ -91,6 +143,9 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
     shiftOperationsAuthorized: true,
     custodyOperationsAuthorized: true,
     cashOperationsAuthorized: true,
+    movementInitiationAuthorized: true,
+    movementReadAuthorized: true,
+    movementCorrectionAuthorized: true,
     userReference: "cashier-development-fixture",
     username: "cashier.fixture",
     displayName: "Development Cashier",
@@ -223,6 +278,39 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       return success("humanSession.closeOwnShift", id);
     },
     authorizeCash: async (id) => success("humanSession.authorizeCash", id),
+    initiateCashCustodyMovement: async (id, payload) => {
+      const movement: CashCustodyMovement = {
+        id: crypto.randomUUID(),
+        cashCustodySessionId: state.activeCashCustodySession?.id ?? "",
+        movementType: payload.movementType,
+        status: "PendingAcknowledgment",
+        amountMinorUnits: denominationTotalMinorUnits(payload.denominations),
+        originalMovementId: payload.originalMovementId,
+        initiatingCashierId: state.userReference ?? "cashier-development-fixture",
+        intendedCounterpartyReference: payload.intendedCounterpartyReference,
+        externalHandoverReference: payload.externalHandoverReference,
+        createdAt: new Date().toISOString(),
+        denominations: payload.denominations.map((line) => ({ ...line, calculatedAmountMinorUnits: line.denominationValueMinorUnits * line.quantity })),
+        events: [],
+      };
+      if (state.activeCashCustodySummary) {
+        state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: [movement, ...(state.activeCashCustodySummary.movements ?? [])] } };
+      }
+      return success("humanSession.initiateCashCustodyMovement", id);
+    },
+    acknowledgeCashCustodyMovement: async (id, movementId, _username, reject) => {
+      if (state.activeCashCustodySummary) {
+        state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: (state.activeCashCustodySummary.movements ?? []).map((movement) => movement.id === movementId ? { ...movement, status: reject ? "Rejected" : "Completed" } : movement) } };
+      }
+      return success("humanSession.acknowledgeCashCustodyMovement", id);
+    },
+    cancelCashCustodyMovement: async (id, movementId) => {
+      if (state.activeCashCustodySummary) {
+        state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: (state.activeCashCustodySummary.movements ?? []).map((movement) => movement.id === movementId ? { ...movement, status: "Cancelled" } : movement) } };
+      }
+      return success("humanSession.cancelCashCustodyMovement", id);
+    },
+    appendCashCustodyMovementNote: async (id) => success("humanSession.appendCashCustodyMovementNote", id),
   };
 }
 

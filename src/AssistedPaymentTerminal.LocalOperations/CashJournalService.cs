@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AssistedPaymentTerminal.LocalOperations;
 
-public sealed class CashJournalService
+public sealed partial class CashJournalService
 {
     private static readonly CashTenderState[] UnresolvedTenderStates =
     [
@@ -59,6 +59,7 @@ public sealed class CashJournalService
         await EnsureCashierShiftSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureCashCustodyClosureSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureCashCustodyDenominationSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
+        await EnsureCashCustodyMovementSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureCashTenderStatutoryEvidenceSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
         await EnsureTerminalCashFiscalSchemaAsync(dbContext, cancellationToken).ConfigureAwait(false);
     }
@@ -239,6 +240,10 @@ public sealed class CashJournalService
         var sessions = await dbContext.CashCustodySessions
             .AsNoTracking()
             .Include(session => session.DenominationEntries)
+            .Include(session => session.Movements)
+                .ThenInclude(movement => movement.Denominations)
+            .Include(session => session.Movements)
+                .ThenInclude(movement => movement.Events)
             .Where(session => session.CashierId == request.CashierId)
             .Where(session => session.TerminalId == request.TerminalId)
             .Where(session => session.SiteId == request.SiteId)
@@ -470,6 +475,29 @@ public sealed class CashJournalService
                     "Cash custody can close only under the owning cashier's open shift."));
             }
 
+            var movements = await dbContext.CashCustodyMovements
+                .AsNoTracking()
+                .Include(movement => movement.Events)
+                .Where(movement => movement.CashCustodySessionId == session.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (movements.Any(movement => ResolveMovementStatus(movement.Events) == CashCustodyMovementStatus.PendingAcknowledgment))
+            {
+                return CashJournalResult<CashCustodySessionSnapshot>.Failure(new CashJournalError(
+                    CashJournalErrorCode.PendingCashCustodyMovement,
+                    "Resolve pending cash-custody movements before closing custody."));
+            }
+
+            var completedMovements = movements
+                .Where(movement => ResolveMovementStatus(movement.Events) == CashCustodyMovementStatus.Completed)
+                .ToArray();
+            var completedCashInMinorUnits = completedMovements
+                .Where(movement => movement.MovementType == CashCustodyMovementType.CashReturn)
+                .Sum(movement => movement.AmountMinorUnits);
+            var completedCashOutMinorUnits = completedMovements
+                .Where(movement => movement.MovementType is CashCustodyMovementType.SafeDrop or CashCustodyMovementType.DirectRemittance)
+                .Sum(movement => movement.AmountMinorUnits);
+
             var receivedCashAmounts = await dbContext.CashTenders
                 .AsNoTracking()
                 .Where(tender => tender.CashCustodySessionId == session.Id)
@@ -478,7 +506,10 @@ public sealed class CashJournalService
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
             var receivedCash = receivedCashAmounts.Sum();
-            var expectedClosingCash = session.OpeningCashAmount + receivedCash;
+            var expectedClosingCash = session.OpeningCashAmount
+                + receivedCash
+                + MinorUnitsToAmount(completedCashInMinorUnits)
+                - MinorUnitsToAmount(completedCashOutMinorUnits);
             var submissionSummary = await BuildCashCustodySubmissionSummaryAsync(dbContext, session, cancellationToken)
                 .ConfigureAwait(false);
             var closingAmount = MinorUnitsToAmount(normalized.Value!.TotalMinorUnits);
@@ -488,6 +519,11 @@ public sealed class CashJournalService
             session.ClosingCashAmount = closingAmount;
             session.VarianceAmount = closingAmount - expectedClosingCash;
             session.UnresolvedSubmissionCountAtClose = submissionSummary.UnresolvedSubmissionCount;
+            session.CompletedMovementCountAtClose = completedMovements.Length;
+            session.CompletedCashInMinorUnitsAtClose = completedCashInMinorUnits;
+            session.CompletedCashOutMinorUnitsAtClose = completedCashOutMinorUnits;
+            session.CompletedMovementReferencesAtCloseJson = System.Text.Json.JsonSerializer.Serialize(
+                completedMovements.OrderBy(movement => movement.CreatedAt).Select(movement => movement.Id));
             session.ClosedAt = closedAt;
             session.ClosedByAuthenticatedCashierSessionReference = request.AuthenticatedCashierSessionReference;
             session.Status = CashCustodySessionStatus.Closed;
@@ -1119,7 +1155,13 @@ public sealed class CashJournalService
             submissions = submissions with { UnresolvedSubmissionCount = unresolvedAtClose };
         }
 
-        return new CashCustodySummarySnapshot(CashCustodySessionSnapshot.FromEntity(session), submissions);
+        return new CashCustodySummarySnapshot(
+            CashCustodySessionSnapshot.FromEntity(session),
+            submissions,
+            session.Movements
+                .OrderByDescending(movement => movement.CreatedAt)
+                .Select(ToMovementSnapshot)
+                .ToArray());
     }
 
     private static async Task<CashCustodySubmissionSummarySnapshot> BuildCashCustodySubmissionSummaryAsync(

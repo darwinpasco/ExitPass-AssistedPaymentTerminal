@@ -8,5 +8,11 @@ public enum CashJournalErrorCode
     CashierAttestationRequired = 4,
     InvalidStateTransition = 5,
     InvalidDenominationEvidence = 6,
-    ConflictingDenominationEvidence = 7
+    ConflictingDenominationEvidence = 7,
+    PendingCashCustodyMovement = 8,
+    CashCustodyMovementConflict = 9,
+    InsufficientCashCustody = 10,
+    InvalidOriginalMovement = 11,
+    CashReturnLimitExceeded = 12,
+    DistinctPrincipalRequired = 13
 }

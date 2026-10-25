@@ -64,6 +64,68 @@ public sealed record CashCustodyDenominationLine(
     int DenominationValueMinorUnits,
     int Quantity);
 
+public sealed record InitiateCashCustodyMovementRequest(
+    Guid CashCustodySessionId,
+    CashCustodyMovementType MovementType,
+    Guid? OriginalMovementId,
+    string CashierId,
+    string AuthenticatedCashierSessionReference,
+    string CashierShiftId,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    string IntendedCounterpartyReference,
+    string ExternalHandoverReference,
+    string IdempotencyKey,
+    string CorrelationId,
+    IReadOnlyCollection<CashCustodyDenominationLine> Denominations,
+    Guid? MovementId = null,
+    DateTimeOffset? InitiatedAt = null);
+
+public sealed record AcknowledgeCashCustodyMovementRequest(
+    Guid MovementId,
+    string OwningCashierId,
+    string AuthorizedActorId,
+    string AuthorizedActorUsername,
+    string ActorSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    string IdempotencyKey,
+    string CorrelationId,
+    DateTimeOffset? AcknowledgedAt = null);
+
+public sealed record ResolvePendingCashCustodyMovementRequest(
+    Guid MovementId,
+    CashCustodyMovementEventType Outcome,
+    string AuthorizedActorId,
+    string ActorSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    string IdempotencyKey,
+    string CorrelationId,
+    string ReasonCode,
+    DateTimeOffset? OccurredAt = null);
+
+public sealed record AppendCashCustodyMovementNoteRequest(
+    Guid MovementId,
+    CashCustodyMovementEventType NoteType,
+    string AuthorizedActorId,
+    string ActorSessionReference,
+    string TerminalId,
+    string SiteId,
+    string SiteGroupId,
+    string PosServerId,
+    string IdempotencyKey,
+    string CorrelationId,
+    string ReasonCode,
+    string ControlledMetadata,
+    DateTimeOffset? OccurredAt = null);
+
 public sealed record StartCashTenderRequest(
     Guid CashCustodySessionId,
     string ParkingSessionId,

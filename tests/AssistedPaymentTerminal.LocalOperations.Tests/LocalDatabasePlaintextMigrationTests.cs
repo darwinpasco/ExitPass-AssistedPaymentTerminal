@@ -112,6 +112,93 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "LocalOperations")]
+    public async Task ExplicitMigrationPreservesCompletedCashCustodyMovementEvidence()
+    {
+        var databasePath = DatabasePath();
+        await CreatePlaintextSourceAsync(databasePath, includeCustody: true);
+        var custodyId = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001");
+        var movementId = Guid.Parse("dddddddd-dddd-4ddd-8ddd-dddddddd0001");
+        var now = DateTimeOffset.Parse("2026-07-15T01:00:00Z");
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var context = CreatePlaintextDbContext(connection);
+            var movement = new CashCustodyMovement
+            {
+                Id = movementId,
+                CashCustodySessionId = custodyId,
+                MovementType = CashCustodyMovementType.SafeDrop,
+                AmountMinorUnits = 20_000,
+                InitiatingCashierId = "cashier-001",
+                InitiatingCashierSessionReference = "auth-session-001",
+                IntendedCounterpartyReference = "receiver-001",
+                ExternalHandoverReference = "DROP-MIGRATION-001",
+                IdempotencyKey = "movement-migration-001",
+                CanonicalRequestPayloadHash = new string('A', 64),
+                CreatedAt = now
+            };
+            foreach (var line in CashCustodyDenominationCatalog.CreateCount(new Dictionary<string, int> { ["PHP-200"] = 1 }))
+            {
+                movement.Denominations.Add(new CashCustodyMovementDenomination
+                {
+                    Id = Guid.NewGuid(),
+                    MovementId = movementId,
+                    DenominationCode = line.DenominationCode,
+                    DenominationValueMinorUnits = line.DenominationValueMinorUnits,
+                    Quantity = line.Quantity,
+                    CalculatedAmountMinorUnits = (long)line.DenominationValueMinorUnits * line.Quantity,
+                    CreatedAt = now
+                });
+            }
+            movement.Events.Add(new CashCustodyMovementEvent
+            {
+                Id = Guid.NewGuid(),
+                MovementId = movementId,
+                EventType = CashCustodyMovementEventType.Initiated,
+                AuthorizedActorId = "cashier-001",
+                ActorSessionReference = "auth-session-001",
+                CorrelationId = "correlation-migration-initiate",
+                IdempotencyKey = "movement-migration-001:initiated",
+                OccurredAt = now
+            });
+            movement.Events.Add(new CashCustodyMovementEvent
+            {
+                Id = Guid.NewGuid(),
+                MovementId = movementId,
+                EventType = CashCustodyMovementEventType.Completed,
+                AuthorizedActorId = "receiver-id-001",
+                ActorSessionReference = "receiver-session-001",
+                CorrelationId = "correlation-migration-complete",
+                IdempotencyKey = "movement-migration-001:completed",
+                OccurredAt = now.AddMinutes(1)
+            });
+            context.CashCustodyMovements.Add(movement);
+            await context.SaveChangesAsync();
+        }
+
+        var result = await CreateService(databasePath, authorized: true).MigrateAsync();
+
+        Assert.True(result.Succeeded, $"{result.Status} {result.Phase} {result.SafeMessage} {result.SafeAction}");
+        Assert.Equal(1, result.SourceRowCounts["cash_custody_movements"]);
+        Assert.Equal(13, result.SourceRowCounts["cash_custody_movement_denominations"]);
+        Assert.Equal(2, result.SourceRowCounts["cash_custody_movement_events"]);
+        Assert.True(result.SourceRowCounts.SequenceEqual(result.TargetRowCounts));
+        var journal = CreateCashJournalService(databasePath);
+        var overview = await journal.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        var migrated = Assert.Single(overview.ActiveSession!.Movements ?? []);
+        Assert.Equal(movementId, migrated.Id);
+        Assert.Equal(CashCustodyMovementStatus.Completed, migrated.Status);
+        Assert.Equal(13, migrated.Denominations.Count);
+        Assert.Equal(2, migrated.Events.Count);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
     public async Task HistoricalReceiptRetrievalSchemaClassifiesAsMigrationRequired()
     {
         var databasePath = DatabasePath();
@@ -797,6 +884,10 @@ public sealed class LocalDatabasePlaintextMigrationTests : IDisposable
             ALTER TABLE cash_custody_sessions DROP COLUMN ClosedAt;
             ALTER TABLE cash_custody_sessions DROP COLUMN ClosedByAuthenticatedCashierSessionReference;
             ALTER TABLE cash_custody_sessions DROP COLUMN UnresolvedSubmissionCountAtClose;
+            ALTER TABLE cash_custody_sessions DROP COLUMN CompletedMovementCountAtClose;
+            ALTER TABLE cash_custody_sessions DROP COLUMN CompletedCashInMinorUnitsAtClose;
+            ALTER TABLE cash_custody_sessions DROP COLUMN CompletedCashOutMinorUnitsAtClose;
+            ALTER TABLE cash_custody_sessions DROP COLUMN CompletedMovementReferencesAtCloseJson;
 
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountDecisionCommandId;
             ALTER TABLE cash_tenders DROP COLUMN StatutoryDiscountPayableBasisApplicationCommandId;

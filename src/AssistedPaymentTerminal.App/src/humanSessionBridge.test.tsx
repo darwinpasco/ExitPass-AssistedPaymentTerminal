@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthenticatedTerminal, CashierLoginPanel, HumanSessionPanel } from "./App";
@@ -10,8 +10,9 @@ import {
   type HumanSessionBridgeResult,
   type HumanSessionState,
   type CashCustodySummary,
+  type CashCustodyMovement,
 } from "./humanSessionBridge";
-import type { CashCustodyDenominationLine } from "./cashCustodyDenominations";
+import { CASH_CUSTODY_DENOMINATIONS, type CashCustodyDenominationLine } from "./cashCustodyDenominations";
 import { mode1Config } from "./test/testConfig";
 
 const cashierGuid = "44444444-4444-4444-8444-444444444444";
@@ -398,6 +399,70 @@ describe("APT human-session presentation boundary", () => {
     expect(screen.getByTestId("cash-custody-fiscal-warning")).toHaveTextContent("1 confirmed payment awaiting fiscal issuance");
   });
 
+  it("captures a complete movement count and creates only a pending handover", async () => {
+    const initiateCashCustodyMovement = vi.fn(async (
+      _correlationId: string,
+      _payload: Parameters<HumanSessionBridge["initiateCashCustodyMovement"]>[1],
+    ) => successResult("humanSession.initiateCashCustodyMovement", authenticatedState()));
+    const state = movementState([]);
+    render(<HumanSessionPanel
+      state={state}
+      bridge={bridgeStub({ initiateCashCustodyMovement })}
+      onStateChange={vi.fn()}
+    />);
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+    const panel = screen.getByLabelText("Cash custody movements");
+
+    await userEvent.type(within(panel).getByLabelText("Authorized counterparty username"), "receiver.synthetic");
+    await userEvent.type(within(panel).getByLabelText("Handover or remittance reference"), "DROP-001");
+    await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
+    await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
+    await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
+
+    expect(within(panel).getByRole("status")).toHaveTextContent("100.00");
+    await userEvent.click(within(panel).getByRole("button", { name: "Confirm movement count" }));
+    await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(1));
+
+    const payload = initiateCashCustodyMovement.mock.calls[0][1];
+    expect(payload.movementType).toBe("SafeDrop");
+    expect(payload.intendedCounterpartyReference).toBe("receiver.synthetic");
+    expect(payload.externalHandoverReference).toBe("DROP-001");
+    expect(payload.denominations).toHaveLength(13);
+    expect(payload.denominations).toContainEqual({ denominationCode: "PHP-100", denominationValueMinorUnits: 10_000, quantity: 1 });
+    expect(document.body).not.toHaveTextContent("Available Cash");
+  });
+
+  it("blocks custody close for a pending movement and requests native receiver acknowledgment", async () => {
+    const movement = movementFixture("PendingAcknowledgment");
+    const acknowledgeCashCustodyMovement = vi.fn(async (
+      _correlationId: string,
+      _movementId: string,
+      _counterpartyUsername: string,
+      _reject: boolean,
+      _reasonCode: string | null,
+      _idempotencyKey: string,
+    ) =>
+      successResult("humanSession.acknowledgeCashCustodyMovement", movementState([{ ...movement, status: "Completed" }])));
+    render(<HumanSessionPanel
+      state={movementState([movement])}
+      bridge={bridgeStub({ acknowledgeCashCustodyMovement })}
+      onStateChange={vi.fn()}
+    />);
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+
+    expect(screen.getByText("1 movement awaiting acknowledgment")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review actual count" })).toBeDisabled();
+    expect(screen.getByText("Resolve all pending cash movements before closing custody.")).toBeInTheDocument();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.getAllByText("Calculated on close")).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "Receiver Acknowledgment" }));
+    await waitFor(() => expect(acknowledgeCashCustodyMovement).toHaveBeenCalledTimes(1));
+    expect(acknowledgeCashCustodyMovement.mock.calls[0][1]).toBe(movement.id);
+    expect(acknowledgeCashCustodyMovement.mock.calls[0][2]).toBe("receiver.synthetic");
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+  });
+
   it("renders committed close evidence and lets the cashier inspect immutable history", async () => {
     const latest = closedCustodySummary("77777777-7777-4777-8777-777777777777", 1_100, 1_090, -10, 3, 1);
     latest.session.openingDenominations = [
@@ -575,6 +640,60 @@ function authenticatedState(): HumanSessionState {
   };
 }
 
+function movementState(movements: CashCustodyMovement[]): HumanSessionState {
+  const state = authenticatedState();
+  return {
+    ...state,
+    movementInitiationAuthorized: true,
+    movementReadAuthorized: true,
+    movementCorrectionAuthorized: false,
+    cashCustodyDenominations: CASH_CUSTODY_DENOMINATIONS,
+    activeCashCustodySummary: {
+      session: state.activeCashCustodySession!,
+      submissions: {
+        physicalCashReceiptCount: 0,
+        confirmedSubmissionCount: 0,
+        pendingSubmissionCount: 0,
+        conflictingSubmissionCount: 0,
+        rejectedSubmissionCount: 0,
+        unresolvedSubmissionCount: 0,
+        pendingFiscalIssuanceCount: 0,
+      },
+      movements,
+    },
+  };
+}
+
+function movementFixture(status: CashCustodyMovement["status"]): CashCustodyMovement {
+  const now = new Date().toISOString();
+  return {
+    id: "99999999-9999-4999-8999-999999999999",
+    cashCustodySessionId: authenticatedState().activeCashCustodySession!.id,
+    movementType: "SafeDrop",
+    status,
+    amountMinorUnits: 10_000,
+    originalMovementId: null,
+    initiatingCashierId: cashierGuid,
+    intendedCounterpartyReference: "receiver.synthetic",
+    externalHandoverReference: "DROP-001",
+    createdAt: now,
+    denominations: CASH_CUSTODY_DENOMINATIONS.map((denomination) => ({
+      denominationCode: denomination.code,
+      denominationValueMinorUnits: denomination.valueMinorUnits,
+      quantity: denomination.code === "PHP-100" ? 1 : 0,
+      calculatedAmountMinorUnits: denomination.code === "PHP-100" ? 10_000 : 0,
+    })),
+    events: [{
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      eventType: "Initiated",
+      authorizedActorId: cashierGuid,
+      actorSessionReference: sessionGuid,
+      correlationId: "correlation-movement-001",
+      occurredAt: now,
+    }],
+  };
+}
+
 function closedCustodySummary(
   id: string,
   expected: number,
@@ -624,6 +743,10 @@ function bridgeStub(overrides: Partial<HumanSessionBridge> = {}): HumanSessionBr
     closeOwnCustody: result,
     closeOwnShift: result,
     authorizeCash: result,
+    initiateCashCustodyMovement: result,
+    acknowledgeCashCustodyMovement: result,
+    cancelCashCustodyMovement: result,
+    appendCashCustodyMovementNote: result,
     ...overrides,
   };
 }
