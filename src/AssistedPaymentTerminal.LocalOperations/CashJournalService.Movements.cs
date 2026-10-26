@@ -88,6 +88,11 @@ public sealed partial class CashJournalService
                 {
                     return MovementFailure(CashJournalErrorCode.InvalidOriginalMovement, "The referenced outbound movement is not eligible for return.");
                 }
+                var originalReceiver = original.Events.Single(value => value.EventType == CashCustodyMovementEventType.Completed).AuthorizedActorId;
+                if (!string.Equals(request.IntendedCounterpartyReference.Trim(), originalReceiver, StringComparison.OrdinalIgnoreCase))
+                {
+                    return MovementFailure(CashJournalErrorCode.InvalidOriginalMovement, "The cash return must designate the receiving party recorded on the original transfer.");
+                }
             }
 
             var createdAt = request.InitiatedAt ?? DateTimeOffset.UtcNow;

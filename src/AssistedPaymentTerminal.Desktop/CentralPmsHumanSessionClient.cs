@@ -15,6 +15,15 @@ public interface ICentralPmsHumanSessionClient
     Task<HumanSessionClientResult> ReauthenticateAsync(Guid sessionReference, string sessionToken, string password, Guid correlationId, CancellationToken cancellationToken);
     Task<HumanSessionClientResult> ChangePasswordAsync(Guid sessionReference, string sessionToken, string currentPassword, string newPassword, string totpCode, Guid correlationId, CancellationToken cancellationToken);
     Task<HumanSessionClientResult> LogoutAsync(Guid sessionReference, string sessionToken, Guid correlationId, CancellationToken cancellationToken);
+    Task<CashCustodyCounterpartyDirectoryClientResult> ListCashCustodyMovementCounterpartiesAsync(
+        Guid sessionReference,
+        string sessionToken,
+        Guid siteId,
+        string movementType,
+        string? originalMovementType,
+        string? requiredCounterpartyReference,
+        Guid correlationId,
+        CancellationToken cancellationToken);
 }
 
 public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
@@ -111,6 +120,82 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
         CancellationToken cancellationToken) =>
         SendAsync(HttpMethod.Post, $"/v1/apt/human-sessions/{sessionReference:D}/logout", correlationId, sessionToken, new { }, cancellationToken);
 
+    public async Task<CashCustodyCounterpartyDirectoryClientResult> ListCashCustodyMovementCounterpartiesAsync(
+        Guid sessionReference,
+        string sessionToken,
+        Guid siteId,
+        string movementType,
+        string? originalMovementType,
+        string? requiredCounterpartyReference,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        if (_baseUri is null || !_deviceServiceIdentityId.HasValue)
+        {
+            return CashCustodyCounterpartyDirectoryClientResult.Failure(
+                "APT_DEVICE_TRUST_UNAVAILABLE",
+                "This terminal has not established the approved Central PMS device trust boundary.",
+                correlationId,
+                false);
+        }
+
+        var query = $"siteId={siteId:D}&movementType={Uri.EscapeDataString(movementType)}";
+        if (!string.IsNullOrWhiteSpace(originalMovementType))
+        {
+            query += $"&originalMovementType={Uri.EscapeDataString(originalMovementType)}";
+        }
+        if (!string.IsNullOrWhiteSpace(requiredCounterpartyReference))
+        {
+            query += $"&requiredCounterpartyReference={Uri.EscapeDataString(requiredCounterpartyReference)}";
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(_baseUri, $"/v1/apt/human-sessions/{sessionReference:D}/cash-custody-movement-counterparties?{query}"));
+        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
+        request.Headers.Pragma.ParseAdd("no-cache");
+        request.Headers.Authorization = new AuthenticationHeaderValue(AptAuthorizationScheme, sessionToken);
+        request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId.ToString("D"));
+        request.Headers.TryAddWithoutValidation("X-ExitPass-Service-Identity-Id", _deviceServiceIdentityId.Value.ToString("D"));
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            AptCashCustodyCounterpartyDirectoryResponse? payload = null;
+            try
+            {
+                payload = await JsonSerializer.DeserializeAsync<AptCashCustodyCounterpartyDirectoryResponse>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (JsonException)
+            {
+                // The safe failure below intentionally suppresses malformed response details.
+            }
+
+            if (response.IsSuccessStatusCode
+                && payload is { Outcome: "AVAILABLE", ErrorCode: null }
+                && IsSafeCounterpartyDirectory(payload))
+            {
+                return CashCustodyCounterpartyDirectoryClientResult.Success(payload);
+            }
+            return CashCustodyCounterpartyDirectoryClientResult.Failure(
+                payload?.ErrorCode ?? (response.IsSuccessStatusCode ? "MALFORMED_COUNTERPARTY_DIRECTORY_RESPONSE" : MapHttpError(response.StatusCode, sessionToken)),
+                response.IsSuccessStatusCode
+                    ? "Central PMS returned a receiving-person directory that could not be used safely."
+                    : SafeMessage(payload?.ErrorCode, response.StatusCode),
+                payload?.CorrelationId is { } value && value != Guid.Empty ? value : correlationId,
+                payload?.Retryable ?? IsRetryable(response.StatusCode));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return CashCustodyCounterpartyDirectoryClientResult.Failure("CENTRAL_PMS_TIMEOUT", "Central PMS did not respond before the recipient lookup timeout.", correlationId, true);
+        }
+        catch (HttpRequestException)
+        {
+            return CashCustodyCounterpartyDirectoryClientResult.Failure("CENTRAL_PMS_UNAVAILABLE", "Authorized receiving persons are temporarily unavailable.", correlationId, true);
+        }
+    }
+
     private async Task<HumanSessionClientResult> SendAsync(
         HttpMethod method,
         string path,
@@ -205,6 +290,16 @@ public sealed class CentralPmsHumanSessionClient : ICentralPmsHumanSessionClient
         !string.IsNullOrWhiteSpace(response.Outcome)
         && (!response.Authenticated || response.Session is not null);
 
+    private static bool IsSafeCounterpartyDirectory(AptCashCustodyCounterpartyDirectoryResponse response) =>
+        response.Counterparties is not null
+        && response.Counterparties.All(value =>
+            value.UserReference != Guid.Empty
+            && !string.IsNullOrWhiteSpace(value.LoginIdentifier)
+            && !string.IsNullOrWhiteSpace(value.DisplayName)
+            && !string.IsNullOrWhiteSpace(value.RoleCode)
+            && !string.IsNullOrWhiteSpace(value.RoleLabel))
+        && response.Counterparties.Select(value => value.UserReference).Distinct().Count() == response.Counterparties.Count;
+
     private static string MapHttpError(HttpStatusCode statusCode, string? sessionToken) => statusCode switch
     {
         HttpStatusCode.Unauthorized when !string.IsNullOrWhiteSpace(sessionToken) => "SESSION_INVALID",
@@ -289,4 +384,37 @@ public sealed record HumanSessionClientResult(
         bool retryable,
         AptHumanAuthenticationResponse? response = null) =>
         new(false, response, errorCode, safeMessage, correlationId, retryable);
+}
+
+public sealed record AptCashCustodyCounterpartyDirectoryResponse(
+    string Outcome,
+    IReadOnlyList<AptCashCustodyCounterpartyDto> Counterparties,
+    string? ErrorCode,
+    bool Retryable,
+    Guid CorrelationId);
+
+public sealed record AptCashCustodyCounterpartyDto(
+    Guid UserReference,
+    string LoginIdentifier,
+    string DisplayName,
+    string RoleCode,
+    string RoleLabel);
+
+public sealed record CashCustodyCounterpartyDirectoryClientResult(
+    bool Ok,
+    AptCashCustodyCounterpartyDirectoryResponse? Response,
+    string? ErrorCode,
+    string? SafeMessage,
+    Guid CorrelationId,
+    bool Retryable)
+{
+    public static CashCustodyCounterpartyDirectoryClientResult Success(AptCashCustodyCounterpartyDirectoryResponse response) =>
+        new(true, response, null, null, response.CorrelationId, false);
+
+    public static CashCustodyCounterpartyDirectoryClientResult Failure(
+        string errorCode,
+        string safeMessage,
+        Guid correlationId,
+        bool retryable) =>
+        new(false, null, errorCode, safeMessage, correlationId, retryable);
 }

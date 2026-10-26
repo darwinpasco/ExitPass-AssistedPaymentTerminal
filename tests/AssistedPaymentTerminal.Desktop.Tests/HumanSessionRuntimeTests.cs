@@ -840,7 +840,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var denied = await runtime.InitiateCashCustodyMovementAsync(
             CashCustodyMovementType.SafeDrop,
             null,
-            "receiver.synthetic",
+            ReceiverId.ToString("D"),
             "DROP-001",
             "movement-001",
             "correlation-001",
@@ -850,6 +850,48 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.False(authenticated.MovementReadAuthorized);
         Assert.Equal("MOVEMENT_INITIATE_PERMISSION_DENIED", denied.ErrorCode);
         Assert.Empty(denied.ActiveCashCustodySummary!.Movements ?? []);
+    }
+
+    [Fact]
+    public async Task CounterpartyDirectoryExposesStableIdentityAndOmitsInternalLoginIdentifier()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId, permissions: MovementCashierPermissions));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        await runtime.LoginAsync("cashier.synthetic", Credential(runtime));
+
+        var state = await runtime.ListCashCustodyMovementCounterpartiesAsync(
+            CashCustodyMovementType.SafeDrop,
+            null,
+            null);
+
+        var option = Assert.Single(state.MovementCounterparties!);
+        Assert.Equal(ReceiverId.ToString("D"), option.UserReference);
+        Assert.Equal("Synthetic Receiver", option.DisplayName);
+        Assert.Equal("Operations Supervisor", option.RoleLabel);
+        Assert.DoesNotContain("receiver.synthetic", JsonSerializer.Serialize(state), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RecipientAuthorizationIsRevalidatedBeforeReceiverCredentialPrompt()
+    {
+        var cashier = Success(CashierId, permissions: MovementCashierPermissions);
+        var client = new FakeHumanSessionClient(cashier);
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        var movementId = await OpenAndInitiateMovementAsync(runtime, ReceiverId.ToString("D"));
+        client.CounterpartyDirectoryResult = CashCustodyCounterpartyDirectoryClientResult.Success(
+            new AptCashCustodyCounterpartyDirectoryResponse(
+                "AVAILABLE",
+                [],
+                null,
+                false,
+                Guid.NewGuid()));
+
+        var preparation = await runtime.PrepareCashCustodyMovementCounterpartyAsync(movementId);
+
+        Assert.Null(preparation.Counterparty);
+        Assert.Equal("MOVEMENT_COUNTERPARTY_NO_LONGER_AUTHORIZED", preparation.State.ErrorCode);
+        Assert.Equal(CashCustodyMovementStatus.PendingAcknowledgment,
+            Assert.Single(preparation.State.ActiveCashCustodySummary!.Movements ?? []).Status);
     }
 
     [Fact]
@@ -869,7 +911,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         var initiated = await runtime.InitiateCashCustodyMovementAsync(
             CashCustodyMovementType.SafeDrop,
             null,
-            "receiver.synthetic",
+            ReceiverId.ToString("D"),
             "DROP-001",
             "movement-001",
             "correlation-001",
@@ -881,7 +923,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         using var credential = MovementCredential(runtime);
         var completed = await runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
             movement.Id,
-            "receiver.synthetic",
+            ReceiverId,
             false,
             null,
             "ack-001",
@@ -904,16 +946,39 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             username: "cashier.synthetic");
         var client = new FakeHumanSessionClient(cashier);
         var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
-        var movementId = await OpenAndInitiateMovementAsync(runtime, "cashier.synthetic");
+        var movementId = await OpenAndInitiateMovementAsync(runtime, ReceiverId.ToString("D"));
         client.LoginResult = samePrincipal;
         client.GetResults = new Queue<HumanSessionClientResult>([cashier]);
 
         using var credential = MovementCredential(runtime);
         var denied = await runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
-            movementId, "cashier.synthetic", false, null, "ack-same", "correlation-same", credential);
+            movementId, ReceiverId, false, null, "ack-same", "correlation-same", credential);
 
         Assert.Equal("DISTINCT_PRINCIPAL_REQUIRED", denied.ErrorCode);
         Assert.Equal(CashCustodyMovementStatus.PendingAcknowledgment, Assert.Single(denied.ActiveCashCustodySummary!.Movements ?? []).Status);
+    }
+
+    [Fact]
+    public async Task MovementAcknowledgmentRejectsDifferentHumanThanSelectedReceiver()
+    {
+        var cashier = Success(CashierId, permissions: MovementCashierPermissions);
+        var wrongReceiver = Success(
+            Guid.NewGuid(),
+            permissions: MovementReceiverPermissions,
+            username: "other.receiver");
+        var client = new FakeHumanSessionClient(cashier);
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        var movementId = await OpenAndInitiateMovementAsync(runtime, ReceiverId.ToString("D"));
+        client.LoginResult = wrongReceiver;
+        client.GetResults = new Queue<HumanSessionClientResult>([cashier]);
+
+        using var credential = MovementCredential(runtime);
+        var denied = await runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
+            movementId, ReceiverId, false, null, "ack-wrong-person", "correlation-wrong-person", credential);
+
+        Assert.Equal("DESIGNATED_RECEIVER_MISMATCH", denied.ErrorCode);
+        Assert.Equal(CashCustodyMovementStatus.PendingAcknowledgment,
+            Assert.Single(denied.ActiveCashCustodySummary!.Movements ?? []).Status);
     }
 
     [Theory]
@@ -934,13 +999,13 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             username: "receiver.synthetic");
         var client = new FakeHumanSessionClient(cashier);
         var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
-        var movementId = await OpenAndInitiateMovementAsync(runtime, "receiver.synthetic");
+        var movementId = await OpenAndInitiateMovementAsync(runtime, ReceiverId.ToString("D"));
         client.LoginResult = receiver;
         client.GetResults = new Queue<HumanSessionClientResult>([cashier]);
 
         using var credential = MovementCredential(runtime);
         var denied = await runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
-            movementId, "receiver.synthetic", false, null, "ack-scope", "correlation-scope", credential);
+            movementId, ReceiverId, false, null, "ack-scope", "correlation-scope", credential);
 
         Assert.Equal(expectedCode, denied.ErrorCode);
     }
@@ -959,13 +1024,13 @@ public sealed class HumanSessionRuntimeTests : IDisposable
             username: "receiver.synthetic");
         var client = new FakeHumanSessionClient(cashier);
         var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
-        var movementId = await OpenAndInitiateMovementAsync(runtime, "receiver.synthetic");
+        var movementId = await OpenAndInitiateMovementAsync(runtime, ReceiverId.ToString("D"));
         client.LoginResult = receiver;
         client.GetResults = new Queue<HumanSessionClientResult>([cashier, revoked]);
 
         using var credential = MovementCredential(runtime);
         var denied = await runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
-            movementId, "receiver.synthetic", false, null, "ack-revoked", "correlation-revoked", credential);
+            movementId, ReceiverId, false, null, "ack-revoked", "correlation-revoked", credential);
 
         Assert.Equal("MOVEMENT_PERMISSION_DENIED", denied.ErrorCode);
         Assert.Equal(CashCustodyMovementStatus.PendingAcknowledgment, Assert.Single(denied.ActiveCashCustodySummary!.Movements ?? []).Status);
@@ -1617,6 +1682,7 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         public string? LastCurrentCredential { get; private set; }
         public string? LastNewCredential { get; private set; }
         public string? LastTotpCode { get; private set; }
+        public CashCustodyCounterpartyDirectoryClientResult? CounterpartyDirectoryResult { get; set; }
         public Task<HumanSessionClientResult> LoginAsync(string username, string password, Guid siteId, Guid correlationId, CancellationToken cancellationToken)
         {
             LoginCalls++;
@@ -1642,6 +1708,32 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         {
             LogoutCalls++;
             return Task.FromResult(LoginResult);
+        }
+        public Task<CashCustodyCounterpartyDirectoryClientResult> ListCashCustodyMovementCounterpartiesAsync(
+            Guid sessionReference,
+            string sessionToken,
+            Guid siteId,
+            string movementType,
+            string? originalMovementType,
+            string? requiredCounterpartyReference,
+            Guid correlationId,
+            CancellationToken cancellationToken)
+        {
+            if (CounterpartyDirectoryResult is not null)
+            {
+                return Task.FromResult(CounterpartyDirectoryResult);
+            }
+            var userReference = Guid.TryParse(requiredCounterpartyReference, out var parsed) && parsed != Guid.Empty
+                ? parsed
+                : ReceiverId;
+            var username = userReference == CashierId ? "cashier.synthetic" : "receiver.synthetic";
+            var response = new AptCashCustodyCounterpartyDirectoryResponse(
+                "AVAILABLE",
+                [new AptCashCustodyCounterpartyDto(userReference, username, userReference == CashierId ? "Synthetic Cashier" : "Synthetic Receiver", "OPERATIONS_SUPERVISOR", "Operations Supervisor")],
+                null,
+                false,
+                correlationId);
+            return Task.FromResult(CashCustodyCounterpartyDirectoryClientResult.Success(response));
         }
     }
 

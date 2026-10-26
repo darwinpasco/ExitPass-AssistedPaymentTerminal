@@ -868,7 +868,9 @@ public sealed partial class HumanSessionRuntime : IHumanCashAuthorization, ICent
             CashCustodyDenominations: CashCustodyDenominationCatalog.Supported,
             MovementInitiationAuthorized: movementInitiationAuthorized,
             MovementReadAuthorized: movementReadAuthorized,
-            MovementCorrectionAuthorized: movementCorrectionAuthorized);
+            MovementCorrectionAuthorized: movementCorrectionAuthorized,
+            MovementCounterparties: _lastState.MovementCounterparties,
+            MovementCounterpartyContext: _lastState.MovementCounterpartyContext);
     }
 
     private Task<LocalOperationalStateSnapshot> LoadOwnOperationalStateAsync(Guid userReference, CancellationToken cancellationToken) =>
@@ -1008,7 +1010,9 @@ public sealed record HumanSessionSafeState(
     IReadOnlyList<CashCustodyDenominationDefinition>? CashCustodyDenominations = null,
     bool MovementInitiationAuthorized = false,
     bool MovementReadAuthorized = false,
-    bool MovementCorrectionAuthorized = false)
+    bool MovementCorrectionAuthorized = false,
+    IReadOnlyList<CashCustodyCounterpartyOption>? MovementCounterparties = null,
+    string? MovementCounterpartyContext = null)
 {
     public static HumanSessionSafeState Unauthenticated(bool deviceTrusted, string message) =>
         new("UNAUTHENTICATED", false, deviceTrusted, false, false, false, null, null, null, null, null, false, false, null, null,

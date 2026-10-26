@@ -153,7 +153,8 @@ async function runCashCustodyMovementWorkflow() {
   await page.getByRole("button", { name: "Cashier Session" }).click();
   const panel = page.getByLabel("Cash custody movements");
 
-  await panel.getByLabel("Authorized counterparty username").fill("receiver.fixture");
+  await expect(panel.getByLabel("Receiving Person")).toBeEnabled();
+  await panel.getByLabel("Receiving Person").selectOption({ label: "Development Supervisor - Operations Supervisor" });
   await panel.getByLabel("Handover or remittance reference").fill("DROP-E2E-001");
   await panel.getByLabel("PHP 100 quantity").fill("1");
   await panel.getByRole("button", { name: "Review movement count" }).click();

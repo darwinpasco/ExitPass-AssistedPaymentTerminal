@@ -60,6 +60,13 @@ export type InitiateCashCustodyMovementPayload = {
   denominations: CashCustodyDenominationLine[];
 };
 
+export type CashCustodyCounterpartyOption = {
+  userReference: string;
+  displayName: string;
+  roleCode: string;
+  roleLabel: string;
+};
+
 export type HumanSessionState = {
   authenticationState: "LOADING" | "UNAUTHENTICATED" | "AUTHENTICATED" | "LOCKED" | "UNAVAILABLE" | string;
   authenticated: boolean;
@@ -70,6 +77,8 @@ export type HumanSessionState = {
   movementInitiationAuthorized?: boolean;
   movementReadAuthorized?: boolean;
   movementCorrectionAuthorized?: boolean;
+  movementCounterparties?: CashCustodyCounterpartyOption[] | null;
+  movementCounterpartyContext?: string | null;
   userReference: string | null;
   username: string | null;
   displayName: string | null;
@@ -106,8 +115,9 @@ export interface HumanSessionBridge {
   closeOwnCustody(correlationId: string, denominations: CashCustodyDenominationLine[]): Promise<HumanSessionBridgeResult>;
   closeOwnShift(correlationId: string): Promise<HumanSessionBridgeResult>;
   authorizeCash(correlationId: string): Promise<HumanSessionBridgeResult>;
+  listCashCustodyMovementCounterparties(correlationId: string, movementType: CashCustodyMovementType, originalMovementId: string | null, requiredCounterpartyReference?: string | null): Promise<HumanSessionBridgeResult>;
   initiateCashCustodyMovement(correlationId: string, payload: InitiateCashCustodyMovementPayload): Promise<HumanSessionBridgeResult>;
-  acknowledgeCashCustodyMovement(correlationId: string, movementId: string, counterpartyUsername: string, reject: boolean, reasonCode: string | null, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
+  acknowledgeCashCustodyMovement(correlationId: string, movementId: string, reject: boolean, reasonCode: string | null, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
   cancelCashCustodyMovement(correlationId: string, movementId: string, reasonCode: string, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
   appendCashCustodyMovementNote(correlationId: string, movementId: string, noteType: CashCustodyMovementEventType, counterpartyUsername: string, reasonCode: string, controlledMetadata: string, idempotencyKey: string): Promise<HumanSessionBridgeResult>;
 }
@@ -124,9 +134,11 @@ export function createWebViewHumanSessionBridge(): HumanSessionBridge {
     closeOwnCustody: (correlationId, denominations) => send("humanSession.closeOwnCustody", correlationId, { denominations }),
     closeOwnShift: (correlationId) => send("humanSession.closeOwnShift", correlationId, {}),
     authorizeCash: (correlationId) => send("humanSession.authorizeCash", correlationId, {}),
+    listCashCustodyMovementCounterparties: (correlationId, movementType, originalMovementId, requiredCounterpartyReference = null) =>
+      send("humanSession.listCashCustodyMovementCounterparties", correlationId, { movementType, originalMovementId, requiredCounterpartyReference }),
     initiateCashCustodyMovement: (correlationId, payload) => send("humanSession.initiateCashCustodyMovement", correlationId, payload),
-    acknowledgeCashCustodyMovement: (correlationId, movementId, counterpartyUsername, reject, reasonCode, idempotencyKey) =>
-      send("humanSession.acknowledgeCashCustodyMovement", correlationId, { movementId, counterpartyUsername, reject, reasonCode, idempotencyKey }),
+    acknowledgeCashCustodyMovement: (correlationId, movementId, reject, reasonCode, idempotencyKey) =>
+      send("humanSession.acknowledgeCashCustodyMovement", correlationId, { movementId, reject, reasonCode, idempotencyKey }),
     cancelCashCustodyMovement: (correlationId, movementId, reasonCode, idempotencyKey) =>
       send("humanSession.cancelCashCustodyMovement", correlationId, { movementId, reasonCode, idempotencyKey }),
     appendCashCustodyMovementNote: (correlationId, movementId, noteType, counterpartyUsername, reasonCode, controlledMetadata, idempotencyKey) =>
@@ -278,6 +290,16 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       return success("humanSession.closeOwnShift", id);
     },
     authorizeCash: async (id) => success("humanSession.authorizeCash", id),
+    listCashCustodyMovementCounterparties: async (id, movementType, originalMovementId, requiredCounterpartyReference = null) => {
+      const safeDrop = [{ userReference: "receiver-development-fixture", displayName: "Development Supervisor", roleCode: "OPERATIONS_SUPERVISOR", roleLabel: "Operations Supervisor" }];
+      const collector = [{ userReference: "collector-development-fixture", displayName: "Development Cash Collector", roleCode: "APT_CASH_COLLECTOR", roleLabel: "APT Cash Collector" }];
+      state = {
+        ...state,
+        movementCounterparties: movementType === "DirectRemittance" ? collector : safeDrop,
+        movementCounterpartyContext: `${movementType}:${originalMovementId ?? "none"}:${requiredCounterpartyReference ?? "all"}`,
+      };
+      return success("humanSession.listCashCustodyMovementCounterparties", id);
+    },
     initiateCashCustodyMovement: async (id, payload) => {
       const movement: CashCustodyMovement = {
         id: crypto.randomUUID(),
@@ -298,7 +320,7 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
       }
       return success("humanSession.initiateCashCustodyMovement", id);
     },
-    acknowledgeCashCustodyMovement: async (id, movementId, _username, reject) => {
+    acknowledgeCashCustodyMovement: async (id, movementId, reject) => {
       if (state.activeCashCustodySummary) {
         state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: (state.activeCashCustodySummary.movements ?? []).map((movement) => movement.id === movementId ? { ...movement, status: reject ? "Rejected" : "Completed" } : movement) } };
       }

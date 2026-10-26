@@ -18,6 +18,7 @@ public static class HumanSessionBridgeCommand
     public const string CloseOwnCustody = "humanSession.closeOwnCustody";
     public const string CloseOwnShift = "humanSession.closeOwnShift";
     public const string AuthorizeCash = "humanSession.authorizeCash";
+    public const string ListCashCustodyMovementCounterparties = "humanSession.listCashCustodyMovementCounterparties";
     public const string InitiateCashCustodyMovement = "humanSession.initiateCashCustodyMovement";
     public const string AcknowledgeCashCustodyMovement = "humanSession.acknowledgeCashCustodyMovement";
     public const string CancelCashCustodyMovement = "humanSession.cancelCashCustodyMovement";
@@ -94,6 +95,7 @@ public sealed class HumanSessionBridgeHandler
                 HumanSessionBridgeCommand.CloseOwnCustody => await CloseCustodyAsync(request, cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.CloseOwnShift => await _runtime.CloseOwnShiftAsync(cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.AuthorizeCash => await AuthorizeCashAsync(cancellationToken).ConfigureAwait(false),
+                HumanSessionBridgeCommand.ListCashCustodyMovementCounterparties => await ListCashCustodyMovementCounterpartiesAsync(request, cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.InitiateCashCustodyMovement => await InitiateCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.AcknowledgeCashCustodyMovement => await AcknowledgeCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
                 HumanSessionBridgeCommand.CancelCashCustodyMovement => await CancelCashCustodyMovementAsync(request, cancellationToken).ConfigureAwait(false),
@@ -340,25 +342,42 @@ public sealed class HumanSessionBridgeHandler
             cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task<HumanSessionSafeState> ListCashCustodyMovementCounterpartiesAsync(
+        HumanSessionBridgeRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureExactPayload(request.Payload, "movementType", "originalMovementId", "requiredCounterpartyReference");
+        var payload = request.Payload.Deserialize<ListCashCustodyMovementCounterpartiesPayload>(JsonOptions)
+            ?? throw new JsonException();
+        return await _runtime.ListCashCustodyMovementCounterpartiesAsync(
+            payload.MovementType,
+            payload.OriginalMovementId,
+            payload.RequiredCounterpartyReference,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<HumanSessionSafeState> AcknowledgeCashCustodyMovementAsync(
         HumanSessionBridgeRequest request,
         CancellationToken cancellationToken)
     {
-        EnsureExactPayload(request.Payload, "movementId", "counterpartyUsername", "reject", "reasonCode", "idempotencyKey");
+        EnsureExactPayload(request.Payload, "movementId", "reject", "reasonCode", "idempotencyKey");
         var payload = request.Payload.Deserialize<AcknowledgeCashCustodyMovementPayload>(JsonOptions)
             ?? throw new JsonException();
-        if (string.IsNullOrWhiteSpace(payload.CounterpartyUsername))
+        var preparation = await _runtime.PrepareCashCustodyMovementCounterpartyAsync(
+            payload.MovementId,
+            cancellationToken).ConfigureAwait(false);
+        if (preparation.Counterparty is null)
         {
-            throw new JsonException();
+            return preparation.State;
         }
 
         return await RunExplicitCredentialOperationAsync(
             HumanCredentialOperation.MovementCounterpartyAuthentication,
-            payload.CounterpartyUsername.Trim(),
+            preparation.Counterparty.DisplayName,
             request.CorrelationId,
             credential => _runtime.AcknowledgeOrRejectCashCustodyMovementAsync(
                 payload.MovementId,
-                payload.CounterpartyUsername,
+                Guid.Parse(preparation.Counterparty.UserReference),
                 payload.Reject,
                 payload.ReasonCode,
                 payload.IdempotencyKey,
@@ -432,9 +451,12 @@ public sealed record InitiateCashCustodyMovementPayload(
     string ExternalHandoverReference,
     string IdempotencyKey,
     IReadOnlyCollection<CashCustodyDenominationLine> Denominations);
+public sealed record ListCashCustodyMovementCounterpartiesPayload(
+    CashCustodyMovementType MovementType,
+    Guid? OriginalMovementId,
+    string? RequiredCounterpartyReference);
 public sealed record AcknowledgeCashCustodyMovementPayload(
     Guid MovementId,
-    string CounterpartyUsername,
     bool Reject,
     string? ReasonCode,
     string IdempotencyKey);

@@ -60,14 +60,14 @@ public sealed class CashCustodyMovementTests
         Assert.True((await service.AcknowledgeCashCustodyMovementAsync(Acknowledge(outbound.Id))).IsSuccess);
 
         var returned = (await service.InitiateCashCustodyMovementAsync(
-            Initiate(session.Id, CashCustodyMovementType.CashReturn, 100m, outbound.Id, "returner-001", "return-001"))).Value!;
+            Initiate(session.Id, CashCustodyMovementType.CashReturn, 100m, outbound.Id, "receiver-id-001", "return-001"))).Value!;
         Assert.True((await service.AcknowledgeCashCustodyMovementAsync(
-            Acknowledge(returned.Id, "returner-001", "receiver-002", "ack-return-001"))).IsSuccess);
+            Acknowledge(returned.Id, "receiver.synthetic", "receiver-id-001", "ack-return-001"))).IsSuccess);
 
         var excess = (await service.InitiateCashCustodyMovementAsync(
-            Initiate(session.Id, CashCustodyMovementType.CashReturn, 250m, outbound.Id, "returner-002", "return-excess"))).Value!;
+            Initiate(session.Id, CashCustodyMovementType.CashReturn, 250m, outbound.Id, "receiver-id-001", "return-excess"))).Value!;
         var excessResult = await service.AcknowledgeCashCustodyMovementAsync(
-            Acknowledge(excess.Id, "returner-002", "receiver-003", "ack-return-excess"));
+            Acknowledge(excess.Id, "receiver.synthetic", "receiver-id-001", "ack-return-excess"));
         var closed = await service.CloseCashCustodySessionAsync(TestRequests.CloseSession(session.Id, 800m));
 
         Assert.False(excessResult.IsSuccess);
@@ -80,6 +80,44 @@ public sealed class CashCustodyMovementTests
         Assert.Equal(800m, closed.Value!.ExpectedClosingCashAmount);
         Assert.Equal(10_000, closed.Value.CompletedCashInMinorUnitsAtClose);
         Assert.Equal(30_000, closed.Value.CompletedCashOutMinorUnitsAtClose);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task CashReturnMustDesignateTheOriginalCompletedReceiver()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await TestRequests.OpenShiftAndCreateSessionAsync(service);
+        var outbound = (await service.InitiateCashCustodyMovementAsync(
+            Initiate(session.Id, CashCustodyMovementType.SafeDrop, 100m))).Value!;
+        Assert.True((await service.AcknowledgeCashCustodyMovementAsync(Acknowledge(outbound.Id))).IsSuccess);
+
+        var result = await service.InitiateCashCustodyMovementAsync(
+            Initiate(session.Id, CashCustodyMovementType.CashReturn, 100m, outbound.Id, "different-receiver", "return-wrong-receiver"));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(CashJournalErrorCode.InvalidOriginalMovement, result.Error!.Code);
+        var overview = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        Assert.Single(overview.ActiveSession!.Movements!);
+    }
+
+    [Fact]
+    [Trait("Category", "LocalOperations")]
+    public async Task HistoricalUsernameCounterpartyReferenceRemainsAcknowledgeable()
+    {
+        using var database = TestDatabase.Create();
+        var service = database.CreateService();
+        var session = await TestRequests.OpenShiftAndCreateSessionAsync(service);
+        var movement = (await service.InitiateCashCustodyMovementAsync(
+            Initiate(session.Id, CashCustodyMovementType.SafeDrop, 100m, receiver: "legacy.receiver"))).Value!;
+
+        var acknowledged = await service.AcknowledgeCashCustodyMovementAsync(
+            Acknowledge(movement.Id, "legacy.receiver", "receiver-stable-id", "ack-legacy-username"));
+
+        Assert.True(acknowledged.IsSuccess);
+        Assert.Equal(CashCustodyMovementStatus.Completed, acknowledged.Value!.Status);
+        Assert.Equal("legacy.receiver", acknowledged.Value.IntendedCounterpartyReference);
     }
 
     [Fact]
@@ -171,13 +209,13 @@ public sealed class CashCustodyMovementTests
             Initiate(session.Id, CashCustodyMovementType.SafeDrop, 300m))).Value!;
         Assert.True((await service.AcknowledgeCashCustodyMovementAsync(Acknowledge(outbound.Id))).IsSuccess);
         var first = (await service.InitiateCashCustodyMovementAsync(
-            Initiate(session.Id, CashCustodyMovementType.CashReturn, 200m, outbound.Id, "returner-001", "return-001"))).Value!;
+            Initiate(session.Id, CashCustodyMovementType.CashReturn, 200m, outbound.Id, "receiver-id-001", "return-001"))).Value!;
         var second = (await service.InitiateCashCustodyMovementAsync(
-            Initiate(session.Id, CashCustodyMovementType.CashReturn, 200m, outbound.Id, "returner-002", "return-002"))).Value!;
+            Initiate(session.Id, CashCustodyMovementType.CashReturn, 200m, outbound.Id, "receiver-id-001", "return-002"))).Value!;
 
         var results = await Task.WhenAll(
-            service.AcknowledgeCashCustodyMovementAsync(Acknowledge(first.Id, "returner-001", "receiver-002", "ack-return-001")),
-            service.AcknowledgeCashCustodyMovementAsync(Acknowledge(second.Id, "returner-002", "receiver-003", "ack-return-002")));
+            service.AcknowledgeCashCustodyMovementAsync(Acknowledge(first.Id, "receiver.synthetic", "receiver-id-001", "ack-return-001")),
+            service.AcknowledgeCashCustodyMovementAsync(Acknowledge(second.Id, "receiver.synthetic", "receiver-id-001", "ack-return-002")));
 
         Assert.Single(results, result => result.IsSuccess);
         var failure = Assert.Single(results, result => !result.IsSuccess);
