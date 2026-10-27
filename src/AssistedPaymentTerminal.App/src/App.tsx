@@ -1967,10 +1967,11 @@ function statutoryStatusSummary(state: StatutoryDiscountWorkflowState): { label:
     case "draft":
     case "submitting":
     case "awaiting_review":
-    case "approved_application_not_requested":
     case "application_submitting":
     case "application_processing":
       return { label: "Submitted", message: "Statutory discount request is being processed." };
+    case "approved_application_not_requested":
+      return { label: "Approved", message: "Statutory discount is approved and ready to apply." };
     case "applied": return { label: "Approved", message: "Approved statutory discount is included in the amount due." };
     case "rejected": return { label: "Rejected", message: "Statutory discount request was rejected.", reason: "The submitted request was not approved." };
     default: return { label: "Submitted", message: "Statutory discount status is temporarily unavailable." };
