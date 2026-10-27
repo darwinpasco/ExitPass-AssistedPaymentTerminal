@@ -261,14 +261,17 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
 
       {appliedComplete && (
         <section className="statutory-applied-facts" aria-label="Applied statutory payable basis" data-testid="statutory-applied-facts">
-          <h4>Applied statutory payable basis</h4>
+          <h4>Parking Fee Calculation</h4>
           <dl className="central-pms-details">
-            <div><dt>Original amount</dt><dd>{formatCurrency(state.originalAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>VAT-exclusive amount</dt><dd>{formatCurrency(state.vatExclusiveBasisAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>VAT amount</dt><dd>{formatCurrency(state.vatAmountMinorUnits, state.currency)}</dd></div>
+            <div><dt>Original parking fee (VAT-inclusive)</dt><dd>{formatCurrency(state.originalAmountMinorUnits, state.currency)}</dd></div>
+            <div><dt>Original VAT component (12%)</dt><dd>{formatCurrency(state.originalVatAmountMinorUnits, state.currency)}</dd></div>
+            <div><dt>Original VAT-exclusive parking fee</dt><dd>{formatCurrency(state.vatExclusiveBasisAmountMinorUnits, state.currency)}</dd></div>
             <div><dt>VAT treatment</dt><dd>{friendly(state.vatTreatment)}</dd></div>
-            <div><dt>Statutory discount</dt><dd>{formatCurrency(state.statutoryDiscountAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Final payable amount</dt><dd>{formatCurrency(state.finalPayableAmountMinorUnits, state.currency)}</dd></div>
+            <div><dt>{formatLguBenefitLabel(state.discountPercentageBasisPoints)}</dt><dd>{formatDiscount(state.statutoryDiscountAmountMinorUnits, state.currency)}</dd></div>
+            {state.ordinanceReference && <div><dt>Ordinance reference</dt><dd>{state.ordinanceReference}</dd></div>}
+            <div><dt>Final VATable sales</dt><dd>{formatCurrency(state.finalVatableSalesMinorUnits, state.currency)}</dd></div>
+            <div><dt>Final applicable VAT (12%)</dt><dd>{formatCurrency(state.finalVatAmountMinorUnits, state.currency)}</dd></div>
+            <div><dt>Total amount payable</dt><dd>{formatCurrency(state.finalPayableAmountMinorUnits, state.currency)}</dd></div>
             <div><dt>Tariff application</dt><dd>Authoritative version applied</dd></div>
           </dl>
         </section>
@@ -362,6 +365,12 @@ export function mapDecisionResponse(response: StatutoryDiscountDecisionResponse,
     originalAmountMinorUnits: response.grossAmountMinorUnits,
     vatExclusiveBasisAmountMinorUnits: response.vatExclusiveBasisAmountMinorUnits,
     vatAmountMinorUnits: response.vatAmountMinorUnits,
+    originalVatAmountMinorUnits: response.originalVatAmountMinorUnits,
+    finalVatableSalesMinorUnits: response.finalVatableSalesMinorUnits,
+    finalVatAmountMinorUnits: response.finalVatAmountMinorUnits,
+    discountPercentageBasisPoints: response.discountPercentageBasisPoints,
+    benefitType: response.benefitType,
+    ordinanceReference: response.ordinanceReference,
     vatTreatment: response.vatTreatment,
     statutoryDiscountAmountMinorUnits: response.statutoryDiscountAmountMinorUnits,
     finalPayableAmountMinorUnits: response.netPayableAmountMinorUnits,
@@ -461,7 +470,17 @@ function friendly(value?: string | null): string {
   return value.replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
 
+function formatLguBenefitLabel(discountPercentageBasisPoints?: number | null): string {
+  if (discountPercentageBasisPoints == null) return "LGU ordinance benefit";
+  return `LGU ordinance discount (${discountPercentageBasisPoints / 100}%)`;
+}
+
 function formatCurrency(amountMinorUnits?: number | null, currency?: string | null): string {
   if (amountMinorUnits == null) return "Unavailable";
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: currency ?? "PHP" }).format(amountMinorUnits / 100);
+}
+
+function formatDiscount(amountMinorUnits?: number | null, currency?: string | null): string {
+  if (amountMinorUnits == null) return "Unavailable";
+  return formatCurrency(-Math.abs(amountMinorUnits), currency);
 }
