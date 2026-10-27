@@ -1148,6 +1148,8 @@ public sealed partial class CashJournalService
     {
         var submissions = await BuildCashCustodySubmissionSummaryAsync(dbContext, session, cancellationToken)
             .ConfigureAwait(false);
+        var accountability = await BuildCashierAccountabilityActivityAsync(dbContext, session, cancellationToken)
+            .ConfigureAwait(false);
 
         if (session.Status == CashCustodySessionStatus.Closed
             && session.UnresolvedSubmissionCountAtClose is int unresolvedAtClose)
@@ -1161,8 +1163,56 @@ public sealed partial class CashJournalService
             session.Movements
                 .OrderByDescending(movement => movement.CreatedAt)
                 .Select(ToMovementSnapshot)
-                .ToArray());
+                .ToArray(),
+            accountability);
     }
+
+    private static async Task<CashierAccountabilityActivitySnapshot> BuildCashierAccountabilityActivityAsync(
+        CashJournalDbContext dbContext,
+        CashCustodySession session,
+        CancellationToken cancellationToken)
+    {
+        var cashReceivedTenders = await dbContext.CashTenders
+            .AsNoTracking()
+            .Where(tender => tender.CashCustodySessionId == session.Id)
+            .Where(tender => tender.CurrentLocalState == CashTenderState.CashReceived)
+            .Select(tender => new { tender.Id, tender.AmountDue })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var cashReceivedTenderIds = cashReceivedTenders.Select(tender => tender.Id).ToArray();
+        var confirmedTenderIds = cashReceivedTenderIds.Length == 0
+            ? []
+            : await dbContext.TerminalCashPaymentOutboxCommands
+                .AsNoTracking()
+                .Where(command => cashReceivedTenderIds.Contains(command.TerminalCashTenderId))
+                .Where(command => command.Status == TerminalCashPaymentCommandStatus.Confirmed)
+                .Select(command => command.TerminalCashTenderId)
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false);
+        var confirmedTenderIdSet = confirmedTenderIds.ToHashSet();
+        var completedMovements = session.Movements
+            .Where(movement => ResolveMovementStatus(movement.Events) == CashCustodyMovementStatus.Completed)
+            .ToArray();
+
+        return new CashierAccountabilityActivitySnapshot(
+            SumMinorUnits(cashReceivedTenders.Select(tender => tender.AmountDue)),
+            SumMinorUnits(cashReceivedTenders
+                .Where(tender => confirmedTenderIdSet.Contains(tender.Id))
+                .Select(tender => tender.AmountDue)),
+            SumMovementMinorUnits(completedMovements, CashCustodyMovementType.CashReturn),
+            SumMovementMinorUnits(completedMovements, CashCustodyMovementType.SafeDrop),
+            SumMovementMinorUnits(completedMovements, CashCustodyMovementType.DirectRemittance));
+    }
+
+    private static long SumMinorUnits(IEnumerable<decimal> amounts) =>
+        amounts.Aggregate(0L, (sum, amount) => checked(sum + AmountToMinorUnits(amount)));
+
+    private static long SumMovementMinorUnits(
+        IEnumerable<CashCustodyMovement> movements,
+        CashCustodyMovementType movementType) =>
+        movements
+            .Where(movement => movement.MovementType == movementType)
+            .Aggregate(0L, (sum, movement) => checked(sum + movement.AmountMinorUnits));
 
     private static async Task<CashCustodySubmissionSummarySnapshot> BuildCashCustodySubmissionSummaryAsync(
         CashJournalDbContext dbContext,

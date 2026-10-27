@@ -96,6 +96,8 @@ public sealed class CashJournalServiceTests
         Assert.Equal(1, overview.ActiveSession.Submissions.RejectedSubmissionCount);
         Assert.Equal(3, overview.ActiveSession.Submissions.UnresolvedSubmissionCount);
         Assert.Equal(1, overview.ActiveSession.Submissions.PendingFiscalIssuanceCount);
+        Assert.Equal(43_000, overview.ActiveSession.Accountability!.PhysicalCashReceivedMinorUnits);
+        Assert.Equal(21_000, overview.ActiveSession.Accountability.CanonicallyConfirmedCashMinorUnits);
     }
 
     [Fact]
@@ -110,6 +112,7 @@ public sealed class CashJournalServiceTests
 
         Assert.NotNull(overview.ActiveSession);
         Assert.Equal(new CashCustodySubmissionSummarySnapshot(0, 0, 0, 0, 0, 0, 0), overview.ActiveSession!.Submissions);
+        Assert.Equal(new CashierAccountabilityActivitySnapshot(0, 0, 0, 0, 0), overview.ActiveSession.Accountability);
     }
 
     [Theory]
@@ -150,6 +153,9 @@ public sealed class CashJournalServiceTests
         Assert.Equal(1, historical.Submissions.UnresolvedSubmissionCount);
         Assert.Equal(1, historical.Submissions.ConfirmedSubmissionCount);
         Assert.Equal(0, historical.Submissions.PendingFiscalIssuanceCount);
+        Assert.Equal(10_000, historical.Accountability!.PhysicalCashReceivedMinorUnits);
+        Assert.Equal(10_000, historical.Accountability.CanonicallyConfirmedCashMinorUnits);
+        Assert.Equal(expectedVariance, historical.Session.VarianceAmount);
     }
 
     [Fact]

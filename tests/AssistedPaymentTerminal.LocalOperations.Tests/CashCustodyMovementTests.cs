@@ -21,6 +21,9 @@ public sealed class CashCustodyMovementTests
         Assert.Equal(CashCustodyMovementStatus.PendingAcknowledgment, initiated.Value!.Status);
         Assert.False(close.IsSuccess);
         Assert.Equal(CashJournalErrorCode.PendingCashCustodyMovement, close.Error!.Code);
+        var overview = await service.GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        Assert.Equal(0, overview.ActiveSession!.Accountability!.CompletedSafeDropsMinorUnits);
+        Assert.Equal(0, overview.ActiveSession.Accountability.CompletedDirectRemittancesMinorUnits);
     }
 
     [Theory]
@@ -47,6 +50,14 @@ public sealed class CashCustodyMovementTests
         Assert.Equal(1, closed.Value.CompletedMovementCountAtClose);
         Assert.Equal(20_000, closed.Value.CompletedCashOutMinorUnitsAtClose);
         Assert.Single(closed.Value.CompletedMovementReferencesAtClose!);
+        var history = await database.CreateService().GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        var accountability = Assert.Single(history.ClosedSessions).Accountability!;
+        Assert.Equal(
+            movementType == CashCustodyMovementType.SafeDrop ? 20_000 : 0,
+            accountability.CompletedSafeDropsMinorUnits);
+        Assert.Equal(
+            movementType == CashCustodyMovementType.DirectRemittance ? 20_000 : 0,
+            accountability.CompletedDirectRemittancesMinorUnits);
     }
 
     [Fact]
@@ -80,6 +91,11 @@ public sealed class CashCustodyMovementTests
         Assert.Equal(800m, closed.Value!.ExpectedClosingCashAmount);
         Assert.Equal(10_000, closed.Value.CompletedCashInMinorUnitsAtClose);
         Assert.Equal(30_000, closed.Value.CompletedCashOutMinorUnitsAtClose);
+        var history = await database.CreateService().GetCashCustodyOverviewAsync(TestRequests.CashCustodyOverview());
+        var accountability = Assert.Single(history.ClosedSessions).Accountability!;
+        Assert.Equal(10_000, accountability.CompletedCashReturnsMinorUnits);
+        Assert.Equal(30_000, accountability.CompletedSafeDropsMinorUnits);
+        Assert.Equal(0, accountability.CompletedDirectRemittancesMinorUnits);
     }
 
     [Fact]

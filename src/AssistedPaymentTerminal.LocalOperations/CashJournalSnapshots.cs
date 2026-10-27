@@ -128,7 +128,15 @@ public sealed record CashCustodySubmissionSummarySnapshot(
 public sealed record CashCustodySummarySnapshot(
     CashCustodySessionSnapshot Session,
     CashCustodySubmissionSummarySnapshot Submissions,
-    IReadOnlyList<CashCustodyMovementSnapshot>? Movements = null);
+    IReadOnlyList<CashCustodyMovementSnapshot>? Movements = null,
+    CashierAccountabilityActivitySnapshot? Accountability = null);
+
+public sealed record CashierAccountabilityActivitySnapshot(
+    long PhysicalCashReceivedMinorUnits,
+    long CanonicallyConfirmedCashMinorUnits,
+    long CompletedCashReturnsMinorUnits,
+    long CompletedSafeDropsMinorUnits,
+    long CompletedDirectRemittancesMinorUnits);
 
 public sealed record CashCustodyMovementDenominationSnapshot(
     string DenominationCode,

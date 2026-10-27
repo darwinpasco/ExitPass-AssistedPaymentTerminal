@@ -21,6 +21,15 @@ export type CashCustodySummary = {
   session: CashCustodySessionSnapshot;
   submissions: CashCustodySubmissionSummary;
   movements?: CashCustodyMovement[] | null;
+  accountability?: CashierAccountabilityActivity | null;
+};
+
+export type CashierAccountabilityActivity = {
+  physicalCashReceivedMinorUnits: number;
+  canonicallyConfirmedCashMinorUnits: number;
+  completedCashReturnsMinorUnits: number;
+  completedSafeDropsMinorUnits: number;
+  completedDirectRemittancesMinorUnits: number;
 };
 
 export type CashCustodyMovementType = "SafeDrop" | "DirectRemittance" | "CashReturn";
@@ -241,6 +250,7 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
             status: "Open",
           },
           submissions: emptySubmissionSummary(),
+          accountability: emptyAccountabilityActivity(),
         },
       };
       return success("humanSession.openOrResumeCustody", id);
@@ -322,13 +332,31 @@ export function createDevelopmentHumanSessionBridge(config: AptConfig): HumanSes
     },
     acknowledgeCashCustodyMovement: async (id, movementId, reject) => {
       if (state.activeCashCustodySummary) {
-        state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: (state.activeCashCustodySummary.movements ?? []).map((movement) => movement.id === movementId ? { ...movement, status: reject ? "Rejected" : "Completed" } : movement) } };
+        const movements = (state.activeCashCustodySummary.movements ?? [])
+          .map((movement) => movement.id === movementId ? { ...movement, status: reject ? "Rejected" as const : "Completed" as const } : movement);
+        state = {
+          ...state,
+          activeCashCustodySummary: {
+            ...state.activeCashCustodySummary,
+            movements,
+            accountability: developmentAccountabilityActivity(state.activeCashCustodySummary, movements),
+          },
+        };
       }
       return success("humanSession.acknowledgeCashCustodyMovement", id);
     },
     cancelCashCustodyMovement: async (id, movementId) => {
       if (state.activeCashCustodySummary) {
-        state = { ...state, activeCashCustodySummary: { ...state.activeCashCustodySummary, movements: (state.activeCashCustodySummary.movements ?? []).map((movement) => movement.id === movementId ? { ...movement, status: "Cancelled" } : movement) } };
+        const movements = (state.activeCashCustodySummary.movements ?? [])
+          .map((movement) => movement.id === movementId ? { ...movement, status: "Cancelled" as const } : movement);
+        state = {
+          ...state,
+          activeCashCustodySummary: {
+            ...state.activeCashCustodySummary,
+            movements,
+            accountability: developmentAccountabilityActivity(state.activeCashCustodySummary, movements),
+          },
+        };
       }
       return success("humanSession.cancelCashCustodyMovement", id);
     },
@@ -345,6 +373,33 @@ function emptySubmissionSummary(): CashCustodySubmissionSummary {
     rejectedSubmissionCount: 0,
     unresolvedSubmissionCount: 0,
     pendingFiscalIssuanceCount: 0,
+  };
+}
+
+function emptyAccountabilityActivity(): CashierAccountabilityActivity {
+  return {
+    physicalCashReceivedMinorUnits: 0,
+    canonicallyConfirmedCashMinorUnits: 0,
+    completedCashReturnsMinorUnits: 0,
+    completedSafeDropsMinorUnits: 0,
+    completedDirectRemittancesMinorUnits: 0,
+  };
+}
+
+function developmentAccountabilityActivity(
+  summary: CashCustodySummary,
+  movements: CashCustodyMovement[],
+): CashierAccountabilityActivity {
+  const current = summary.accountability ?? emptyAccountabilityActivity();
+  const completed = movements.filter((movement) => movement.status === "Completed");
+  const total = (movementType: CashCustodyMovementType) => completed
+    .filter((movement) => movement.movementType === movementType)
+    .reduce((sum, movement) => sum + movement.amountMinorUnits, 0);
+  return {
+    ...current,
+    completedCashReturnsMinorUnits: total("CashReturn"),
+    completedSafeDropsMinorUnits: total("SafeDrop"),
+    completedDirectRemittancesMinorUnits: total("DirectRemittance"),
   };
 }
 
