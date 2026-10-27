@@ -16,6 +16,7 @@ import type {
 } from "./api/centralPmsTypes";
 import { isProjectedSessionResponse } from "./api/centralPmsClient";
 import { CashCapturePanel } from "./CashCapturePanel";
+import { CashierAccountabilityReport } from "./CashierAccountabilityReport";
 import { CashDenominationGrid } from "./CashDenominationGrid";
 import { CashCustodyMovementPanel } from "./CashCustodyMovementPanel";
 import { CASH_CUSTODY_DENOMINATIONS, type CashCustodyDenominationLine } from "./cashCustodyDenominations";
@@ -942,6 +943,10 @@ export function HumanSessionPanel({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [selectedClosedCustodyId, setSelectedClosedCustodyId] = useState<string | null>(null);
+  const [accountabilityReport, setAccountabilityReport] = useState<{
+    summary: CashCustodySummary;
+    generatedAt: string;
+  } | null>(null);
   const shiftOpen = state.activeShift?.status === "Open";
   const custodyOpen = state.activeCashCustodySession?.status === "Open";
   const [expanded, setExpanded] = useState(!shiftOpen || !custodyOpen);
@@ -951,6 +956,7 @@ export function HumanSessionPanel({
     try {
       const result = await action();
       if (result.ok) {
+        setAccountabilityReport(null);
         onStateChange(result.payload);
         const nextShiftOpen = result.payload.activeShift?.status === "Open";
         const nextCustodyOpen = result.payload.activeCashCustodySession?.status === "Open";
@@ -983,6 +989,10 @@ export function HumanSessionPanel({
     ?? state.latestClosedCashCustody
     ?? closedHistory[0]
     ?? null;
+
+  function previewAccountabilityReport(summary: CashCustodySummary) {
+    setAccountabilityReport({ summary, generatedAt: new Date().toISOString() });
+  }
 
   return (
     <section className="human-session-panel" aria-labelledby="human-session-heading">
@@ -1047,6 +1057,15 @@ export function HumanSessionPanel({
                   <div><dt>Expected Cash</dt><dd>Calculated on close</dd></div>
                   <div><dt>Variance</dt><dd>Calculated on close</dd></div>
                 </dl>
+                {state.activeCashCustodySummary && (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => previewAccountabilityReport(state.activeCashCustodySummary!)}
+                  >
+                    Preview interim accountability report
+                  </button>
+                )}
                 {(activeSummary?.unresolvedSubmissionCount ?? 0) > 0 && (
                   <div className="status-notice danger" role="alert" data-testid="cash-custody-unresolved-warning">
                     <strong>{receiptCountMessage(activeSummary?.unresolvedSubmissionCount ?? 0)}</strong>
@@ -1094,6 +1113,20 @@ export function HumanSessionPanel({
               sessions={closedHistory}
               selectedId={selectedClosedCustody?.session.id ?? null}
               onSelect={setSelectedClosedCustodyId}
+              onReport={previewAccountabilityReport}
+            />
+          )}
+
+          {accountabilityReport && (
+            <CashierAccountabilityReport
+              summary={accountabilityReport.summary}
+              currentCashierId={state.userReference}
+              currentCashierDisplayName={state.displayName}
+              siteDisplayName={context?.siteName ?? null}
+              terminalDisplayName={context?.terminalDisplayName ?? null}
+              terminalSerialNumber={context?.terminalSerialNumber ?? null}
+              generatedAt={accountabilityReport.generatedAt}
+              onClose={() => setAccountabilityReport(null)}
             />
           )}
 
@@ -1187,17 +1220,19 @@ function CashCustodyHistory({
   sessions,
   selectedId,
   onSelect,
+  onReport,
 }: {
   sessions: CashCustodySummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onReport: (summary: CashCustodySummary) => void;
 }) {
   return (
     <section className="cashier-session-group custody-history" aria-label="Closed cash custody history">
       <h3>Closed Custody History</h3>
       <div className="custody-history-table-wrap">
         <table>
-          <thead><tr><th>Custody reference</th><th>Opened At</th><th>Closed At</th><th>Status</th><th>Receipts</th><th>Expected</th><th>Actual</th><th>Variance</th></tr></thead>
+          <thead><tr><th>Custody reference</th><th>Opened At</th><th>Closed At</th><th>Status</th><th>Receipts</th><th>Expected</th><th>Actual</th><th>Variance</th><th>Report</th></tr></thead>
           <tbody>
             {sessions.map((summary) => (
               <tr key={summary.session.id} className={summary.session.id === selectedId ? "selected" : undefined}>
@@ -1209,6 +1244,7 @@ function CashCustodyHistory({
                 <td>{formatCommittedCurrency(summary.session.expectedClosingCashAmount)}</td>
                 <td>{formatCommittedCurrency(summary.session.closingCashAmount)}</td>
                 <td>{formatCommittedCurrency(summary.session.varianceAmount)}</td>
+                <td><button type="button" className="history-link" onClick={() => onReport(summary)}>Preview</button></td>
               </tr>
             ))}
           </tbody>

@@ -1642,6 +1642,42 @@ dl {
   background: #edf6fb;
 }
 
+.cashier-accountability-report {
+  grid-column: 1 / -1;
+  border-top: 1px solid #d5dde3;
+  padding-top: 10px;
+}
+
+.cashier-accountability-report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cashier-accountability-report-actions > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cashier-accountability-report-actions h3,
+.cashier-accountability-report-actions p {
+  margin: 0;
+}
+
+.cashier-accountability-print {
+  width: min(57mm, 100%);
+  margin-top: 12px;
+  padding: 3mm;
+}
+
+.cashier-accountability-status {
+  margin-top: 4px !important;
+  font-weight: 900;
+}
+
 .history-link {
   border: 0;
   padding: 0;
@@ -1687,6 +1723,7 @@ dl {
   }
 
   .cashier-header-actions,
+  .cashier-accountability-report-actions,
   .session-form-row,
   .cashier-closing-grid {
     display: grid;
@@ -1704,5 +1741,27 @@ dl {
 
   .custody-denomination-evidence dl {
     grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  body:has(.cashier-accountability-print) * {
+    visibility: hidden !important;
+  }
+
+  .cashier-accountability-print,
+  .cashier-accountability-print * {
+    visibility: visible !important;
+  }
+
+  .cashier-accountability-print {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 57mm;
+    max-width: none;
+    margin: 0;
+    border: 0;
+    padding: 3mm;
+    box-shadow: none;
   }
 }
