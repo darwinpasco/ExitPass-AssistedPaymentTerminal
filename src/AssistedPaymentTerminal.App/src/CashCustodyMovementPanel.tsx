@@ -23,11 +23,10 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
   const movements = state.activeCashCustodySummary?.movements ?? [];
   const [movementType, setMovementType] = useState<CashCustodyMovementType>("SafeDrop");
   const [counterpartyReference, setCounterpartyReference] = useState("");
-  const [handoverReference, setHandoverReference] = useState("");
+  const [initiationDraft, setInitiationDraft] = useState(createMovementInitiationDraft);
   const [originalMovementId, setOriginalMovementId] = useState("");
   const [counterpartyDirectories, setCounterpartyDirectories] = useState<Record<string, CashCustodyCounterpartyOption[]>>({});
   const loadedDirectoryContexts = useRef(new Set<string>());
-  const initiationKey = useRef(`cash-custody-movement:${crypto.randomUUID()}`);
   const completedOutbound = movements.filter((movement) =>
     movement.status === "Completed" && (movement.movementType === "SafeDrop" || movement.movementType === "DirectRemittance"));
   const pendingCount = movements.filter((movement) => movement.status === "PendingAcknowledgment").length;
@@ -82,12 +81,12 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
       movementType,
       originalMovementId: movementType === "CashReturn" ? originalMovementId || null : null,
       intendedCounterpartyReference: counterpartyReference.trim(),
-      externalHandoverReference: handoverReference.trim(),
-      idempotencyKey: initiationKey.current,
+      externalHandoverReference: initiationDraft.externalHandoverReference,
+      idempotencyKey: initiationDraft.idempotencyKey,
       denominations,
     }));
     if (result.ok) {
-      initiationKey.current = `cash-custody-movement:${crypto.randomUUID()}`;
+      setInitiationDraft(createMovementInitiationDraft());
     }
   }
 
@@ -133,15 +132,15 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
           </label>
           {receivingPeople.length === 0 && <p className="cash-error" role="alert">No authorized receiving person is currently available for this movement.</p>}
           <label>
-            Handover or remittance reference
-            <input value={handoverReference} disabled={disabled} onChange={(event) => setHandoverReference(event.target.value)} autoComplete="off" />
+            Remittance / Handover Reference No.
+            <input value={initiationDraft.externalHandoverReference} disabled={disabled} readOnly aria-readonly="true" />
           </label>
           <CashDenominationGrid
             purpose="movement"
             catalogue={catalogue}
             disabled={disabled
               || !counterpartyReference.trim()
-              || !handoverReference.trim()
+              || !initiationDraft.externalHandoverReference
               || (movementType === "CashReturn" && !originalMovementId)}
             onConfirm={(denominations) => void initiate(denominations)}
           />
@@ -195,7 +194,7 @@ function MovementHistory({ movements, bridge, disabled, invoke, counterpartyDire
               <div><dt>Status</dt><dd>{movementStatusLabel(movement.status)}</dd></div>
               <div><dt>Amount</dt><dd>{formatPhp(movement.amountMinorUnits)}</dd></div>
               <div><dt>Receiving person</dt><dd>{receivingPersonLabel}</dd></div>
-              <div><dt>Handover reference</dt><dd>{movement.externalHandoverReference}</dd></div>
+              <div><dt>Remittance / Handover Reference No.</dt><dd>{movement.externalHandoverReference}</dd></div>
               <div><dt>Initiated</dt><dd>{new Date(movement.createdAt).toLocaleString("en-PH")}</dd></div>
               {terminalEvent?.eventType === "Completed" && <div><dt>Acknowledged by</dt><dd>{receivingPerson?.displayName ?? terminalEvent.authorizedActorId}</dd></div>}
               {terminalEvent?.eventType === "Completed" && <div><dt>Acknowledgment reference</dt><dd>{terminalEvent.correlationId}</dd></div>}
@@ -282,4 +281,12 @@ function counterpartyOptionLabel(person: CashCustodyCounterpartyOption, people: 
   const duplicateName = people.filter((candidate) => candidate.displayName === person.displayName).length > 1;
   const suffix = duplicateName ? ` (${person.userReference.slice(0, 8)})` : "";
   return `${person.displayName} - ${person.roleLabel}${suffix}`;
+}
+
+function createMovementInitiationDraft(): { externalHandoverReference: string; idempotencyKey: string } {
+  const identity = crypto.randomUUID();
+  return {
+    externalHandoverReference: `HND-${identity.replaceAll("-", "").toUpperCase()}`,
+    idempotencyKey: `cash-custody-movement:${identity}`,
+  };
 }
