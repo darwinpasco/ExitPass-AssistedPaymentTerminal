@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthenticatedTerminal, CashierLoginPanel, HumanSessionPanel } from "./App";
+import { CashCustodyMovementPanel } from "./CashCustodyMovementPanel";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
 import {
   createDevelopmentHumanSessionBridge,
@@ -415,8 +416,12 @@ describe("APT human-session presentation boundary", () => {
     const panel = screen.getByLabelText("Cash custody movements");
 
     await waitFor(() => expect(within(panel).getByLabelText("Receiving Person")).toBeEnabled());
+    const handoverReference = within(panel).getByLabelText("Remittance / Handover Reference No.");
+    expect(handoverReference).toHaveAttribute("readonly");
+    expect((handoverReference as HTMLInputElement).value).toMatch(/^HND-[0-9A-F]{32}$/);
+    const generatedReference = (handoverReference as HTMLInputElement).value;
     await userEvent.selectOptions(within(panel).getByLabelText("Receiving Person"), receiverGuid);
-    await userEvent.type(within(panel).getByLabelText("Handover or remittance reference"), "DROP-001");
+    expect(handoverReference).toHaveValue(generatedReference);
     await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
     await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
     await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
@@ -428,7 +433,9 @@ describe("APT human-session presentation boundary", () => {
     const payload = initiateCashCustodyMovement.mock.calls[0][1];
     expect(payload.movementType).toBe("SafeDrop");
     expect(payload.intendedCounterpartyReference).toBe(receiverGuid);
-    expect(payload.externalHandoverReference).toBe("DROP-001");
+    expect(payload.externalHandoverReference).toBe(generatedReference);
+    const draftIdentity = payload.idempotencyKey.replace("cash-custody-movement:", "");
+    expect(`HND-${draftIdentity.replaceAll("-", "").toUpperCase()}`).toBe(generatedReference);
     expect(payload.denominations).toHaveLength(13);
     expect(payload.denominations).toContainEqual({ denominationCode: "PHP-100", denominationValueMinorUnits: 10_000, quantity: 1 });
     expect(document.body).not.toHaveTextContent("Available Cash");
@@ -461,7 +468,6 @@ describe("APT human-session presentation boundary", () => {
     expect(within(selector).getByRole("option", { name: "Duplicate Name - APT Site Custodian (77777777)" })).toBeInTheDocument();
     expect(within(panel).queryByLabelText("Authorized counterparty username")).not.toBeInTheDocument();
     await userEvent.selectOptions(selector, secondReceiver);
-    await userEvent.type(within(panel).getByLabelText("Handover or remittance reference"), "DROP-DUPLICATE-NAME");
     await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
     await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
     await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
@@ -469,6 +475,86 @@ describe("APT human-session presentation boundary", () => {
 
     await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(1));
     expect(initiateCashCustodyMovement.mock.calls[0][1].intendedCounterpartyReference).toBe(secondReceiver);
+  });
+
+  it.each([
+    ["SafeDrop", null],
+    ["DirectRemittance", null],
+    ["CashReturn", movementFixture("Completed").id],
+  ] as const)("generates and submits an automatic reference for %s", async (movementType, originalMovementId) => {
+    const initiateCashCustodyMovement = vi.fn(async (
+      _correlationId: string,
+      _payload: Parameters<HumanSessionBridge["initiateCashCustodyMovement"]>[1],
+    ) => successResult("humanSession.initiateCashCustodyMovement", movementState([])));
+    const movements = movementType === "CashReturn" ? [movementFixture("Completed")] : [];
+    render(<HumanSessionPanel
+      state={movementState(movements)}
+      bridge={bridgeStub({ initiateCashCustodyMovement })}
+      onStateChange={vi.fn()}
+    />);
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+    const panel = screen.getByLabelText("Cash custody movements");
+    await userEvent.selectOptions(within(panel).getByLabelText("Movement type"), movementType);
+    if (originalMovementId) {
+      await userEvent.selectOptions(within(panel).getByLabelText("Original completed transfer"), originalMovementId);
+    }
+    const selector = await within(panel).findByLabelText("Receiving Person");
+    await waitFor(() => expect(selector).toBeEnabled());
+    await userEvent.selectOptions(selector, receiverGuid);
+    const reference = (within(panel).getByLabelText("Remittance / Handover Reference No.") as HTMLInputElement).value;
+    await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
+    await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
+    await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Confirm movement count" }));
+
+    await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(1));
+    expect(initiateCashCustodyMovement.mock.calls[0][1]).toMatchObject({
+      movementType,
+      originalMovementId,
+      externalHandoverReference: reference,
+    });
+  });
+
+  it("retains a failed initiation draft for retry and rotates it only after success", async () => {
+    const failure: HumanSessionBridgeResult = {
+      ok: false,
+      command: "humanSession.initiateCashCustodyMovement",
+      correlationId: "corr-failed",
+      error: { code: "MOVEMENT_RETRY_REQUIRED", message: "Read back before retrying." },
+    };
+    const initiateCashCustodyMovement = vi.fn()
+      .mockResolvedValueOnce(failure)
+      .mockResolvedValueOnce(successResult("humanSession.initiateCashCustodyMovement", movementState([])));
+    const bridge = bridgeStub({ initiateCashCustodyMovement });
+    const invoke = vi.fn(async (_name: string, action: () => Promise<HumanSessionBridgeResult>) => action());
+    render(<CashCustodyMovementPanel
+      state={movementState([])}
+      bridge={bridge}
+      catalogue={CASH_CUSTODY_DENOMINATIONS}
+      disabled={false}
+      invoke={invoke}
+    />);
+    const panel = screen.getByLabelText("Cash custody movements");
+    const selector = await within(panel).findByLabelText("Receiving Person");
+    await waitFor(() => expect(selector).toBeEnabled());
+    await userEvent.selectOptions(selector, receiverGuid);
+    const referenceField = within(panel).getByLabelText("Remittance / Handover Reference No.") as HTMLInputElement;
+    const firstReference = referenceField.value;
+    await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
+    await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
+    await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Confirm movement count" }));
+    await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(1));
+    expect(referenceField).toHaveValue(firstReference);
+    await userEvent.click(within(panel).getByRole("button", { name: "Confirm movement count" }));
+    await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(2));
+
+    const firstPayload = initiateCashCustodyMovement.mock.calls[0][1];
+    const retryPayload = initiateCashCustodyMovement.mock.calls[1][1];
+    expect(retryPayload.externalHandoverReference).toBe(firstPayload.externalHandoverReference);
+    expect(retryPayload.idempotencyKey).toBe(firstPayload.idempotencyKey);
+    await waitFor(() => expect(referenceField.value).not.toBe(firstReference));
+    expect(referenceField.value).toMatch(/^HND-[0-9A-F]{32}$/);
   });
 
   it("blocks custody close for a pending movement and requests native receiver acknowledgment", async () => {
@@ -492,6 +578,7 @@ describe("APT human-session presentation boundary", () => {
     expect(screen.getByRole("button", { name: "Review actual count" })).toBeDisabled();
     expect(screen.getByText("Resolve all pending cash movements before closing custody.")).toBeInTheDocument();
     expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.getByText("DROP-001")).toBeInTheDocument();
     expect(screen.getAllByText("Calculated on close")).toHaveLength(2);
 
     await userEvent.click(screen.getByRole("button", { name: "Receiver Acknowledgment" }));

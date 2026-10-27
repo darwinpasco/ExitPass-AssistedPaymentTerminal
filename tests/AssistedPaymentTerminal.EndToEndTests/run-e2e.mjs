@@ -154,8 +154,10 @@ async function runCashCustodyMovementWorkflow() {
   const panel = page.getByLabel("Cash custody movements");
 
   await expect(panel.getByLabel("Receiving Person")).toBeEnabled();
+  const handoverReference = panel.getByLabel("Remittance / Handover Reference No.");
+  await expect(handoverReference).toHaveAttribute("readonly", "");
+  await expect(handoverReference).toHaveValue(/^HND-[0-9A-F]{32}$/);
   await panel.getByLabel("Receiving Person").selectOption({ label: "Development Supervisor - Operations Supervisor" });
-  await panel.getByLabel("Handover or remittance reference").fill("DROP-E2E-001");
   await panel.getByLabel("PHP 100 quantity").fill("1");
   await panel.getByRole("button", { name: "Review movement count" }).click();
   await expect(panel.getByRole("status")).toContainText("100.00");
@@ -168,6 +170,7 @@ async function runCashCustodyMovementWorkflow() {
 
   await page.getByRole("button", { name: "Cashier Session" }).click();
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^HND-[0-9A-F]{32}$/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Review actual count" })).toBeEnabled();
   await expect(page.getByText("Available Cash")).toHaveCount(0);
   await page.close();
