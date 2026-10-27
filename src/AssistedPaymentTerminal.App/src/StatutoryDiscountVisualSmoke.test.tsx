@@ -182,6 +182,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Approved, application not requested" }));
 
+    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Approved");
     expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeDisabled();
 
     await userEvent.click(screen.getByRole("button", { name: "Application processing" }));
@@ -409,7 +410,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
 
     await userEvent.click(screen.getByRole("button", { name: "Approved, application not requested" }));
-    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
+    expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Approved");
 
     await userEvent.click(screen.getByRole("button", { name: "Application processing" }));
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
