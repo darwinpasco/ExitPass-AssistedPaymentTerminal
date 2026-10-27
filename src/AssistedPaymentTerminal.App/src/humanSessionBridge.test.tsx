@@ -125,6 +125,77 @@ describe("APT human-session presentation boundary", () => {
     expect(screen.queryByTestId("apt-human-login-shell")).not.toBeInTheDocument();
   });
 
+  it("recovers a split host and UI session through same-cashier sign in", async () => {
+    const login = vi.fn(async () => successResult("humanSession.login", authenticatedState()));
+    const bridge = bridgeStub({
+      restore: async () => successResult("humanSession.restore", lockedRecoveryState()),
+      login,
+    });
+
+    render(<AuthenticatedTerminal config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} humanSessionBridge={bridge} />);
+    await screen.findByTestId("apt-human-login-shell");
+    expect(screen.getByRole("status", { name: "Preserved cash accountability" })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Username"), "cashier.synthetic");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(login).toHaveBeenCalledWith(expect.any(String), "cashier.synthetic");
+    expect(await screen.findByTestId("apt-terminal-shell")).toHaveAttribute("data-app-ready", "true");
+    expect(screen.queryByTestId("apt-human-login-shell")).not.toBeInTheDocument();
+  });
+
+  it("keeps cash locked and accountability visible after failed same-cashier recovery", async () => {
+    const rejected = {
+      ...lockedRecoveryState(),
+      errorCode: "INVALID_CREDENTIALS",
+      safeMessage: "The username or password is incorrect.",
+    };
+    const bridge = bridgeStub({
+      restore: async () => successResult("humanSession.restore", lockedRecoveryState()),
+      login: async () => successResult("humanSession.login", rejected),
+    });
+
+    render(<AuthenticatedTerminal config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} humanSessionBridge={bridge} />);
+    await screen.findByTestId("apt-human-login-shell");
+    await userEvent.type(screen.getByLabelText("Username"), "cashier.synthetic");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("The username or password is incorrect.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Preserved cash accountability" })).toBeInTheDocument();
+    expect(screen.getByText("Shift").parentElement).toHaveTextContent("Open");
+    expect(screen.getByText("Cash custody").parentElement).toHaveTextContent("Open");
+    expect(screen.getByText("New cash authority").parentElement).toHaveTextContent("Locked");
+    expect(screen.queryByTestId("apt-terminal-shell")).not.toBeInTheDocument();
+  });
+
+  it("rejects different-cashier recovery without replacing preserved accountability", async () => {
+    const login = vi.fn(async (): Promise<HumanSessionBridgeResult> => ({
+      ok: false,
+      command: "humanSession.login",
+      correlationId: "different-cashier",
+      error: {
+        code: "ACCOUNT_SWITCH_NOT_ALLOWED",
+        message: "A different cashier cannot replace the current authenticated cashier. Existing shift and cash custody remain unchanged.",
+      },
+    }));
+    const bridge = bridgeStub({
+      restore: async () => successResult("humanSession.restore", lockedRecoveryState()),
+      login,
+    });
+
+    render(<AuthenticatedTerminal config={mode1Config()} client={new MockCentralPmsClient(mode1Config())} humanSessionBridge={bridge} />);
+    await screen.findByTestId("apt-human-login-shell");
+    await userEvent.type(screen.getByLabelText("Username"), "cashier.other");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(login).toHaveBeenCalledWith(expect.any(String), "cashier.other");
+    expect(await screen.findByText(/different cashier cannot replace/i)).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Preserved cash accountability" })).toBeInTheDocument();
+    expect(screen.getByText("Shift").parentElement).toHaveTextContent("Open");
+    expect(screen.getByText("Cash custody").parentElement).toHaveTextContent("Open");
+    expect(screen.getByText("New cash authority").parentElement).toHaveTextContent("Locked");
+    expect(screen.queryByTestId("apt-terminal-shell")).not.toBeInTheDocument();
+  });
+
   it("keeps invalid credentials in the initialized login shell", async () => {
     const invalid = {
       ...unauthenticatedState(),
@@ -762,6 +833,19 @@ function authenticatedState(): HumanSessionState {
       openedAt: now,
       status: "Open",
     },
+  };
+}
+
+function lockedRecoveryState(): HumanSessionState {
+  return {
+    ...authenticatedState(),
+    authenticationState: "LOCKED",
+    authenticated: false,
+    shiftOperationsAuthorized: false,
+    custodyOperationsAuthorized: false,
+    cashOperationsAuthorized: false,
+    errorCode: "HUMAN_SESSION_UNAVAILABLE",
+    safeMessage: "Online cashier authority could not be confirmed. New cash remains locked.",
   };
 }
 
