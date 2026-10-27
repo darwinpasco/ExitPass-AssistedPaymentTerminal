@@ -1220,6 +1220,91 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         Assert.Equal(1, client.ReauthenticateCalls);
     }
 
+    [Fact]
+    public async Task LoginRecoversSameCashierThroughFreshNativeReauthenticationAndPreservesAccountability()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        var prompt = new FakeHumanCredentialPrompt();
+        var handler = new HumanSessionBridgeHandler(runtime, prompt);
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
+
+        var recovered = await SendBridgeCommandAsync(
+            handler,
+            HumanSessionBridgeCommand.Login,
+            new LoginPayload(" CASHIER.SYNTHETIC "));
+
+        Assert.True(recovered.RootElement.GetProperty("ok").GetBoolean());
+        var state = recovered.RootElement.GetProperty("payload");
+        Assert.True(state.GetProperty("authenticated").GetBoolean());
+        Assert.True(state.GetProperty("cashOperationsAuthorized").GetBoolean());
+        Assert.Equal("cashier.synthetic", state.GetProperty("username").GetString());
+        Assert.Equal("Open", state.GetProperty("activeShift").GetProperty("status").GetString());
+        Assert.Equal("Open", state.GetProperty("activeCashCustodySession").GetProperty("status").GetString());
+        Assert.Equal([HumanCredentialOperation.Login, HumanCredentialOperation.Reauthenticate], prompt.Operations);
+        Assert.Equal(1, client.LoginCalls);
+        Assert.Equal(1, client.ReauthenticateCalls);
+    }
+
+    [Fact]
+    public async Task FailedSameCashierRecoveryKeepsCashLockedAndPreservesCredentialShiftAndCustody()
+    {
+        var store = new MemoryCredentialStore();
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, store, out _);
+        var prompt = new FakeHumanCredentialPrompt();
+        var handler = new HumanSessionBridgeHandler(runtime, prompt);
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
+        client.LoginResult = Failure("INVALID_CREDENTIALS");
+
+        var rejected = await SendBridgeCommandAsync(
+            handler,
+            HumanSessionBridgeCommand.Login,
+            new LoginPayload("cashier.synthetic"));
+
+        Assert.True(rejected.RootElement.GetProperty("ok").GetBoolean());
+        var state = rejected.RootElement.GetProperty("payload");
+        Assert.False(state.GetProperty("authenticated").GetBoolean());
+        Assert.False(state.GetProperty("cashOperationsAuthorized").GetBoolean());
+        Assert.Equal("INVALID_CREDENTIALS", state.GetProperty("errorCode").GetString());
+        Assert.Equal("Open", state.GetProperty("activeShift").GetProperty("status").GetString());
+        Assert.Equal("Open", state.GetProperty("activeCashCustodySession").GetProperty("status").GetString());
+        Assert.NotNull(store.Credential);
+        Assert.Equal(1, client.LoginCalls);
+        Assert.Equal(1, client.ReauthenticateCalls);
+    }
+
+    [Fact]
+    public async Task LoginRejectsDifferentCashierWithoutPromptOrAccountabilityMutation()
+    {
+        var client = new FakeHumanSessionClient(Success(CashierId));
+        var runtime = CreateRuntime(client, new MemoryCredentialStore(), out _);
+        var prompt = new FakeHumanCredentialPrompt();
+        var handler = new HumanSessionBridgeHandler(runtime, prompt);
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.Login, new LoginPayload("cashier.synthetic"));
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeShift, new { });
+        await SendBridgeCommandAsync(handler, HumanSessionBridgeCommand.OpenOrResumeCustody, new OpenCustodyPayload(TestCashCustodyDenominations.ForAmount(100m)));
+
+        var rejected = await SendBridgeCommandAsync(
+            handler,
+            HumanSessionBridgeCommand.Login,
+            new LoginPayload("cashier.other"));
+
+        Assert.False(rejected.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("ACCOUNT_SWITCH_NOT_ALLOWED", rejected.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.True(runtime.CurrentState.Authenticated);
+        Assert.Equal("cashier.synthetic", runtime.CurrentState.Username);
+        Assert.Equal(CashierShiftStatus.Open, runtime.CurrentState.ActiveShift?.Status);
+        Assert.Equal(CashCustodySessionStatus.Open, runtime.CurrentState.ActiveCashCustodySession?.Status);
+        Assert.Equal(1, prompt.Calls);
+        Assert.Equal(1, client.LoginCalls);
+        Assert.Equal(0, client.ReauthenticateCalls);
+    }
+
     [Theory]
     [InlineData("SESSION_REVOKED", false)]
     [InlineData("SESSION_EXPIRED", false)]

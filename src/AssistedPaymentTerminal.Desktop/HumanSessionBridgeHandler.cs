@@ -143,7 +143,22 @@ public sealed class HumanSessionBridgeHandler
 
         if (_runtime.CurrentState.Authenticated)
         {
-            throw new HumanCredentialPromptException("LOGIN_NOT_REQUIRED", "Current cashier authority is already established.");
+            if (!string.Equals(
+                    _runtime.CurrentState.Username,
+                    payload.Username.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new HumanCredentialPromptException(
+                    "ACCOUNT_SWITCH_NOT_ALLOWED",
+                    "A different cashier cannot replace the current authenticated cashier. Existing shift and cash custody remain unchanged.");
+            }
+
+            return await RunExplicitCredentialOperationAsync(
+                HumanCredentialOperation.Reauthenticate,
+                _runtime.CurrentState.Username,
+                request.CorrelationId,
+                credential => _runtime.ReauthenticateAsync(credential, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         var state = await RunExplicitCredentialOperationAsync(
