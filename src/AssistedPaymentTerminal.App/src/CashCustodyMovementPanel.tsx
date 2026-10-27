@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CashDenominationGrid } from "./CashDenominationGrid";
 import type { CashCustodyDenominationDefinition, CashCustodyDenominationLine } from "./cashCustodyDenominations";
 import type {
   CashCustodyMovement,
+  CashCustodyCounterpartyOption,
   CashCustodyMovementEventType,
   CashCustodyMovementType,
   HumanSessionBridge,
@@ -24,10 +25,57 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
   const [counterpartyReference, setCounterpartyReference] = useState("");
   const [handoverReference, setHandoverReference] = useState("");
   const [originalMovementId, setOriginalMovementId] = useState("");
+  const [counterpartyDirectories, setCounterpartyDirectories] = useState<Record<string, CashCustodyCounterpartyOption[]>>({});
+  const loadedDirectoryContexts = useRef(new Set<string>());
   const initiationKey = useRef(`cash-custody-movement:${crypto.randomUUID()}`);
   const completedOutbound = movements.filter((movement) =>
     movement.status === "Completed" && (movement.movementType === "SafeDrop" || movement.movementType === "DirectRemittance"));
   const pendingCount = movements.filter((movement) => movement.status === "PendingAcknowledgment").length;
+  const selectionContext = directoryContext(movementType, movementType === "CashReturn" ? originalMovementId || null : null, null);
+  const receivingPeople = counterpartyDirectories[selectionContext]
+    ?? (state.movementCounterpartyContext === selectionContext ? state.movementCounterparties ?? [] : []);
+
+  useEffect(() => {
+    const requests: Array<{ key: string; type: CashCustodyMovementType; originalId: string | null; requiredReference: string | null }> = [];
+    if (movementType !== "CashReturn" || originalMovementId) {
+      requests.push({ key: selectionContext, type: movementType, originalId: movementType === "CashReturn" ? originalMovementId : null, requiredReference: null });
+    }
+    for (const movement of movements) {
+      requests.push({
+        key: directoryContext(movement.movementType, movement.originalMovementId ?? null, movement.intendedCounterpartyReference),
+        type: movement.movementType,
+        originalId: movement.originalMovementId ?? null,
+        requiredReference: movement.intendedCounterpartyReference,
+      });
+    }
+
+    let cancelled = false;
+    void (async () => {
+      for (const request of requests) {
+        if (cancelled || loadedDirectoryContexts.current.has(request.key)) continue;
+        loadedDirectoryContexts.current.add(request.key);
+        const result = await bridge.listCashCustodyMovementCounterparties(
+          crypto.randomUUID(), request.type, request.originalId, request.requiredReference);
+        if (cancelled) return;
+        if (result.ok) {
+          setCounterpartyDirectories((current) => ({
+            ...current,
+            [request.key]: result.payload.movementCounterparties ?? [],
+          }));
+        } else {
+          loadedDirectoryContexts.current.delete(request.key);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // Directory readback is local presentation state; financial commands still use invoke.
+  }, [bridge, movementType, originalMovementId, selectionContext, movementDirectorySignature(movements), state.userReference]);
+
+  useEffect(() => {
+    if (counterpartyReference && !receivingPeople.some((person) => person.userReference === counterpartyReference)) {
+      setCounterpartyReference("");
+    }
+  }, [counterpartyReference, receivingPeople]);
 
   async function initiate(denominations: CashCustodyDenominationLine[]) {
     const result = await invoke("initiate-movement", () => bridge.initiateCashCustodyMovement(crypto.randomUUID(), {
@@ -75,9 +123,15 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
             </label>
           )}
           <label>
-            Authorized counterparty username
-            <input value={counterpartyReference} disabled={disabled} onChange={(event) => setCounterpartyReference(event.target.value)} autoComplete="off" />
+            Receiving Person
+            <select value={counterpartyReference} disabled={disabled || receivingPeople.length === 0} onChange={(event) => setCounterpartyReference(event.target.value)}>
+              <option value="">Select an authorized person</option>
+              {receivingPeople.map((person) => (
+                <option value={person.userReference} key={person.userReference}>{counterpartyOptionLabel(person, receivingPeople)}</option>
+              ))}
+            </select>
           </label>
+          {receivingPeople.length === 0 && <p className="cash-error" role="alert">No authorized receiving person is currently available for this movement.</p>}
           <label>
             Handover or remittance reference
             <input value={handoverReference} disabled={disabled} onChange={(event) => setHandoverReference(event.target.value)} autoComplete="off" />
@@ -98,17 +152,18 @@ export function CashCustodyMovementPanel({ state, bridge, catalogue, disabled, i
       )}
 
       {state.movementReadAuthorized && (
-        <MovementHistory movements={movements} bridge={bridge} disabled={disabled} invoke={invoke} />
+        <MovementHistory movements={movements} bridge={bridge} disabled={disabled} invoke={invoke} counterpartyDirectories={counterpartyDirectories} />
       )}
     </section>
   );
 }
 
-function MovementHistory({ movements, bridge, disabled, invoke }: {
+function MovementHistory({ movements, bridge, disabled, invoke, counterpartyDirectories }: {
   movements: CashCustodyMovement[];
   bridge: HumanSessionBridge;
   disabled: boolean;
   invoke: Props["invoke"];
+  counterpartyDirectories: Record<string, CashCustodyCounterpartyOption[]>;
 }) {
   const [counterpartyUsernames, setCounterpartyUsernames] = useState<Record<string, string>>({});
   const [reasons, setReasons] = useState<Record<string, string>>({});
@@ -120,7 +175,15 @@ function MovementHistory({ movements, bridge, disabled, invoke }: {
     <div className="movement-history" aria-label="Cash movement history">
       <h4>Movement History</h4>
       {ordered.length === 0 ? <p>No cash movements recorded for this custody session.</p> : ordered.map((movement) => {
-        const username = counterpartyUsernames[movement.id] ?? movement.intendedCounterpartyReference;
+        const username = counterpartyUsernames[movement.id] ?? "";
+        const directory = counterpartyDirectories[directoryContext(
+          movement.movementType,
+          movement.originalMovementId ?? null,
+          movement.intendedCounterpartyReference)] ?? [];
+        const receivingPerson = directory[0];
+        const receivingPersonLabel = receivingPerson
+          ? `${receivingPerson.displayName} - ${receivingPerson.roleLabel}`
+          : movement.intendedCounterpartyReference;
         const reason = reasons[movement.id] ?? "";
         const terminalEvent = movement.events.find((event) =>
           event.eventType === "Completed" || event.eventType === "Cancelled" || event.eventType === "Rejected");
@@ -131,10 +194,10 @@ function MovementHistory({ movements, bridge, disabled, invoke }: {
               <div><dt>Type</dt><dd>{movementTypeLabel(movement.movementType)}</dd></div>
               <div><dt>Status</dt><dd>{movementStatusLabel(movement.status)}</dd></div>
               <div><dt>Amount</dt><dd>{formatPhp(movement.amountMinorUnits)}</dd></div>
-              <div><dt>Counterparty</dt><dd>{movement.intendedCounterpartyReference}</dd></div>
+              <div><dt>Receiving person</dt><dd>{receivingPersonLabel}</dd></div>
               <div><dt>Handover reference</dt><dd>{movement.externalHandoverReference}</dd></div>
               <div><dt>Initiated</dt><dd>{new Date(movement.createdAt).toLocaleString("en-PH")}</dd></div>
-              {terminalEvent?.eventType === "Completed" && <div><dt>Acknowledged by</dt><dd>{terminalEvent.authorizedActorId}</dd></div>}
+              {terminalEvent?.eventType === "Completed" && <div><dt>Acknowledged by</dt><dd>{receivingPerson?.displayName ?? terminalEvent.authorizedActorId}</dd></div>}
               {terminalEvent?.eventType === "Completed" && <div><dt>Acknowledgment reference</dt><dd>{terminalEvent.correlationId}</dd></div>}
               {terminalEvent && <div><dt>{terminalEvent.eventType === "Completed" ? "Completed" : "Resolved"}</dt><dd>{new Date(terminalEvent.occurredAt).toLocaleString("en-PH")}</dd></div>}
               {movement.originalMovementId && <div><dt>Original movement</dt><dd>{movementReference(movement.originalMovementId)}</dd></div>}
@@ -152,20 +215,17 @@ function MovementHistory({ movements, bridge, disabled, invoke }: {
             </details>
             {movement.status === "PendingAcknowledgment" && (
               <div className="movement-actions">
-                <label>
-                  Authorized counterparty username
-                  <input value={username} disabled={disabled} onChange={(event) => setCounterpartyUsernames((current) => ({ ...current, [movement.id]: event.target.value }))} autoComplete="off" />
-                </label>
+                <p><strong>Receiving person:</strong> {receivingPersonLabel}</p>
                 <label>
                   Rejection or cancellation reason
                   <input value={reason} disabled={disabled} onChange={(event) => setReasons((current) => ({ ...current, [movement.id]: event.target.value }))} />
                 </label>
-                <button type="button" disabled={disabled || !username.trim()} onClick={() => void invoke("acknowledge-movement", () => bridge.acknowledgeCashCustodyMovement(
-                  crypto.randomUUID(), movement.id, username.trim(), false, null, `movement:${movement.id}:completed`))}>
+                <button type="button" disabled={disabled || !receivingPerson} onClick={() => void invoke("acknowledge-movement", () => bridge.acknowledgeCashCustodyMovement(
+                  crypto.randomUUID(), movement.id, false, null, `movement:${movement.id}:completed`))}>
                   Receiver Acknowledgment
                 </button>
-                <button type="button" className="secondary-action" disabled={disabled || !username.trim() || !reason.trim()} onClick={() => void invoke("reject-movement", () => bridge.acknowledgeCashCustodyMovement(
-                  crypto.randomUUID(), movement.id, username.trim(), true, reason.trim(), `movement:${movement.id}:rejected`))}>
+                <button type="button" className="secondary-action" disabled={disabled || !receivingPerson || !reason.trim()} onClick={() => void invoke("reject-movement", () => bridge.acknowledgeCashCustodyMovement(
+                  crypto.randomUUID(), movement.id, true, reason.trim(), `movement:${movement.id}:rejected`))}>
                   Reject Handover
                 </button>
                 <button type="button" className="secondary-action" disabled={disabled || !reason.trim()} onClick={() => void invoke("cancel-movement", () => bridge.cancelCashCustodyMovement(
@@ -208,4 +268,18 @@ function movementStatusLabel(status: CashCustodyMovement["status"]): string {
 
 function formatPhp(amountMinorUnits: number): string {
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(amountMinorUnits / 100);
+}
+
+function directoryContext(type: CashCustodyMovementType, originalMovementId: string | null, requiredCounterpartyReference: string | null): string {
+  return `${type}:${originalMovementId ?? "none"}:${requiredCounterpartyReference ?? "all"}`;
+}
+
+function movementDirectorySignature(movements: CashCustodyMovement[]): string {
+  return movements.map((movement) => `${movement.id}:${movement.status}:${movement.intendedCounterpartyReference}`).sort().join("|");
+}
+
+function counterpartyOptionLabel(person: CashCustodyCounterpartyOption, people: CashCustodyCounterpartyOption[]): string {
+  const duplicateName = people.filter((candidate) => candidate.displayName === person.displayName).length > 1;
+  const suffix = duplicateName ? ` (${person.userReference.slice(0, 8)})` : "";
+  return `${person.displayName} - ${person.roleLabel}${suffix}`;
 }

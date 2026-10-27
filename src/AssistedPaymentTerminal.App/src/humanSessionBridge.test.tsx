@@ -17,6 +17,7 @@ import { mode1Config } from "./test/testConfig";
 
 const cashierGuid = "44444444-4444-4444-8444-444444444444";
 const sessionGuid = "55555555-5555-4555-8555-555555555555";
+const receiverGuid = "66666666-6666-4666-8666-666666666666";
 
 describe("APT human-session presentation boundary", () => {
   afterEach(() => {
@@ -413,7 +414,8 @@ describe("APT human-session presentation boundary", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
     const panel = screen.getByLabelText("Cash custody movements");
 
-    await userEvent.type(within(panel).getByLabelText("Authorized counterparty username"), "receiver.synthetic");
+    await waitFor(() => expect(within(panel).getByLabelText("Receiving Person")).toBeEnabled());
+    await userEvent.selectOptions(within(panel).getByLabelText("Receiving Person"), receiverGuid);
     await userEvent.type(within(panel).getByLabelText("Handover or remittance reference"), "DROP-001");
     await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
     await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
@@ -425,11 +427,48 @@ describe("APT human-session presentation boundary", () => {
 
     const payload = initiateCashCustodyMovement.mock.calls[0][1];
     expect(payload.movementType).toBe("SafeDrop");
-    expect(payload.intendedCounterpartyReference).toBe("receiver.synthetic");
+    expect(payload.intendedCounterpartyReference).toBe(receiverGuid);
     expect(payload.externalHandoverReference).toBe("DROP-001");
     expect(payload.denominations).toHaveLength(13);
     expect(payload.denominations).toContainEqual({ denominationCode: "PHP-100", denominationValueMinorUnits: 10_000, quantity: 1 });
     expect(document.body).not.toHaveTextContent("Available Cash");
+  });
+
+  it("distinguishes duplicate display names and binds the selected stable identity", async () => {
+    const secondReceiver = "77777777-7777-4777-8777-777777777777";
+    const initiateCashCustodyMovement = vi.fn(async (
+      _correlationId: string,
+      _payload: Parameters<HumanSessionBridge["initiateCashCustodyMovement"]>[1],
+    ) => successResult("humanSession.initiateCashCustodyMovement", authenticatedState()));
+    const listCashCustodyMovementCounterparties = vi.fn(async () =>
+      successResult("humanSession.listCashCustodyMovementCounterparties", {
+        ...authenticatedState(),
+        movementCounterparties: [
+          { userReference: receiverGuid, displayName: "Duplicate Name", roleCode: "OPERATIONS_SUPERVISOR", roleLabel: "Operations Supervisor" },
+          { userReference: secondReceiver, displayName: "Duplicate Name", roleCode: "APT_SITE_CUSTODIAN", roleLabel: "APT Site Custodian" },
+        ],
+      }));
+    render(<HumanSessionPanel
+      state={movementState([])}
+      bridge={bridgeStub({ listCashCustodyMovementCounterparties, initiateCashCustodyMovement })}
+      onStateChange={vi.fn()}
+    />);
+    await userEvent.click(screen.getByRole("button", { name: "Cashier Session" }));
+    const panel = screen.getByLabelText("Cash custody movements");
+
+    const selector = await within(panel).findByLabelText("Receiving Person");
+    expect(within(selector).getByRole("option", { name: "Duplicate Name - Operations Supervisor (66666666)" })).toBeInTheDocument();
+    expect(within(selector).getByRole("option", { name: "Duplicate Name - APT Site Custodian (77777777)" })).toBeInTheDocument();
+    expect(within(panel).queryByLabelText("Authorized counterparty username")).not.toBeInTheDocument();
+    await userEvent.selectOptions(selector, secondReceiver);
+    await userEvent.type(within(panel).getByLabelText("Handover or remittance reference"), "DROP-DUPLICATE-NAME");
+    await userEvent.clear(within(panel).getByLabelText("PHP 100 quantity"));
+    await userEvent.type(within(panel).getByLabelText("PHP 100 quantity"), "1");
+    await userEvent.click(within(panel).getByRole("button", { name: "Review movement count" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Confirm movement count" }));
+
+    await waitFor(() => expect(initiateCashCustodyMovement).toHaveBeenCalledTimes(1));
+    expect(initiateCashCustodyMovement.mock.calls[0][1].intendedCounterpartyReference).toBe(secondReceiver);
   });
 
   it("blocks custody close for a pending movement and requests native receiver acknowledgment", async () => {
@@ -437,7 +476,6 @@ describe("APT human-session presentation boundary", () => {
     const acknowledgeCashCustodyMovement = vi.fn(async (
       _correlationId: string,
       _movementId: string,
-      _counterpartyUsername: string,
       _reject: boolean,
       _reasonCode: string | null,
       _idempotencyKey: string,
@@ -459,7 +497,7 @@ describe("APT human-session presentation boundary", () => {
     await userEvent.click(screen.getByRole("button", { name: "Receiver Acknowledgment" }));
     await waitFor(() => expect(acknowledgeCashCustodyMovement).toHaveBeenCalledTimes(1));
     expect(acknowledgeCashCustodyMovement.mock.calls[0][1]).toBe(movement.id);
-    expect(acknowledgeCashCustodyMovement.mock.calls[0][2]).toBe("receiver.synthetic");
+    expect(acknowledgeCashCustodyMovement.mock.calls[0][2]).toBe(false);
     expect(document.querySelector('input[type="password"]')).toBeNull();
   });
 
@@ -674,7 +712,7 @@ function movementFixture(status: CashCustodyMovement["status"]): CashCustodyMove
     amountMinorUnits: 10_000,
     originalMovementId: null,
     initiatingCashierId: cashierGuid,
-    intendedCounterpartyReference: "receiver.synthetic",
+    intendedCounterpartyReference: receiverGuid,
     externalHandoverReference: "DROP-001",
     createdAt: now,
     denominations: CASH_CUSTODY_DENOMINATIONS.map((denomination) => ({
@@ -743,6 +781,15 @@ function bridgeStub(overrides: Partial<HumanSessionBridge> = {}): HumanSessionBr
     closeOwnCustody: result,
     closeOwnShift: result,
     authorizeCash: result,
+    listCashCustodyMovementCounterparties: async () => successResult("humanSession.listCashCustodyMovementCounterparties", {
+      ...authenticatedState(),
+      movementCounterparties: [{
+        userReference: receiverGuid,
+        displayName: "Synthetic Receiver",
+        roleCode: "OPERATIONS_SUPERVISOR",
+        roleLabel: "Operations Supervisor",
+      }],
+    }),
     initiateCashCustodyMovement: result,
     acknowledgeCashCustodyMovement: result,
     cancelCashCustodyMovement: result,
