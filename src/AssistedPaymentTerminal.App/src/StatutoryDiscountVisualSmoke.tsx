@@ -383,11 +383,17 @@ function appliedState(amountAcknowledged: boolean): StatutoryDiscountWorkflowSta
     applicationCommandStatus: "APPLIED",
     applicationResultClassification: "APPLIED",
     appliedTariffSnapshotId: appliedSnapshot,
-    vatExclusiveBasisAmountMinorUnits: 8929,
+    originalVatAmountMinorUnits: 1339,
+    vatExclusiveBasisAmountMinorUnits: 11161,
     vatAmountMinorUnits: 1071,
-    vatTreatment: "VAT_EXEMPT_WITH_DISCOUNT",
+    vatTreatment: "VAT_INCLUSIVE_NO_EXEMPTION",
     statutoryDiscountAmountMinorUnits: 2500,
+    finalVatableSalesMinorUnits: 8929,
+    finalVatAmountMinorUnits: 1071,
     finalPayableAmountMinorUnits: 10000,
+    benefitType: "PERCENTAGE_DISCOUNT",
+    discountPercentageBasisPoints: 2000,
+    ordinanceReference: "PITX-LGU-ORD-2026-001",
     payableBasisReady: true,
     payableBasisReadinessStatus: "PAYABLE_BASIS_READY",
     payableBasisReadinessAction: null,
@@ -416,7 +422,11 @@ function zeroPayableAppliedState(): StatutoryDiscountWorkflowState {
   return {
     ...appliedState(true),
     statutoryDiscountAmountMinorUnits: 12500,
+    finalVatableSalesMinorUnits: 0,
+    finalVatAmountMinorUnits: 0,
     finalPayableAmountMinorUnits: 0,
+    benefitType: "FULL_FEE_EXEMPTION",
+    discountPercentageBasisPoints: null,
   };
 }
 

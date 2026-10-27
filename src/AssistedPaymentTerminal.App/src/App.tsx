@@ -29,6 +29,7 @@ import {
   shouldUseTransactionCompletionVisualSmoke,
 } from "./TransactionCompletionVisualSmoke";
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
+import { StatutoryDiscountFinancialPresentation } from "./StatutoryDiscountPanel";
 import { ZeroPayableSalesInvoicePanel } from "./ZeroPayableSalesInvoicePanel";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { ProductRuntimeIdentity } from "./ProductRuntimeIdentity";
@@ -1309,6 +1310,7 @@ function localCashPrerequisiteBlockers(
 
 function SessionSummary({ basis, statutoryState, client }: { basis: PayableBasisResponse; statutoryState: StatutoryDiscountWorkflowState; client: CentralPmsClient }) {
   const statutory = statutoryStatusSummary(statutoryState);
+  const statutoryFinancialPresentationApplied = statutoryState.status === "applied";
   const discountAmount = basis.statutoryDiscountReadiness?.statutoryDiscountAmountMinorUnits ?? 0;
   const zeroPayableCompletion = basis.authoritativeAmountMinorUnits === 0
     ? basis.zeroPayableStatutoryCompletion
@@ -1344,17 +1346,21 @@ function SessionSummary({ basis, statutoryState, client }: { basis: PayableBasis
         {statutory.reason && <div><dt>Reason</dt><dd>{statutory.reason}</dd></div>}
         <div><dt>Customer Information for Sales Invoice</dt><dd>{customerInformation}</dd></div>
       </dl>
-      <div className="amount-summary" aria-label="Amount summary">
-        <div className="amount-summary-total"><span>Amount Due</span><strong data-testid="payable-basis-amount">{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</strong></div>
-        <dl>
-          <div><dt>Discount Amount</dt><dd>{formatCurrency(discountAmount, basis.currency)}</dd></div>
-          <div><dt>VATable Sales</dt><dd>{formatOptionalCurrency(basis.vatableSalesMinorUnits, basis.currency, taxPending)}</dd></div>
-          <div><dt>VAT Amount</dt><dd>{formatOptionalCurrency(basis.vatAmountMinorUnits ?? basis.statutoryDiscountReadiness?.vatAmountMinorUnits, basis.currency, taxPending)}</dd></div>
-          <div><dt>VAT Exempt Sales</dt><dd>{formatOptionalCurrency(basis.vatExemptSalesMinorUnits, basis.currency, taxPending)}</dd></div>
-          <div><dt>Zero Rated Sales</dt><dd>{formatOptionalCurrency(basis.zeroRatedSalesMinorUnits, basis.currency, taxPending)}</dd></div>
-          <div className="amount-summary-total-row"><dt>Total Amount</dt><dd>{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</dd></div>
-        </dl>
-      </div>
+      {statutoryFinancialPresentationApplied ? (
+        <StatutoryDiscountFinancialPresentation state={statutoryState} />
+      ) : (
+        <div className="amount-summary" aria-label="Amount summary">
+          <div className="amount-summary-total"><span>Amount Due</span><strong data-testid="payable-basis-amount">{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</strong></div>
+          <dl>
+            <div><dt>Discount Amount</dt><dd>{formatCurrency(discountAmount, basis.currency)}</dd></div>
+            <div><dt>VATable Sales</dt><dd>{formatOptionalCurrency(basis.vatableSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+            <div><dt>VAT Amount</dt><dd>{formatOptionalCurrency(basis.vatAmountMinorUnits ?? basis.statutoryDiscountReadiness?.vatAmountMinorUnits, basis.currency, taxPending)}</dd></div>
+            <div><dt>VAT Exempt Sales</dt><dd>{formatOptionalCurrency(basis.vatExemptSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+            <div><dt>Zero Rated Sales</dt><dd>{formatOptionalCurrency(basis.zeroRatedSalesMinorUnits, basis.currency, taxPending)}</dd></div>
+            <div className="amount-summary-total-row"><dt>Total Amount</dt><dd>{formatCurrency(basis.authoritativeAmountMinorUnits, basis.currency)}</dd></div>
+          </dl>
+        </div>
+      )}
       {zeroPayableCompletion && (
         <>
           <StatusNotice tone="success" title="Zero-payable statutory completion" dataTestId="zero-payable-statutory-completion">
