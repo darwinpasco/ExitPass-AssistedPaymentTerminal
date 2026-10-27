@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
 import { MockCentralPmsClient } from "./api/mockCentralPms";
-import type { CentralPmsClient, ProjectedSessionResponse } from "./api/centralPmsTypes";
-import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext } from "./localJournalBridge";
+import type { CentralPmsClient, PayableBasisResponse, ProjectedSessionResponse, StatutoryDiscountWorkflowState } from "./api/centralPmsTypes";
+import type { LocalJournalBridge, LocalJournalHealth, LocalOperationalContext, PayableBasisStateSnapshot } from "./localJournalBridge";
 import { mode1Config, rawMode1Config } from "./test/testConfig";
 import { containsInternalGuid } from "./cashierSafeReferences";
 
@@ -29,8 +29,122 @@ describe("App cashier workflow", () => {
     expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
     expect(screen.getByText("Discount Request")).toBeInTheDocument();
     expect(screen.getByText("Customer Information for Sales Invoice")).toBeInTheDocument();
+    expect(screen.getByLabelText("Amount summary")).toBeVisible();
+    expect(screen.queryByTestId("statutory-applied-facts")).not.toBeInTheDocument();
     expect(screen.queryByText(/Site ordinance availability|Statutory ID|Customer name|readyForCashAcceptance/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
+  });
+
+  it("renders the authoritative seven-line statutory VAT breakdown in Parking Session Details", () => {
+    renderAppliedStatutorySummary();
+
+    const calculation = within(screen.getByLabelText("Parking Session Details")).getByTestId("statutory-applied-facts");
+    expect(calculation).toHaveTextContent("Original parking fee (VAT-inclusive)");
+    expect(calculation).toHaveTextContent("112.00");
+    expect(calculation).toHaveTextContent("Original VAT component (12%)");
+    expect(calculation).toHaveTextContent("12.00");
+    expect(calculation).toHaveTextContent("Original VAT-exclusive parking fee");
+    expect(calculation).toHaveTextContent("100.00");
+    expect(calculation).toHaveTextContent("LGU ordinance discount (20%)");
+    expect(calculation).toHaveTextContent(/-.*20\.00/);
+    expect(calculation).toHaveTextContent("Final VATable sales");
+    expect(calculation).toHaveTextContent("80.00");
+    expect(calculation).toHaveTextContent("Final applicable VAT (12%)");
+    expect(calculation).toHaveTextContent("9.60");
+    expect(calculation).toHaveTextContent("Total amount payable");
+    expect(calculation).toHaveTextContent("89.60");
+    expect(calculation).toHaveTextContent("City Ordinance No. 48");
+    expect(screen.queryByLabelText("Amount summary")).not.toBeInTheDocument();
+  });
+
+  it("renders a full-fee benefit without inventing a percentage or payment", () => {
+    renderAppliedStatutorySummary(
+      appliedStatutoryState({
+        benefitType: "FULL_FEE_EXEMPTION",
+        discountPercentageBasisPoints: 10000,
+        statutoryDiscountAmountMinorUnits: 10000,
+        finalVatableSalesMinorUnits: 0,
+        finalVatAmountMinorUnits: 0,
+        finalPayableAmountMinorUnits: 0,
+      }),
+      appliedStatutoryBasis(0),
+    );
+
+    const calculation = screen.getByTestId("statutory-applied-facts");
+    expect(calculation).toHaveTextContent("Original parking fee (VAT-inclusive)");
+    expect(calculation).toHaveTextContent("112.00");
+    expect(calculation).toHaveTextContent("Original VAT component (12%)");
+    expect(calculation).toHaveTextContent("12.00");
+    expect(calculation).toHaveTextContent("LGU ordinance benefit");
+    expect(calculation).toHaveTextContent(/-.*100\.00/);
+    expect(calculation).not.toHaveTextContent("LGU ordinance discount (");
+    expect(calculation).toHaveTextContent("Final VATable sales");
+    expect(calculation).toHaveTextContent("Final applicable VAT (12%)");
+    expect(calculation).toHaveTextContent("Total amount payable");
+    expect(calculation).toHaveTextContent("0.00");
+    expect(screen.queryByRole("button", { name: "Record Cash Received" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the authoritative VAT breakdown visible after persisted state readback", async () => {
+    const config = mode1Config();
+    const restoredState = appliedStatutoryState();
+    const restoredSnapshot: PayableBasisStateSnapshot = {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      localWorkflowId: "restored-statutory-workflow",
+      lookupReferenceType: "ticket",
+      lookupReferenceValue: "APT-STATUTORY-1001",
+      parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+      tariffSnapshotId: "99999999-9999-4999-8999-999999999999",
+      siteId: "11111111-1111-1111-1111-111111111111",
+      siteGroupId: "22222222-2222-2222-2222-222222222222",
+      sitePosServerId: "POS-DEV-001",
+      terminalId: "APT-DEV-001",
+      authoritativeAmountMinorUnits: 8960,
+      currency: "PHP",
+      tariffValidUntil: "2026-10-27T10:00:00Z",
+      parkingStatus: "Active",
+      paymentStatus: "Unpaid",
+      readyForCashAcceptance: true,
+      blockingReasonCodes: [],
+      retryable: false,
+      safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
+      centralPmsCorrelationId: "restored-statutory-correlation",
+      cashierAcknowledgementRequired: false,
+      amountChanged: true,
+      statutoryDiscountStateJson: JSON.stringify(restoredState),
+      resolvedAt: "2026-10-27T06:00:00Z",
+      lastRevalidatedAt: "2026-10-27T06:01:00Z",
+      updatedAt: "2026-10-27T06:01:00Z",
+    };
+    const bridge: LocalJournalBridge = {
+      ...bridgeWithLocalState(),
+      getLatestPayableBasisState: vi.fn(async (correlationId: string) => ({
+        ok: true as const,
+        command: "payableBasisState.getLatest",
+        correlationId,
+        payload: restoredSnapshot,
+      })),
+    };
+    render(<TerminalShell config={config} client={new MockCentralPmsClient(config)} localJournalBridge={bridge} />);
+
+    const calculation = await screen.findByTestId("statutory-applied-facts");
+    expect(calculation).toHaveTextContent("Original VAT component (12%)");
+    expect(calculation).toHaveTextContent("12.00");
+    expect(calculation).toHaveTextContent("Final applicable VAT (12%)");
+    expect(calculation).toHaveTextContent("9.60");
+    expect(calculation).toHaveTextContent("Total amount payable");
+    expect(calculation).toHaveTextContent("89.60");
+  });
+
+  it("fails closed when an applied statutory response omits an authoritative VAT fact", () => {
+    renderAppliedStatutorySummary(appliedStatutoryState({ originalVatAmountMinorUnits: null }));
+
+    const calculation = screen.getByTestId("statutory-applied-facts");
+    expect(within(calculation).getByTestId("statutory-financial-facts-unavailable")).toHaveTextContent(
+      "No substitute values were calculated",
+    );
+    expect(calculation).not.toHaveTextContent("Original VAT component (12%)");
+    expect(screen.queryByLabelText("Amount summary")).not.toBeInTheDocument();
   });
 
   it("discovers an existing pending statutory request and canonical customer-information presence", async () => {
@@ -427,5 +541,69 @@ function projectedSessionPayload(): ProjectedSessionResponse {
     safeUserFacingClassification: "PROJECTION_SESSION_PAYABLE_BASIS_UNAVAILABLE",
     safeMessage: "Session found from projection; live payable amount is temporarily unavailable.",
     correlationId: "projection-correlation",
+  };
+}
+
+function renderAppliedStatutorySummary(
+  state: StatutoryDiscountWorkflowState = appliedStatutoryState(),
+  basis: PayableBasisResponse = appliedStatutoryBasis(),
+) {
+  const config = mode1Config();
+  render(
+    <TerminalShell
+      config={config}
+      client={new MockCentralPmsClient(config)}
+      localJournalBridge={bridgeWithLocalState()}
+      initialResolvedBasis={basis}
+      initialStatutoryState={state}
+      restorePayableBasisOnMount={false}
+    />,
+  );
+}
+
+function appliedStatutoryState(
+  overrides: Partial<StatutoryDiscountWorkflowState> = {},
+): StatutoryDiscountWorkflowState {
+  return {
+    status: "applied",
+    appliedTariffSnapshotId: "99999999-9999-4999-8999-999999999999",
+    originalAmountMinorUnits: 11200,
+    originalVatAmountMinorUnits: 1200,
+    vatExclusiveBasisAmountMinorUnits: 10000,
+    statutoryDiscountAmountMinorUnits: 2000,
+    finalVatableSalesMinorUnits: 8000,
+    finalVatAmountMinorUnits: 960,
+    finalPayableAmountMinorUnits: 8960,
+    discountPercentageBasisPoints: 2000,
+    benefitType: "PERCENTAGE_DISCOUNT",
+    ordinanceReference: "City Ordinance No. 48",
+    vatTreatment: "VAT_INCLUSIVE_NO_EXEMPTION",
+    currency: "PHP",
+    payableBasisReady: true,
+    payableBasisReadinessStatus: "READY",
+    amountAcknowledged: true,
+    ...overrides,
+  };
+}
+
+function appliedStatutoryBasis(finalPayableAmountMinorUnits = 8960): PayableBasisResponse {
+  return {
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+    tariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+    appliedTariffSnapshotId: "99999999-9999-4999-8999-999999999999",
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    terminalId: "APT-DEV-001",
+    ticketReference: "APT-STATUTORY-1001",
+    parkingStatus: "Active",
+    paymentStatus: "Unpaid",
+    authoritativeAmountMinorUnits: finalPayableAmountMinorUnits,
+    currency: "PHP",
+    tariffValidUntil: "2026-10-27T10:00:00Z",
+    readyForCashAcceptance: true,
+    blockingReasonCodes: [],
+    retryable: false,
+    safeUserFacingClassification: "READY_FOR_CASH_ACCEPTANCE",
+    correlationId: "safe-statutory-basis-correlation",
   };
 }

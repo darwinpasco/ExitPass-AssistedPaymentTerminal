@@ -26,6 +26,34 @@ export type StatutoryDiscountPanelProps = {
   evidenceBridge?: StatutoryEvidenceBridge;
 };
 
+export function StatutoryDiscountFinancialPresentation({ state }: { state: StatutoryDiscountWorkflowState }) {
+  const complete = hasAuthoritativeFinancialFacts(state);
+
+  return (
+    <section className="statutory-applied-facts" aria-label="Applied statutory payable basis" data-testid="statutory-applied-facts">
+      <h4>Parking Fee Calculation</h4>
+      {!complete ? (
+        <p className="cash-error" data-testid="statutory-financial-facts-unavailable">
+          Authoritative parking discount and VAT values are unavailable. No substitute values were calculated.
+        </p>
+      ) : (
+        <dl className="central-pms-details">
+          <div><dt>Original parking fee (VAT-inclusive)</dt><dd>{formatCurrency(state.originalAmountMinorUnits, state.currency)}</dd></div>
+          <div><dt>Original VAT component (12%)</dt><dd>{formatCurrency(state.originalVatAmountMinorUnits, state.currency)}</dd></div>
+          <div><dt>Original VAT-exclusive parking fee</dt><dd>{formatCurrency(state.vatExclusiveBasisAmountMinorUnits, state.currency)}</dd></div>
+          <div><dt>VAT treatment</dt><dd>{friendly(state.vatTreatment)}</dd></div>
+          <div><dt>{formatLguBenefitLabel(state.benefitType, state.discountPercentageBasisPoints)}</dt><dd>{formatDiscount(state.statutoryDiscountAmountMinorUnits, state.currency)}</dd></div>
+          {state.ordinanceReference && <div><dt>Ordinance reference</dt><dd>{state.ordinanceReference}</dd></div>}
+          <div><dt>Final VATable sales</dt><dd>{formatCurrency(state.finalVatableSalesMinorUnits, state.currency)}</dd></div>
+          <div><dt>Final applicable VAT (12%)</dt><dd>{formatCurrency(state.finalVatAmountMinorUnits, state.currency)}</dd></div>
+          <div><dt>Total amount payable</dt><dd><strong data-testid="payable-basis-amount">{formatCurrency(state.finalPayableAmountMinorUnits, state.currency)}</strong></dd></div>
+          <div><dt>Tariff application</dt><dd>Authoritative version applied</dd></div>
+        </dl>
+      )}
+    </section>
+  );
+}
+
 const defaultDraft = {
   entitlementType: "SENIOR_CITIZEN",
   maskedIdReference: "",
@@ -259,23 +287,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
         </dl>
       </div>
 
-      {appliedComplete && (
-        <section className="statutory-applied-facts" aria-label="Applied statutory payable basis" data-testid="statutory-applied-facts">
-          <h4>Parking Fee Calculation</h4>
-          <dl className="central-pms-details">
-            <div><dt>Original parking fee (VAT-inclusive)</dt><dd>{formatCurrency(state.originalAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Original VAT component (12%)</dt><dd>{formatCurrency(state.originalVatAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Original VAT-exclusive parking fee</dt><dd>{formatCurrency(state.vatExclusiveBasisAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>VAT treatment</dt><dd>{friendly(state.vatTreatment)}</dd></div>
-            <div><dt>{formatLguBenefitLabel(state.discountPercentageBasisPoints)}</dt><dd>{formatDiscount(state.statutoryDiscountAmountMinorUnits, state.currency)}</dd></div>
-            {state.ordinanceReference && <div><dt>Ordinance reference</dt><dd>{state.ordinanceReference}</dd></div>}
-            <div><dt>Final VATable sales</dt><dd>{formatCurrency(state.finalVatableSalesMinorUnits, state.currency)}</dd></div>
-            <div><dt>Final applicable VAT (12%)</dt><dd>{formatCurrency(state.finalVatAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Total amount payable</dt><dd>{formatCurrency(state.finalPayableAmountMinorUnits, state.currency)}</dd></div>
-            <div><dt>Tariff application</dt><dd>Authoritative version applied</dd></div>
-          </dl>
-        </section>
-      )}
+      {appliedComplete && <StatutoryDiscountFinancialPresentation state={state} />}
 
       {decisionId && (
         <StatutoryEvidencePanel
@@ -470,8 +482,19 @@ function friendly(value?: string | null): string {
   return value.replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
 
-function formatLguBenefitLabel(discountPercentageBasisPoints?: number | null): string {
-  if (discountPercentageBasisPoints == null) return "LGU ordinance benefit";
+function hasAuthoritativeFinancialFacts(state: StatutoryDiscountWorkflowState): boolean {
+  return Boolean(state.currency)
+    && state.originalAmountMinorUnits != null
+    && state.originalVatAmountMinorUnits != null
+    && state.vatExclusiveBasisAmountMinorUnits != null
+    && state.statutoryDiscountAmountMinorUnits != null
+    && state.finalVatableSalesMinorUnits != null
+    && state.finalVatAmountMinorUnits != null
+    && state.finalPayableAmountMinorUnits != null;
+}
+
+function formatLguBenefitLabel(benefitType?: string | null, discountPercentageBasisPoints?: number | null): string {
+  if (benefitType === "FULL_FEE_EXEMPTION" || discountPercentageBasisPoints == null) return "LGU ordinance benefit";
   return `LGU ordinance discount (${discountPercentageBasisPoints / 100}%)`;
 }
 
