@@ -3,7 +3,7 @@ param(
     [switch]$PreflightOnly,
     [switch]$WebViewSmokeCheck,
     [string]$CentralPmsUrl = "http://127.0.0.1:56095",
-    [string]$TerminalSerialNumber = $env:APT_TERMINAL_SERIAL_NUMBER,
+    [string]$TerminalSerialNumber = $(if ($env:APT_TERMINAL_SERIAL_NUMBER) { $env:APT_TERMINAL_SERIAL_NUMBER } else { 'ACE4_2E00_653A_D952' }),
     [string]$ReceiptPrinterName = $env:APT_RECEIPT_PRINTER_NAME,
     [ValidateSet("57", "58", "80")]
     [string]$ReceiptPaperWidthMm = $(if ($env:APT_RECEIPT_PAPER_WIDTH_MM) { $env:APT_RECEIPT_PAPER_WIDTH_MM } else { "57" })
@@ -20,6 +20,9 @@ $webUiUrl = "http://localhost:5173"
 if ([string]::IsNullOrWhiteSpace($TerminalSerialNumber)) {
     throw "APT_TERMINAL_SERIAL_NUMBER must contain the registered physical workstation serial number."
 }
+if ($TerminalSerialNumber.Trim() -cne 'ACE4_2E00_653A_D952') {
+    throw "The PITX Level 3 APT serial number must match the approved active hardware registration."
+}
 
 try {
     $response = Invoke-WebRequest -Uri "$centralPmsUrl/health/ready" -UseBasicParsing -TimeoutSec 5
@@ -32,9 +35,9 @@ try {
 
 $runtimeConfig = [ordered]@{
     APT_PROFILE = "CASHIER_ASSISTED_TERMINAL"
-    APT_TERMINAL_ID = "apt-pitx-level-3-01"
+    APT_TERMINAL_ID = "PITX-APT-01"
     APT_TERMINAL_SERIAL_NUMBER = $TerminalSerialNumber.Trim()
-    APT_POS_VERSION_LABEL = "Version No. ExitPass V1.0"
+    APT_POS_VERSION_LABEL = "Version No. ExitPass V1.0.0"
     APT_TERMINAL_DISPLAY_NAME = "PITX Level 3 APT"
     APT_SITE_ID = "2d1dcdf8-f563-537c-8542-0bde7cc9da97"
     APT_SITE_NAME = "PITX Level 3"

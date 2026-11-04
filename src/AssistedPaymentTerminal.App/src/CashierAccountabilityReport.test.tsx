@@ -98,7 +98,7 @@ function closedSummary(varianceAmount = 0): CashCustodySummary {
       cashierId: "cashier-stable-id",
       authenticatedCashierSessionReference: "session-reference",
       cashierShiftId: "SHIFT-ACCOUNTABILITY-001",
-      terminalId: "apt-pitx-level-3-01",
+      terminalId: "PITX-APT-01",
       siteId: "PITX-LEVEL-3",
       siteGroupId: "PITX",
       posServerId: "pos-pitx-level-3",
