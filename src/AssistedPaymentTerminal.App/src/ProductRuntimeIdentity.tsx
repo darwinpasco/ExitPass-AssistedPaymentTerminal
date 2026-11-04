@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export const DEFAULT_POS_VERSION_LABEL = "Version No. ExitPass V1.0";
+export const DEFAULT_POS_VERSION_LABEL = "Version No. ExitPass V1.0.0";
 
 const manilaDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Manila",

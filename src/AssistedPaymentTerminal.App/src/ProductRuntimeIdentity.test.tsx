@@ -5,6 +5,10 @@ import { DEFAULT_POS_VERSION_LABEL, formatManilaDateTime, ProductRuntimeIdentity
 describe("ProductRuntimeIdentity", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("uses the approved ExitPass POS software version", () => {
+    expect(DEFAULT_POS_VERSION_LABEL).toBe("Version No. ExitPass V1.0.0");
+  });
+
   it("formats the workstation clock in Asia/Manila", () => {
     expect(formatManilaDateTime(new Date("2026-10-20T07:30:00Z")))
       .toBe("October 20, 2026 | 3:30:00 PM");
