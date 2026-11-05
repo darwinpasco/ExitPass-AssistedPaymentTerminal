@@ -11,7 +11,7 @@ public sealed class CentralPmsHttpClientCompositionTests
         var source = File.ReadAllText(FindMainWindowSource());
 
         Assert.Equal(
-            2,
+            3,
             Regex.Matches(
                 source,
                 @"ClientCertificateOptions\s*=\s*ClientCertificateOption\.Manual")
