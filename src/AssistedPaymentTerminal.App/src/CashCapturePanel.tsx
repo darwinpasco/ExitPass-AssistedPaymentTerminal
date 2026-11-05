@@ -473,6 +473,20 @@ export function CashCapturePanel({
     const received = await bridge.recordCashReceived(correlationId, {
       localCashTenderId: started.payload.id,
       cashierAttested,
+      payableBasisRevalidation: {
+        parkingSessionId: authoritativeBasis.parkingSessionId,
+        tariffSnapshotId: authoritativeBasis.tariffSnapshotId,
+        siteGroupId: authoritativeBasis.siteGroupId,
+        siteId: authoritativeBasis.siteId,
+        sitePosServerId: authoritativeBasis.sitePosServerId,
+        terminalId: authoritativeBasis.terminalId ?? context.terminalId,
+        vendorSystemId: authoritativeBasis.vendorSystemId,
+        ticketReference: authoritativeBasis.ticketReference,
+        plateNumber: authoritativeBasis.plateNumber,
+        expectedAmountMinorUnits: authoritativeBasis.authoritativeAmountMinorUnits,
+        expectedCurrency: authoritativeBasis.currency,
+        statutoryDiscountDecisionCommandId: authoritativeBasis.statutoryDiscountReadiness?.statutoryDiscountDecisionCommandId,
+      },
       statutoryTenderEvidence: buildStatutoryTenderEvidence(authoritativeBasis),
       denominations: denominationPayload,
     });

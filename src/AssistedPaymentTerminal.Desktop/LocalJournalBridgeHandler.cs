@@ -51,6 +51,7 @@ public sealed class LocalJournalBridgeHandler
     private readonly IReceiptPrinter _receiptPrinter;
     private readonly ICentralPmsTerminalCashReceiptReprintClient _receiptReprintClient;
     private readonly IHumanCashAuthorization? _humanCashAuthorization;
+    private readonly ICentralPmsCashAdmissionRevalidator? _cashAdmissionRevalidator;
     private readonly bool _allowDevelopmentSessionCommands;
 
     public LocalJournalBridgeHandler(
@@ -72,7 +73,8 @@ public sealed class LocalJournalBridgeHandler
         string? siteTimeZoneId = null,
         Func<DateTimeOffset>? utcNow = null,
         IHumanCashAuthorization? humanCashAuthorization = null,
-        bool allowDevelopmentSessionCommands = true)
+        bool allowDevelopmentSessionCommands = true,
+        ICentralPmsCashAdmissionRevalidator? cashAdmissionRevalidator = null)
     {
         _journal = journal;
         _centralPmsCashSubmissionEnabled = centralPmsCashSubmissionEnabled;
@@ -86,6 +88,7 @@ public sealed class LocalJournalBridgeHandler
         _ = ResolveSiteTimeZone(siteTimeZoneId);
         _ = utcNow;
         _humanCashAuthorization = humanCashAuthorization;
+        _cashAdmissionRevalidator = cashAdmissionRevalidator;
         _allowDevelopmentSessionCommands = allowDevelopmentSessionCommands;
         var localOptions = new LocalOperationsDatabaseOptions(
             journal.DatabasePath,
@@ -329,6 +332,42 @@ public sealed class LocalJournalBridgeHandler
         }
 
         var payload = ReadPayload<RecordCashReceivedPayload>(request);
+        var tender = await _journal.GetCashTenderAsync(payload.LocalCashTenderId, cancellationToken).ConfigureAwait(false);
+        if (tender is null)
+        {
+            return SerializeFailure(request.Command, request.CorrelationId, "cash_tender_not_found", "The local cash tender was not found.");
+        }
+
+        var revalidation = payload.PayableBasisRevalidation;
+        var expectedAmountMinorUnits = checked((long)decimal.Round(tender.AmountDue * 100m, 0, MidpointRounding.AwayFromZero));
+        if (revalidation is not null &&
+            (!string.Equals(revalidation.ParkingSessionId, tender.ParkingSessionId, StringComparison.Ordinal) ||
+             !string.Equals(revalidation.TariffSnapshotId, tender.TariffSnapshotId, StringComparison.Ordinal) ||
+             revalidation.ExpectedAmountMinorUnits != expectedAmountMinorUnits ||
+             !string.Equals(revalidation.ExpectedCurrency, tender.Currency, StringComparison.OrdinalIgnoreCase)))
+        {
+            return SerializeFailure(request.Command, request.CorrelationId, "PAYABLE_BASIS_MISMATCH", "The cash tender no longer matches the authoritative payable basis.");
+        }
+
+        if (revalidation is null || _cashAdmissionRevalidator is null)
+        {
+            if (!_allowDevelopmentSessionCommands)
+            {
+                return SerializeFailure(request.Command, request.CorrelationId, "FISCAL_BUSINESS_DATE_READINESS_UNAVAILABLE", "Central PMS cash admission readiness is unavailable.");
+            }
+        }
+        else
+        {
+            var admission = await _cashAdmissionRevalidator.RevalidateAsync(
+                revalidation,
+                request.CorrelationId,
+                cancellationToken).ConfigureAwait(false);
+            if (!admission.Allowed)
+            {
+                return SerializeFailure(request.Command, request.CorrelationId, admission.Code, admission.SafeMessage);
+            }
+        }
+
         var result = await _journal.CommitCashReceivedAsync(new CommitCashReceivedRequest(
             LocalCashTenderId: payload.LocalCashTenderId,
             CashierAttested: payload.CashierAttested,
@@ -1281,8 +1320,23 @@ public sealed record StartTenderPayload(
 public sealed record RecordCashReceivedPayload(
     Guid LocalCashTenderId,
     bool CashierAttested,
+    PayableBasisRevalidationPayload? PayableBasisRevalidation,
     StatutoryTenderEvidencePayload? StatutoryTenderEvidence,
     IReadOnlyCollection<BridgeDenominationLine> Denominations);
+
+public sealed record PayableBasisRevalidationPayload(
+    string ParkingSessionId,
+    string TariffSnapshotId,
+    Guid SiteGroupId,
+    Guid SiteId,
+    string? SitePosServerId,
+    string TerminalId,
+    string? VendorSystemId,
+    string? TicketReference,
+    string? PlateNumber,
+    long ExpectedAmountMinorUnits,
+    string ExpectedCurrency,
+    Guid? StatutoryDiscountDecisionCommandId);
 
 public sealed record BridgeDenominationLine(
     string DenominationCode,

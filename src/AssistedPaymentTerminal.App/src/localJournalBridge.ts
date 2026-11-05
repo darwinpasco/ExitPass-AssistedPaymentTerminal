@@ -496,12 +496,28 @@ export type StartTenderPayload = {
 export type RecordCashReceivedPayload = {
   localCashTenderId: string;
   cashierAttested: boolean;
+  payableBasisRevalidation: PayableBasisRevalidationPayload;
   statutoryTenderEvidence?: StatutoryTenderEvidencePayload | null;
   denominations: Array<{
     denominationCode: string;
     denominationValue: number;
     quantity: number;
   }>;
+};
+
+export type PayableBasisRevalidationPayload = {
+  parkingSessionId: string;
+  tariffSnapshotId: string;
+  siteGroupId: string;
+  siteId: string;
+  sitePosServerId?: string | null;
+  terminalId: string;
+  vendorSystemId?: string | null;
+  ticketReference?: string | null;
+  plateNumber?: string | null;
+  expectedAmountMinorUnits: number;
+  expectedCurrency: string;
+  statutoryDiscountDecisionCommandId?: string | null;
 };
 
 export type StatutoryTenderEvidencePayload = {

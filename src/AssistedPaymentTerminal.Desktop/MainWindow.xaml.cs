@@ -88,7 +88,17 @@ public partial class MainWindow : Window
             receiptPrinter: receiptPrinter,
             siteTimeZoneId: options.SiteTimeZoneId,
             humanCashAuthorization: humanSessionRuntime,
-            allowDevelopmentSessionCommands: false);
+            allowDevelopmentSessionCommands: false,
+            cashAdmissionRevalidator: new CentralPmsCashAdmissionRevalidator(
+                new HttpClient(new HttpClientHandler
+                {
+                    ClientCertificateOptions = ClientCertificateOption.Manual
+                })
+                {
+                    Timeout = TimeSpan.FromSeconds(15)
+                },
+                options.CentralPmsBaseUrl,
+                humanSessionRuntime));
         _statutoryEvidenceBridge = new StatutoryEvidenceBridgeHandler(
             new CentralPmsStatutoryEvidenceClient(
                 new HttpClient { Timeout = TimeSpan.FromSeconds(30) },

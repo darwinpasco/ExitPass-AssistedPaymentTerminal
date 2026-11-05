@@ -404,6 +404,79 @@ public sealed class LocalJournalBridgeHandlerTests
         Assert.Equal(CashTenderEventType.TenderStarted, events[0].EventType);
     }
 
+    [Fact]
+    public async Task ProductionBridgeDoesNotWriteCashReceivedWhenFiscalBusinessDateIsNotOpen()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var fixtureHandler = database.CreateHandler();
+        var sessionId = await CreateSessionAsync(fixtureHandler);
+        var tenderId = ReadTenderId(await StartTenderAsync(fixtureHandler, sessionId, ParkingSessionCashReceivedId));
+        var handler = database.CreateHandler(
+            humanCashAuthorization: new FixedHumanCashAuthorization(true),
+            allowDevelopmentSessionCommands: false,
+            cashAdmissionRevalidator: new FixedCashAdmissionRevalidator(false));
+
+        var response = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.RecordCashReceived,
+            Guid.NewGuid().ToString("D"),
+            CashReceivedPayload(tenderId));
+        var tender = await database.Service.GetCashTenderAsync(tenderId);
+        var events = await database.Service.GetCashTenderEventsAsync(tenderId);
+
+        Assert.False(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("FISCAL_BUSINESS_DATE_NOT_OPEN", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(CashTenderState.TenderStarted, tender!.CurrentLocalState);
+        Assert.Single(events);
+    }
+
+    [Fact]
+    public async Task ProductionBridgeRevalidatesImmediatelyBeforeCashReceivedCommit()
+    {
+        using var database = DesktopTestDatabase.Create();
+        var fixtureHandler = database.CreateHandler();
+        var sessionId = await CreateSessionAsync(fixtureHandler);
+        var tenderId = ReadTenderId(await StartTenderAsync(fixtureHandler, sessionId, ParkingSessionCashReceivedId));
+        var revalidator = new FixedCashAdmissionRevalidator(true);
+        var handler = database.CreateHandler(
+            humanCashAuthorization: new FixedHumanCashAuthorization(true),
+            allowDevelopmentSessionCommands: false,
+            cashAdmissionRevalidator: revalidator);
+
+        var response = await SendAsync(
+            handler,
+            LocalJournalBridgeCommand.RecordCashReceived,
+            Guid.NewGuid().ToString("D"),
+            CashReceivedPayload(tenderId));
+
+        Assert.True(response.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(nameof(CashTenderState.CashReceived), response.RootElement.GetProperty("payload").GetProperty("currentLocalState").GetString());
+        Assert.Equal(1, revalidator.CallCount);
+    }
+
+    private static object CashReceivedPayload(Guid tenderId) => new
+    {
+        localCashTenderId = tenderId,
+        cashierAttested = true,
+        payableBasisRevalidation = new
+        {
+            parkingSessionId = ParkingSessionCashReceivedId,
+            tariffSnapshotId = TariffSnapshotId,
+            siteGroupId = SiteGroupId,
+            siteId = SiteId,
+            sitePosServerId = "pos-bridge",
+            terminalId = "terminal-bridge",
+            vendorSystemId = "mock-hikcentral",
+            ticketReference = "APT-CASH-1",
+            plateNumber = "ABC1234",
+            expectedAmountMinorUnits = 12500,
+            expectedCurrency = "PHP",
+            statutoryDiscountDecisionCommandId = (string?)null
+        },
+        statutoryTenderEvidence = (object?)null,
+        denominations = new[] { new { denominationCode = "PHP-100", denominationValue = 100m, quantity = 2 } }
+    };
+
     private static async Task<Guid> CreateSessionAsync(LocalJournalBridgeHandler handler)
     {
         using var response = await SendAsync(
@@ -503,11 +576,13 @@ internal sealed class DesktopTestDatabase : IDisposable
 
     public LocalJournalBridgeHandler CreateHandler(
         IHumanCashAuthorization? humanCashAuthorization = null,
-        bool allowDevelopmentSessionCommands = true) =>
+        bool allowDevelopmentSessionCommands = true,
+        ICentralPmsCashAdmissionRevalidator? cashAdmissionRevalidator = null) =>
         new(
             new CashJournalService(new LocalOperationsDatabaseOptions(DatabasePath)),
             humanCashAuthorization: humanCashAuthorization,
-            allowDevelopmentSessionCommands: allowDevelopmentSessionCommands);
+            allowDevelopmentSessionCommands: allowDevelopmentSessionCommands,
+            cashAdmissionRevalidator: cashAdmissionRevalidator);
 
     public void Dispose()
     {
@@ -524,4 +599,22 @@ internal sealed class FixedHumanCashAuthorization(bool authorized, string denied
         Task.FromResult(authorized
             ? new HumanCashAuthorizationResult(true, "AUTHORIZED", "Authorized.")
             : new HumanCashAuthorizationResult(false, deniedCode, "Online cashier authorization is required."));
+}
+
+internal sealed class FixedCashAdmissionRevalidator(bool allowed) : ICentralPmsCashAdmissionRevalidator
+{
+    public int CallCount { get; private set; }
+
+    public Task<CashAdmissionRevalidationResult> RevalidateAsync(
+        PayableBasisRevalidationPayload request,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        CallCount++;
+        return Task.FromResult(allowed
+            ? CashAdmissionRevalidationResult.Success()
+            : CashAdmissionRevalidationResult.Blocked(
+                "FISCAL_BUSINESS_DATE_NOT_OPEN",
+                "The fiscal business date is not open."));
+    }
 }
