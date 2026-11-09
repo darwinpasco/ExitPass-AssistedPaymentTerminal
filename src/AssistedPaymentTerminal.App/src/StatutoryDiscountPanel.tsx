@@ -21,7 +21,10 @@ export type StatutoryDiscountPanelProps = {
   context: TerminalContext;
   state: StatutoryDiscountWorkflowState;
   availableEntitlements: readonly StatutoryEntitlementType[];
-  onStateChange: (next: StatutoryDiscountWorkflowState) => void;
+  availabilityPending?: boolean;
+  availabilityMessage?: string | null;
+  showFinancialPresentation?: boolean;
+  onStateChange: (next: StatutoryDiscountWorkflowState) => void | Promise<void>;
   onAppliedBasisReady: (decisionCommandId: string, response: StatutoryDiscountDecisionResponse, nextState: StatutoryDiscountWorkflowState) => Promise<void>;
   evidenceBridge?: StatutoryEvidenceBridge;
 };
@@ -61,10 +64,11 @@ const defaultDraft = {
   issuingAuthority: "OSCA",
   expiryDate: "",
   requesterAttested: false,
+  beneficiaryResidencySatisfied: false,
   attestationNotes: "",
 };
 
-export function StatutoryDiscountPanel({ basis, client, context, state, availableEntitlements, onStateChange, onAppliedBasisReady, evidenceBridge = defaultEvidenceBridge }: StatutoryDiscountPanelProps) {
+export function StatutoryDiscountPanel({ basis, client, context, state, availableEntitlements, availabilityPending = false, availabilityMessage = null, showFinancialPresentation = true, onStateChange, onAppliedBasisReady, evidenceBridge = defaultEvidenceBridge }: StatutoryDiscountPanelProps) {
   const [draft, setDraft] = useState(() => ({
     ...defaultDraft,
     entitlementType: state.entitlementType ?? defaultDraft.entitlementType,
@@ -73,6 +77,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     issuingAuthority: state.issuingAuthority ?? defaultDraft.issuingAuthority,
     expiryDate: state.expiryDate ?? defaultDraft.expiryDate,
     requesterAttested: Boolean(state.requesterAttested),
+    beneficiaryResidencySatisfied: Boolean(state.beneficiaryResidencySatisfied),
     attestationNotes: state.attestationNotes ?? defaultDraft.attestationNotes,
   }));
   const [message, setMessage] = useState<string | null>(null);
@@ -113,6 +118,26 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     if (status === "none") {
       onStateChange({ status: "draft", ...currentStateEvidence(state), [key]: value });
     }
+  }
+
+  function startRequest() {
+    if (availableEntitlements.length === 0) {
+      setMessage(availabilityMessage ?? "No statutory parking benefit is currently available for this session.");
+      return;
+    }
+
+    const entitlementType = availableEntitlements.includes(draft.entitlementType as StatutoryEntitlementType)
+      ? draft.entitlementType
+      : availableEntitlements[0];
+    setDraft((current) => ({ ...current, entitlementType }));
+    onStateChange({
+      ...state,
+      status: "draft",
+      entitlementType,
+      beneficiaryResidencySatisfied: draft.beneficiaryResidencySatisfied,
+      updatedAt: new Date().toISOString(),
+    });
+    setMessage(null);
   }
 
   function commitStatutoryIdMask() {
@@ -163,19 +188,20 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
       issuingAuthority: submissionDraft.issuingAuthority,
       expiryDate: submissionDraft.expiryDate || null,
       requesterAttested: submissionDraft.requesterAttested,
+      beneficiaryResidencySatisfied: submissionDraft.beneficiaryResidencySatisfied,
       attestationNotes: submissionDraft.attestationNotes || null,
       requestReference,
       decisionIdempotencyKey,
       applicationIdempotencyKey,
       updatedAt: new Date().toISOString(),
     };
-    onStateChange(submittingState);
+    await onStateChange(submittingState);
     setMessage(null);
 
     const request = buildDecisionRequest({ basis, context, draft: submissionDraft, requestReference, applyPayableBasis });
     const result = await client.submitStatutoryDiscountDecision(request, correlationId, idempotencyKey);
     if (!result.ok) {
-      onStateChange({
+      await onStateChange({
         ...submittingState,
         status: result.error.retryable ? "retryable_failure" : "terminal_failure",
         retryable: result.error.retryable,
@@ -188,7 +214,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     }
 
     const next = mapDecisionResponse(result.response, submittingState);
-    onStateChange(next);
+    await onStateChange(next);
     if (isAppliedComplete(next)) {
       await onAppliedBasisReady(result.response.statutoryDiscountDecisionCommandId, result.response, next);
     }
@@ -199,7 +225,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     const correlationId = createCorrelationId();
     const result = await client.getStatutoryDiscountDecision(decisionId, correlationId);
     if (!result.ok) {
-      onStateChange({
+      await onStateChange({
         ...state,
         status: result.error.retryable ? "retryable_failure" : "terminal_failure",
         retryable: result.error.retryable,
@@ -213,7 +239,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
     }
 
     const next = mapDecisionResponse(result.response, state);
-    onStateChange(next);
+    await onStateChange(next);
     if (isAppliedComplete(next)) {
       await onAppliedBasisReady(result.response.statutoryDiscountDecisionCommandId, result.response, next);
     }
@@ -229,7 +255,16 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
       </p>
       {!active && (
         <div className="statutory-draft-actions">
-          <p>No statutory request is active for this payable basis. Submit the request through WebPay or Operator Console.</p>
+          <p>{availabilityPending
+            ? "Checking applicable statutory parking benefits..."
+            : availabilityMessage ?? (availableEntitlements.length > 0
+              ? "An authorized cashier may start a statutory request for this payable basis."
+              : "No statutory parking benefit is currently available for this session.")}</p>
+          {availableEntitlements.length > 0 && (
+            <button type="button" className="secondary-action" onClick={startRequest} disabled={availabilityPending}>
+              Start statutory request
+            </button>
+          )}
         </div>
       )}
 
@@ -272,6 +307,10 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
             <input type="date" value={draft.expiryDate ?? ""} onChange={(event) => updateDraft("expiryDate", event.target.value)} disabled={status !== "draft" && status !== "none"} />
           </label>
           <label className="checkbox-line">
+            <input type="checkbox" checked={draft.beneficiaryResidencySatisfied} onChange={(event) => updateDraft("beneficiaryResidencySatisfied", event.target.checked)} disabled={status !== "draft" && status !== "none"} />
+            Beneficiary satisfies the residency requirement for the configured parking benefit.
+          </label>
+          <label className="checkbox-line">
             <input type="checkbox" checked={draft.requesterAttested} onChange={(event) => updateDraft("requesterAttested", event.target.checked)} disabled={status !== "draft" && status !== "none"} />
             Cashier attests safe entitlement facts were presented for Operator Console review.
           </label>
@@ -287,7 +326,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
         </dl>
       </div>
 
-      {appliedComplete && <StatutoryDiscountFinancialPresentation state={state} />}
+      {appliedComplete && showFinancialPresentation && <StatutoryDiscountFinancialPresentation state={state} />}
 
       {decisionId && (
         <StatutoryEvidencePanel
@@ -295,7 +334,7 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
           restored={Boolean(state.restoredAfterRestart)}
           recovery={state.evidenceRecovery}
           bridge={evidenceBridge}
-          onRecoveryChange={(evidenceRecovery) => onStateChange({
+          onRecoveryChange={(evidenceRecovery) => void onStateChange({
             ...state,
             evidenceRecovery,
             updatedAt: new Date().toISOString(),
@@ -304,7 +343,21 @@ export function StatutoryDiscountPanel({ basis, client, context, state, availabl
       )}
 
       <div className="statutory-actions">
+        {status === "draft" && (
+          <button
+            type="button"
+            onClick={() => void submitDecision(false)}
+            disabled={!selectedEntitlementAllowed || !maskedIdForSubmission || rawIdHasManualMask || !draft.requesterAttested}
+          >
+            Submit request for review
+          </button>
+        )}
         {canCheckReview && <button type="button" className="secondary-action" onClick={() => void checkStatus()}>Check Review Status</button>}
+        {status === "approved_application_not_requested" && (
+          <button type="button" onClick={() => void submitDecision(true)}>
+            Apply approved benefit
+          </button>
+        )}
         {status === "application_processing" && <button type="button" className="secondary-action" onClick={() => void checkStatus()}>Check Application Status</button>}
       </div>
     </section>
@@ -349,6 +402,7 @@ function buildDecisionRequest({
     evidenceCaptureRequested: true,
     evidenceReferences: null,
     requesterAttestation: draft.requesterAttested,
+    beneficiaryResidencySatisfied: draft.beneficiaryResidencySatisfied,
     attestationNotes: draft.attestationNotes || null,
     reasonCode: null,
     applyPayableBasis,
@@ -427,6 +481,7 @@ function currentStateEvidence(state: StatutoryDiscountWorkflowState): Partial<St
     requestReference: state.requestReference,
     decisionIdempotencyKey: state.decisionIdempotencyKey,
     applicationIdempotencyKey: state.applicationIdempotencyKey,
+    beneficiaryResidencySatisfied: state.beneficiaryResidencySatisfied,
     statutoryDiscountDecisionCommandId: state.statutoryDiscountDecisionCommandId,
     statutoryDiscountPayableBasisApplicationCommandId: state.statutoryDiscountPayableBasisApplicationCommandId,
   };

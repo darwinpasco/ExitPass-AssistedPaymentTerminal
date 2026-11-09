@@ -363,6 +363,7 @@ export type StatutoryDiscountDecisionSubmitRequest = {
   reasonCode?: string | null;
   applyPayableBasis: boolean;
   originalTariffSnapshotId?: string | null;
+  beneficiaryResidencySatisfied?: boolean | null;
 };
 
 export type StatutoryDiscountDecisionResponse = {
@@ -453,6 +454,7 @@ export type StatutoryDiscountWorkflowState = {
   expiryDate?: string | null;
   requesterAttested?: boolean;
   attestationNotes?: string | null;
+  beneficiaryResidencySatisfied?: boolean | null;
   requestReference?: string | null;
   decisionIdempotencyKey?: string | null;
   applicationIdempotencyKey?: string | null;

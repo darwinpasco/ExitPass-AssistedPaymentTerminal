@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
 import type { CentralPmsClient, PayableBasisResponse, StatutoryEntitlementType } from "./api/centralPmsTypes";
@@ -6,12 +7,15 @@ import { buildTerminalContext } from "./terminalContext";
 import { mode1Config } from "./test/testConfig";
 
 describe("configured statutory entitlements", () => {
-  it("does not offer APT statutory request origination even when entitlements are configured", () => {
-    renderPanel(["SENIOR_CITIZEN"]);
+  it("offers APT statutory request origination only for configured entitlements", async () => {
+    const onStateChange = renderPanel(["SENIOR_CITIZEN"]);
 
     expect(screen.queryByTestId("covered-entitlement-selector")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Submit the request through WebPay or Operator Console/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Start statutory request" }));
+    expect(onStateChange).toHaveBeenCalledWith(expect.objectContaining({
+      status: "draft",
+      entitlementType: "SENIOR_CITIZEN",
+    }));
   });
 
   it("offers no statutory action when the Site has no configured entitlement", () => {
@@ -33,6 +37,7 @@ describe("configured statutory entitlements", () => {
 });
 
 function renderPanel(availableEntitlements: readonly StatutoryEntitlementType[]) {
+  const onStateChange = vi.fn();
   render(
     <StatutoryDiscountPanel
       basis={basis}
@@ -40,10 +45,11 @@ function renderPanel(availableEntitlements: readonly StatutoryEntitlementType[])
       context={buildTerminalContext(mode1Config())}
       state={{ status: "none" }}
       availableEntitlements={availableEntitlements}
-      onStateChange={vi.fn()}
+      onStateChange={onStateChange}
       onAppliedBasisReady={vi.fn(async () => undefined)}
     />,
   );
+  return onStateChange;
 }
 
 const basis: PayableBasisResponse = {

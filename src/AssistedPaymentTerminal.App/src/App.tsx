@@ -13,6 +13,7 @@ import type {
   PayableBasisResponse,
   ProjectedSessionResponse,
   StatutoryDiscountWorkflowState,
+  StatutoryEntitlementType,
 } from "./api/centralPmsTypes";
 import { isProjectedSessionResponse } from "./api/centralPmsClient";
 import { CashCapturePanel } from "./CashCapturePanel";
@@ -30,7 +31,7 @@ import {
   shouldUseTransactionCompletionVisualSmoke,
 } from "./TransactionCompletionVisualSmoke";
 import { StatutoryDiscountVisualSmokeShell, shouldUseStatutoryDiscountVisualSmoke } from "./StatutoryDiscountVisualSmoke";
-import { StatutoryDiscountFinancialPresentation } from "./StatutoryDiscountPanel";
+import { StatutoryDiscountFinancialPresentation, StatutoryDiscountPanel } from "./StatutoryDiscountPanel";
 import { ZeroPayableSalesInvoicePanel } from "./ZeroPayableSalesInvoicePanel";
 import { buildTerminalContext, type TerminalContext } from "./terminalContext";
 import { ProductRuntimeIdentity } from "./ProductRuntimeIdentity";
@@ -56,6 +57,12 @@ type LookupState =
 type PreCashResult =
   | { ok: true; basis: PayableBasisResponse }
   | { ok: false; message: string };
+
+type StatutoryAvailabilityState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; entitlements: StatutoryEntitlementType[]; message: string | null }
+  | { status: "failed"; message: string };
 
 const defaultBridge = createWebViewLocalJournalBridge();
 const defaultEvidenceBridge = createWebViewStatutoryEvidenceBridge();
@@ -99,6 +106,7 @@ export function App() {
             initialStatutoryState={initialStatutoryState}
             restorePayableBasisOnMount={false}
             initialCashEntryRequested={initialCashEntryRequested}
+            statutoryWorkflowAuthorized
           />
         )}
       />
@@ -224,6 +232,7 @@ export function AuthenticatedTerminal({
       humanSessionBridge={humanSessionBridge}
       humanSessionState={humanState}
       onHumanSessionStateChange={setHumanState}
+      statutoryWorkflowAuthorized={humanState.authenticated && humanState.deviceTrusted && humanState.audience === "APT"}
     />
   );
 }
@@ -304,6 +313,7 @@ export function TerminalShell({
   humanSessionBridge,
   humanSessionState,
   onHumanSessionStateChange,
+  statutoryWorkflowAuthorized = false,
 }: {
   config: AptConfig;
   client: CentralPmsClient;
@@ -318,6 +328,7 @@ export function TerminalShell({
   humanSessionBridge?: HumanSessionBridge;
   humanSessionState?: HumanSessionState;
   onHumanSessionStateChange?: (state: HumanSessionState) => void;
+  statutoryWorkflowAuthorized?: boolean;
 }) {
   const context = useMemo(() => buildTerminalContext(config, humanSessionState), [config, humanSessionState]);
   const [referenceValue, setReferenceValue] = useState(initialReferenceValue);
@@ -325,6 +336,7 @@ export function TerminalShell({
   const [plateNumber, setPlateNumber] = useState(initialReferenceType === "plate" ? initialReferenceValue : "");
   const [lookupState, setLookupState] = useState<LookupState>(() => initialLookupState(initialResolvedBasis, initialStatutoryState, "fresh"));
   const [statutoryWorkflowState, setStatutoryWorkflowState] = useState<StatutoryDiscountWorkflowState>(initialStatutoryState);
+  const [statutoryAvailabilityState, setStatutoryAvailabilityState] = useState<StatutoryAvailabilityState>({ status: "idle" });
   const [localPrerequisiteMessage, setLocalPrerequisiteMessage] = useState<string | null>(null);
   const [localJournalHealth, setLocalJournalHealth] = useState<LocalJournalHealth | null>(null);
   const [localJournalHealthMessage, setLocalJournalHealthMessage] = useState<string | null>(null);
@@ -419,6 +431,54 @@ export function TerminalShell({
     ? statutoryCashGateStatus(authoritativeBasis, statutoryWorkflowState, lookupState)
     : { ready: false, message: "No payable basis is resolved." };
   const cashBoundaryReady = centralReady && (!statutoryWorkflowActive || statutoryCashGate.ready);
+
+  useEffect(() => {
+    if (!statutoryWorkflowAuthorized || !authoritativeBasis) {
+      setStatutoryAvailabilityState({ status: "idle" });
+      return;
+    }
+    if (!client.resolveStatutoryOrdinanceAvailability) {
+      setStatutoryAvailabilityState({
+        status: "failed",
+        message: "Statutory parking benefit availability is unavailable from Central PMS.",
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setStatutoryAvailabilityState({ status: "loading" });
+    void Promise.all((["SENIOR_CITIZEN", "PWD"] as const).map(async (entitlementType) => ({
+      entitlementType,
+      result: await client.resolveStatutoryOrdinanceAvailability!(
+        authoritativeBasis,
+        entitlementType,
+        createCorrelationId(),
+      ),
+    }))).then((results) => {
+      if (cancelled) return;
+      const failureResult = results.find(({ result }) => !result.ok);
+      if (failureResult && !failureResult.result.ok) {
+        setStatutoryAvailabilityState({ status: "failed", message: failureResult.result.error.message });
+        return;
+      }
+
+      const entitlements = results
+        .filter(({ result }) => result.ok && result.response.statutoryRequestAllowed && result.response.ordinanceCoverageAvailable)
+        .map(({ entitlementType }) => entitlementType);
+      const unavailableMessage = results
+        .map(({ result }) => result.ok ? result.response.safeMessage : null)
+        .find((message) => Boolean(message)) ?? null;
+      setStatutoryAvailabilityState({
+        status: "ready",
+        entitlements,
+        message: entitlements.length > 0 ? null : unavailableMessage,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authoritativeBasis?.parkingSessionId, client, statutoryWorkflowAuthorized]);
 
   async function resolveReference() {
     const ticket = ticketNumber.trim();
@@ -721,6 +781,64 @@ export function TerminalShell({
     });
   }
 
+  async function updateStatutoryWorkflow(next: StatutoryDiscountWorkflowState) {
+    statutoryWorkflowStateRef.current = next;
+    setStatutoryWorkflowState(next);
+    if (!authoritativeBasis) return;
+
+    const persistedReferenceType: PayableBasisReferenceType = authoritativeBasis.ticketReference ? "ticket" : "plate";
+    const persistedReferenceValue = authoritativeBasis.ticketReference ?? authoritativeBasis.plateNumber ?? referenceValue;
+    await persistPayableBasis(
+      authoritativeBasis,
+      persistedReferenceType,
+      persistedReferenceValue,
+      false,
+      false,
+      null,
+      next,
+    );
+  }
+
+  async function refreshAppliedStatutoryBasis(
+    decisionCommandId: string,
+    _response: unknown,
+    appliedState: StatutoryDiscountWorkflowState,
+  ) {
+    if (!authoritativeBasis) return;
+    const persistedReferenceType: PayableBasisReferenceType = authoritativeBasis.ticketReference ? "ticket" : "plate";
+    const persistedReferenceValue = authoritativeBasis.ticketReference ?? authoritativeBasis.plateNumber ?? referenceValue;
+    const refreshed = await client.resolvePayableBasis(
+      persistedReferenceType,
+      persistedReferenceValue,
+      createCorrelationId(),
+      decisionCommandId,
+    );
+    if (!refreshed.ok) {
+      setLocalPrerequisiteMessage(refreshed.error.message);
+      return;
+    }
+    if (isProjectedSessionResponse(refreshed.response)) {
+      setLocalPrerequisiteMessage("Central PMS did not return an authoritative statutory payable basis.");
+      return;
+    }
+
+    const canonicalState = statutoryStateFromPayableBasis(refreshed.response, appliedState);
+    const canonicalLookup = initialLookupState(refreshed.response, canonicalState, "fresh");
+    statutoryWorkflowStateRef.current = canonicalState;
+    setStatutoryWorkflowState(canonicalState);
+    setLookupState(canonicalLookup);
+    setLocalPrerequisiteMessage(null);
+    await persistPayableBasis(
+      refreshed.response,
+      persistedReferenceType,
+      persistedReferenceValue,
+      canonicalLookup.status === "amount_changed",
+      canonicalLookup.status === "amount_changed",
+      canonicalLookup.status === "amount_changed" ? canonicalLookup.previous.authoritativeAmountMinorUnits : null,
+      canonicalState,
+    );
+  }
+
   async function authorizeHumanAndRevalidate(basis: PayableBasisResponse): Promise<PreCashResult> {
     if (humanSessionBridge) {
       const authorization = await humanSessionBridge.authorizeCash(createCorrelationId());
@@ -756,6 +874,20 @@ export function TerminalShell({
   if (!humanCashAuthorized) {
     localPrerequisiteBlockers.unshift(humanSessionState?.safeMessage ?? "Current online cashier authority is required.");
   }
+  const activeEntitlement = statutoryWorkflowState.entitlementType === "SENIOR_CITIZEN" || statutoryWorkflowState.entitlementType === "PWD"
+    ? statutoryWorkflowState.entitlementType
+    : null;
+  const availableStatutoryEntitlements = statutoryAvailabilityState.status === "ready"
+    ? [...statutoryAvailabilityState.entitlements]
+    : [];
+  if (statutoryWorkflowActive && activeEntitlement && !availableStatutoryEntitlements.includes(activeEntitlement)) {
+    availableStatutoryEntitlements.push(activeEntitlement);
+  }
+  const statutoryAvailabilityMessage = statutoryAvailabilityState.status === "failed"
+    ? statutoryAvailabilityState.message
+    : statutoryAvailabilityState.status === "ready"
+      ? statutoryAvailabilityState.message
+      : null;
 
   return (
     <main className="terminal-shell" data-testid="apt-terminal-shell" data-app-ready="true">
@@ -830,6 +962,21 @@ export function TerminalShell({
               {isProjectedSessionResponse(displayedBasis)
                 ? <ProjectionSessionSummary basis={displayedBasis} onRetry={() => void resolveReference()} />
                 : <SessionSummary basis={displayedBasis} statutoryState={statutoryWorkflowState} client={client} />}
+              {authoritativeBasis && statutoryWorkflowAuthorized && (
+                <StatutoryDiscountPanel
+                  basis={authoritativeBasis}
+                  client={client}
+                  context={context}
+                  state={statutoryWorkflowState}
+                  availableEntitlements={availableStatutoryEntitlements}
+                  availabilityPending={statutoryAvailabilityState.status === "loading"}
+                  availabilityMessage={statutoryAvailabilityMessage}
+                  showFinancialPresentation={false}
+                  onStateChange={updateStatutoryWorkflow}
+                  onAppliedBasisReady={refreshAppliedStatutoryBasis}
+                  evidenceBridge={statutoryEvidenceBridge}
+                />
+              )}
               {authoritativeBasis && authoritativeBasis.authoritativeAmountMinorUnits > 0 && <section className="payment-section" aria-labelledby="receive-payment-heading">
                 <div className="section-heading">
                   <p className="eyebrow">3. Receive Payment</p>

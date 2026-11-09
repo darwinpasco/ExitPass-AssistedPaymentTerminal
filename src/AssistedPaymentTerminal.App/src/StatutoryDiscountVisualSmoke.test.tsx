@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App, TerminalShell } from "./App";
@@ -62,6 +62,7 @@ function renderSmoke(
               : evidenceBridge}
             restorePayableBasisOnMount={false}
             initialCashEntryRequested={initialCashEntryRequested}
+            statutoryWorkflowAuthorized
           />
         );
       }}
@@ -81,14 +82,13 @@ function renderSmoke(
 }
 
 describe("StatutoryDiscountVisualSmokeShell", () => {
-  it("does not expose statutory identity evidence in the cashier workflow", async () => {
+  it("shows only the masked statutory identity in the cashier workflow", async () => {
     renderSmoke();
 
     await userEvent.click(screen.getByRole("button", { name: "Draft statutory request" }));
 
-    expect(screen.queryByRole("textbox", { name: "Statutory ID" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Statutory ID" })).toHaveValue("AB******7890");
     expect(document.body).not.toHaveTextContent("AB1234567890");
-    expect(document.body).not.toHaveTextContent("AB******7890");
   });
 
   it("is development-only and mounted by the statutory discount query flag", async () => {
@@ -125,7 +125,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "APPLIED complete and Continue to Cash enabled" }));
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Approved");
-    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled());
     expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
   });
 
@@ -160,7 +160,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
 
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Submitted");
     expect(screen.getByTestId("payable-basis-amount")).toHaveTextContent("125.00");
-    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled());
 
     await userEvent.click(screen.getByLabelText(/I attest/));
     await userEvent.click(screen.getByRole("button", { name: "Record Cash Received" }));
@@ -174,7 +174,7 @@ describe("StatutoryDiscountVisualSmokeShell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Rejected" }));
 
     expect(screen.getByText("Discount Request").parentElement).toHaveTextContent("Rejected");
-    expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Record Cash Received" })).toBeEnabled());
   });
 
   it("keeps stale cash blocked after approval until application completes", async () => {

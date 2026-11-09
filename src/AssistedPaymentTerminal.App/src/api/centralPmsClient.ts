@@ -107,17 +107,58 @@ export class LiveCentralPmsClient implements CentralPmsClient {
   }
 
   async submitStatutoryDiscountDecision(
-    _request: StatutoryDiscountDecisionSubmitRequest,
+    request: StatutoryDiscountDecisionSubmitRequest,
     correlationId: string,
-    _idempotencyKey: string,
+    idempotencyKey: string,
   ): Promise<StatutoryDiscountDecisionResult> {
-    return failure(
-      "invalid_request",
-      "STATUTORY_DISCOUNT_APT_REQUEST_ORIGIN_PROHIBITED",
-      "Statutory-discount requests must be submitted through WebPay or Operator Console.",
+    const bridged = await sendPayableBasisRequest(
+      "statutoryDecision.submit",
       correlationId,
-      false,
+      this.config.siteId,
+      request,
+      idempotencyKey,
     );
+    if (bridged) {
+      if (!bridged.ok) {
+        const kind: CentralPmsFailureKind = bridged.error.code === "CENTRAL_PMS_TIMEOUT"
+          ? "timeout"
+          : bridged.error.code === "HUMAN_SESSION_REQUIRED"
+            ? "unauthorized"
+            : "service_unavailable";
+        return failure(kind, bridged.error.code, bridged.error.message, correlationId, kind !== "unauthorized");
+      }
+
+      const payload = bridged.payload.body;
+      if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300) {
+        return {
+          ok: false,
+          kind: mapFailureKind(
+            bridged.payload.statusCode,
+            typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+          ),
+          error: normalizeError(payload, correlationId),
+        };
+      }
+      if (!isStatutoryDiscountDecisionResponse(payload)) {
+        return malformedStatutoryDecision(correlationId);
+      }
+      return { ok: true, response: normalizeStatutoryDiscountDecisionResponse(payload) };
+    }
+
+    const result = await this.send(
+      "/v1/statutory-discounts/decisions",
+      "POST",
+      correlationId,
+      idempotencyKey,
+      request,
+    );
+    if (!result.ok) {
+      return result;
+    }
+    if (!isStatutoryDiscountDecisionResponse(result.payload)) {
+      return malformedStatutoryDecision(correlationId);
+    }
+    return { ok: true, response: normalizeStatutoryDiscountDecisionResponse(result.payload) };
   }
 
   async getStatutoryDiscountDecision(decisionCommandId: string, correlationId: string): Promise<StatutoryDiscountDecisionResult> {
@@ -401,6 +442,46 @@ export class LiveCentralPmsClient implements CentralPmsClient {
       entitlementType,
       correlationId,
     };
+    const bridgeCommand: PayableBasisBridgeCommand = operation === "RESOLVE"
+      ? "statutoryAvailability.resolve"
+      : "statutoryAvailability.revalidate";
+    const bridged = await sendPayableBasisRequest(
+      bridgeCommand,
+      correlationId,
+      this.config.siteId,
+      request,
+    );
+    if (bridged) {
+      if (!bridged.ok) {
+        const kind: CentralPmsFailureKind = bridged.error.code === "CENTRAL_PMS_TIMEOUT"
+          ? "timeout"
+          : bridged.error.code === "HUMAN_SESSION_REQUIRED"
+            ? "unauthorized"
+            : "service_unavailable";
+        return failure(kind, bridged.error.code, bridged.error.message, correlationId, kind !== "unauthorized");
+      }
+      const payload = bridged.payload.body;
+      if (bridged.payload.statusCode < 200 || bridged.payload.statusCode >= 300) {
+        return {
+          ok: false,
+          kind: mapFailureKind(
+            bridged.payload.statusCode,
+            typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+          ),
+          error: normalizeError(payload, correlationId),
+        };
+      }
+      if (!isStatutoryOrdinanceAvailabilityResponse(payload, operation)) {
+        return failure(
+          "malformed_response",
+          "MALFORMED_STATUTORY_ORDINANCE_AVAILABILITY_RESPONSE",
+          "Central PMS ordinance availability response did not match the APT contract.",
+          correlationId,
+          false,
+        );
+      }
+      return { ok: true, response: normalizeStatutoryOrdinanceAvailabilityResponse(payload) };
+    }
     const result = await this.send(path, "POST", correlationId, undefined, request);
     if (!result.ok) {
       return result;
@@ -766,6 +847,16 @@ function malformed(correlationId: string): CentralPmsResult {
     "malformed_response",
     "MALFORMED_PAYABLE_BASIS_RESPONSE",
     "Central PMS response did not match the APT payable-basis readiness contract.",
+    correlationId,
+    false,
+  );
+}
+
+function malformedStatutoryDecision(correlationId: string): Exclude<StatutoryDiscountDecisionResult, { ok: true }> {
+  return failure(
+    "malformed_response",
+    "MALFORMED_STATUTORY_DISCOUNT_RESPONSE",
+    "Central PMS statutory-discount response did not match the APT contract.",
     correlationId,
     false,
   );

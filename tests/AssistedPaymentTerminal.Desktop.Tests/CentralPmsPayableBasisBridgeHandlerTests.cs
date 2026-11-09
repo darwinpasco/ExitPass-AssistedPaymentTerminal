@@ -80,7 +80,7 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
     }
 
     [Fact]
-    public async Task StatutoryDecisionSubmitIsNotAnAcceptedAptBridgeCommand()
+    public async Task StatutoryDecisionSubmitUsesHostOwnedAuthorityAndStableIdempotencyKey()
     {
         var transport = new CapturingHandler();
         var handler = new CentralPmsPayableBasisBridgeHandler(
@@ -90,8 +90,49 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
 
         var result = await handler.HandleWebMessageAsync(StatutoryDecisionSubmitRequest());
 
-        Assert.Contains("INVALID_PAYABLE_BASIS_REQUEST", result, StringComparison.Ordinal);
+        Assert.NotNull(result);
+        Assert.Equal(HttpMethod.Post, transport.Request!.Method);
+        Assert.Equal(
+            "https://central-pms.example.test/v1/statutory-discounts/decisions",
+            transport.Request.RequestUri!.ToString());
+        Assert.Equal("opaque-session-token", transport.Request.Headers.Authorization!.Parameter);
+        Assert.Equal("apt-statutory-idempotency", transport.Request.Headers.GetValues("Idempotency-Key").Single());
+        Assert.Equal(DeviceId.ToString("D"), transport.Request.Headers.GetValues("X-ExitPass-Service-Identity-Id").Single());
+        Assert.Contains("ASSISTED_PAYMENT_TERMINAL", await transport.Request.Content!.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityResolve, "/v1/apt/statutory-discounts/ordinance-availability/resolve")]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityRevalidate, "/v1/apt/statutory-discounts/ordinance-availability/revalidate")]
+    public async Task StatutoryAvailabilityUsesGovernedDeviceAndCashierAuthority(string command, string path)
+    {
+        var transport = new CapturingHandler();
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")));
+
+        await handler.HandleWebMessageAsync(Request(command));
+
+        Assert.Equal(HttpMethod.Post, transport.Request!.Method);
+        Assert.Equal($"https://central-pms.example.test{path}", transport.Request.RequestUri!.ToString());
+        Assert.Equal("opaque-session-token", transport.Request.Headers.Authorization!.Parameter);
+        Assert.Equal(DeviceId.ToString("D"), transport.Request.Headers.GetValues("X-ExitPass-Service-Identity-Id").Single());
+    }
+
+    [Fact]
+    public async Task StatutoryDecisionSubmitWithoutIdempotencyKeyFailsClosed()
+    {
+        var transport = new CapturingHandler();
+        var handler = new CentralPmsPayableBasisBridgeHandler(
+            new HttpClient(transport),
+            "https://central-pms.example.test",
+            new StubAuthority(new CentralPmsRequestCredential(DeviceId, SiteId, "opaque-session-token")));
+
+        var result = await handler.HandleWebMessageAsync(Request(CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit));
+
         Assert.Null(transport.Request);
+        Assert.Contains("IDEMPOTENCY_KEY_REQUIRED", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -193,8 +234,11 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
         Assert.Empty(printer.SubmittedDocuments);
     }
 
-    [Fact]
-    public async Task MissingHumanSessionFailsClosedWithoutCallingCentralPms()
+    [Theory]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.Resolve)]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityResolve)]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit)]
+    public async Task MissingHumanSessionFailsClosedWithoutCallingCentralPms(string command)
     {
         var transport = new CapturingHandler();
         var handler = new CentralPmsPayableBasisBridgeHandler(
@@ -202,7 +246,10 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
             "https://central-pms.example.test",
             new StubAuthority(null));
 
-        var result = await handler.HandleWebMessageAsync(Request("payableBasis.resolve"));
+        var request = command == CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit
+            ? StatutoryDecisionSubmitRequest()
+            : Request(command);
+        var result = await handler.HandleWebMessageAsync(request);
 
         Assert.Null(transport.Request);
         Assert.Contains("HUMAN_SESSION_REQUIRED", result, StringComparison.Ordinal);
@@ -223,8 +270,11 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
         Assert.Contains("INVALID_PAYABLE_BASIS_REQUEST", result, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task BrowserCannotChangeTheDeviceBoundSiteScope()
+    [Theory]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.Resolve)]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityResolve)]
+    [InlineData(CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit)]
+    public async Task BrowserCannotChangeTheDeviceBoundSiteScope(string command)
     {
         var transport = new CapturingHandler();
         var handler = new CentralPmsPayableBasisBridgeHandler(
@@ -235,7 +285,10 @@ public sealed class CentralPmsPayableBasisBridgeHandlerTests
                 Guid.Parse("99999999-9999-4999-8999-999999999999"),
                 "opaque-session-token")));
 
-        var result = await handler.HandleWebMessageAsync(Request("payableBasis.resolve"));
+        var request = command == CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit
+            ? StatutoryDecisionSubmitRequest()
+            : Request(command);
+        var result = await handler.HandleWebMessageAsync(request);
 
         Assert.Null(transport.Request);
         Assert.Contains("FORBIDDEN_SITE", result, StringComparison.Ordinal);

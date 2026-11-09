@@ -1,6 +1,9 @@
 export type PayableBasisBridgeCommand =
   | "payableBasis.resolve"
   | "payableBasis.revalidate"
+  | "statutoryAvailability.resolve"
+  | "statutoryAvailability.revalidate"
+  | "statutoryDecision.submit"
   | "statutoryDecision.get"
   | "statutoryReceiptPresentation.get"
   | "statutoryReceiptPresentation.print";

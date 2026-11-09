@@ -12,6 +12,9 @@ public static class CentralPmsPayableBasisBridgeCommand
     public const string Source = "apt-central-pms-payable-basis";
     public const string Resolve = "payableBasis.resolve";
     public const string Revalidate = "payableBasis.revalidate";
+    public const string StatutoryAvailabilityResolve = "statutoryAvailability.resolve";
+    public const string StatutoryAvailabilityRevalidate = "statutoryAvailability.revalidate";
+    public const string StatutoryDecisionSubmit = "statutoryDecision.submit";
     public const string StatutoryDecisionGet = "statutoryDecision.get";
     public const string StatutoryReceiptPresentation = "statutoryReceiptPresentation.get";
     public const string StatutoryReceiptPresentationPrint = "statutoryReceiptPresentation.print";
@@ -22,6 +25,9 @@ public sealed class CentralPmsPayableBasisBridgeHandler
     private const string AptAuthorizationScheme = "ExitPass-HumanSession";
     private const string ResolvePath = "/v1/terminal-cash-payments/payable-basis/resolve";
     private const string RevalidatePath = "/v1/terminal-cash-payments/payable-basis/revalidate";
+    private const string StatutoryAvailabilityResolvePath = "/v1/apt/statutory-discounts/ordinance-availability/resolve";
+    private const string StatutoryAvailabilityRevalidatePath = "/v1/apt/statutory-discounts/ordinance-availability/revalidate";
+    private const string StatutoryDecisionSubmitPath = "/v1/statutory-discounts/decisions";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _httpClient;
@@ -77,6 +83,9 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         {
             CentralPmsPayableBasisBridgeCommand.Resolve => ResolvePath,
             CentralPmsPayableBasisBridgeCommand.Revalidate => RevalidatePath,
+            CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityResolve => StatutoryAvailabilityResolvePath,
+            CentralPmsPayableBasisBridgeCommand.StatutoryAvailabilityRevalidate => StatutoryAvailabilityRevalidatePath,
+            CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit => StatutoryDecisionSubmitPath,
             CentralPmsPayableBasisBridgeCommand.StatutoryDecisionGet =>
                 TryBuildStatutoryDecisionPath(request.Body, out var decisionPath) ? decisionPath : null,
             CentralPmsPayableBasisBridgeCommand.StatutoryReceiptPresentation =>
@@ -93,6 +102,11 @@ public sealed class CentralPmsPayableBasisBridgeHandler
             siteId == Guid.Empty)
         {
             return Failure(request.Command, request.CorrelationId, "INVALID_PAYABLE_BASIS_REQUEST", "The payable-basis request is invalid.");
+        }
+        if (request.Command == CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit &&
+            string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        {
+            return Failure(request.Command, request.CorrelationId, "IDEMPOTENCY_KEY_REQUIRED", "A stable statutory request idempotency key is required.");
         }
 
         var credential = await _authority.GetCurrentRequestCredentialAsync(cancellationToken).ConfigureAwait(false);
@@ -117,6 +131,10 @@ public sealed class CentralPmsPayableBasisBridgeHandler
         outbound.Headers.TryAddWithoutValidation("X-ExitPass-Service-Identity-Id", credential.DeviceServiceIdentityId.ToString("D"));
         outbound.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId.ToString("D"));
         outbound.Headers.TryAddWithoutValidation("X-Site-Id", siteId.ToString("D"));
+        if (request.Command == CentralPmsPayableBasisBridgeCommand.StatutoryDecisionSubmit)
+        {
+            outbound.Headers.TryAddWithoutValidation("Idempotency-Key", request.IdempotencyKey);
+        }
         if (method == HttpMethod.Post)
         {
             outbound.Content = JsonContent.Create(request.Body, options: JsonOptions);

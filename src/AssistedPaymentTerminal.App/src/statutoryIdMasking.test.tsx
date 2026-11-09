@@ -64,7 +64,7 @@ describe("statutory ID presentation masking", () => {
     const input = screen.getByRole("textbox", { name: "Statutory ID" });
     await user.type(input, "AB******7890");
     await user.tab();
-    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByLabelText(/Cashier attests safe entitlement facts/i));
 
     expect(screen.getByText("Enter the statutory ID normally without asterisks. Masking is automatic.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Submit for Operator Review" })).not.toBeInTheDocument();

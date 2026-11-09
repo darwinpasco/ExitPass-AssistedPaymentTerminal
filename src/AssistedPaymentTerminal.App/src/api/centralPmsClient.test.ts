@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LiveCentralPmsClient } from "./centralPmsClient";
-import type { PayableBasisResponse, ProjectedSessionResponse, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
+import type { PayableBasisResponse, ProjectedSessionResponse, StatutoryDiscountDecisionSubmitRequest, StatutoryOrdinanceAvailabilityResponse } from "./centralPmsTypes";
 import { mode1Config } from "../test/testConfig";
 import { maskStatutoryId } from "../statutoryIdMasking";
 
@@ -235,7 +235,7 @@ describe("LiveCentralPmsClient", () => {
     expect(vi.mocked(fetchMock).mock.calls[0][0]).not.toContain("/v1/webpay/parking-session");
   });
 
-  it("rejects APT statutory request origin without calling Central PMS", async () => {
+  it("submits an APT statutory request with stable idempotency and no browser-supplied authority", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => statutoryDecisionPayload(),
@@ -262,17 +262,65 @@ describe("LiveCentralPmsClient", () => {
       reasonCode: null,
       applyPayableBasis: false,
       originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+      beneficiaryResidencySatisfied: true,
     }, "stat-submit-corr", "idem-stat-submit");
 
-    expect(result).toEqual(expect.objectContaining({
-      ok: false,
-      kind: "invalid_request",
-      error: expect.objectContaining({
-        errorCode: "STATUTORY_DISCOUNT_APT_REQUEST_ORIGIN_PROHIBITED",
-        retryable: false,
-      }),
+    expect(result.ok).toBe(true);
+    const [url, init] = vi.mocked(fetchMock).mock.calls[0];
+    expect(url).toContain("/v1/statutory-discounts/decisions");
+    expect(init?.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": "idem-stat-submit",
+      "X-Correlation-Id": "stat-submit-corr",
+      "X-Site-Id": "11111111-1111-1111-1111-111111111111",
     }));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(init?.headers).not.toHaveProperty("Authorization");
+    expect(init?.headers).not.toHaveProperty("X-ExitPass-Permissions");
+    expect(String(init?.body)).toContain('"sourceChannel":"ASSISTED_PAYMENT_TERMINAL"');
+    expect(String(init?.body)).toContain('"beneficiaryResidencySatisfied":true');
+  });
+
+  it("uses the host-authorized bridge for APT statutory submission inside WebView2", async () => {
+    let listener: ((event: { data: unknown }) => void) | undefined;
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const postMessage = vi.fn((message: string) => {
+      const request = JSON.parse(message) as { command: string; correlationId: string };
+      listener?.({
+        data: JSON.stringify({
+          ok: true,
+          command: request.command,
+          correlationId: request.correlationId,
+          payload: { statusCode: 201, body: statutoryDecisionPayload() },
+        }),
+      });
+    });
+    window.chrome = {
+      webview: {
+        postMessage,
+        addEventListener: (_type, callback) => { listener = callback; },
+        removeEventListener: vi.fn(),
+      },
+    };
+
+    try {
+      const client = new LiveCentralPmsClient({ ...mode1Config(), centralPmsConnectionMode: "live" }, fetchMock);
+      const result = await client.submitStatutoryDiscountDecision!(statutoryDecisionSubmitRequest(), "stat-bridge-corr", "apt-stable-key");
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const request = JSON.parse(String(postMessage.mock.calls[0][0])) as Record<string, unknown>;
+      expect(request).toEqual(expect.objectContaining({
+        command: "statutoryDecision.submit",
+        correlationId: "stat-bridge-corr",
+        siteId: "11111111-1111-1111-1111-111111111111",
+        idempotencyKey: "apt-stable-key",
+      }));
+      expect(request.body).toEqual(expect.objectContaining({
+        sourceChannel: "ASSISTED_PAYMENT_TERMINAL",
+        beneficiaryResidencySatisfied: true,
+      }));
+    } finally {
+      delete window.chrome;
+    }
   });
 
   it("reads statutory decision status with GET only", async () => {
@@ -576,6 +624,31 @@ function projectedSessionPayload(overrides: Partial<ProjectedSessionResponse> = 
     safeMessage: "Session found from projection; live payable amount is temporarily unavailable.",
     correlationId: "projection-correlation",
     ...overrides,
+  };
+}
+
+function statutoryDecisionSubmitRequest(): StatutoryDiscountDecisionSubmitRequest {
+  return {
+    requestReference: "99999999-9999-4999-8999-999999990001",
+    sourceChannel: "ASSISTED_PAYMENT_TERMINAL",
+    parkingSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa1001",
+    siteId: "11111111-1111-1111-1111-111111111111",
+    siteGroupId: "22222222-2222-2222-2222-222222222222",
+    ticketReference: "APT-ACTIVE-1001",
+    plateNumber: "NCR-4421",
+    entitlementType: "SENIOR_CITIZEN",
+    idDocumentType: "OSCA_ID",
+    issuingAuthority: "OSCA",
+    expiryDate: null,
+    maskedIdReference: maskStatutoryId("AB1234567890"),
+    evidenceCaptureRequested: true,
+    evidenceReferences: null,
+    requesterAttestation: true,
+    attestationNotes: null,
+    reasonCode: null,
+    applyPayableBasis: false,
+    originalTariffSnapshotId: "dddddddd-dddd-4ddd-8ddd-dddddddd1001",
+    beneficiaryResidencySatisfied: true,
   };
 }
 

@@ -35,6 +35,82 @@ describe("App cashier workflow", () => {
     expect(screen.queryByRole("button", { name: "Continue to Cash" })).not.toBeInTheDocument();
   });
 
+  it("renders the production statutory workflow for an authorized cashier and authoritative basis", async () => {
+    render(
+      <TerminalShell
+        config={mode1Config()}
+        client={new MockCentralPmsClient(mode1Config())}
+        localJournalBridge={bridgeWithLocalState()}
+        statutoryWorkflowAuthorized
+      />,
+    );
+    await resolveTicket("APT-ACTIVE-1001");
+
+    expect(await screen.findByTestId("statutory-discount-panel")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Start statutory request" }));
+    expect(screen.getByRole("button", { name: "Submit request for review" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Statutory ID")).toBeInTheDocument();
+    expect(screen.getByText(/residency requirement/i)).toBeInTheDocument();
+  });
+
+  it("does not render statutory request controls without authenticated production authority", async () => {
+    render(
+      <TerminalShell
+        config={mode1Config()}
+        client={new MockCentralPmsClient(mode1Config())}
+        localJournalBridge={bridgeWithLocalState()}
+      />,
+    );
+    await resolveTicket("APT-ACTIVE-1001");
+
+    expect(screen.queryByTestId("statutory-discount-panel")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start statutory request" })).not.toBeInTheDocument();
+  });
+
+  it("re-resolves the canonical payable basis after an approved benefit is applied", async () => {
+    const config = mode1Config();
+    const client = new MockCentralPmsClient(config);
+    const initial = await client.resolvePayableBasis("ticket", "APT-ACTIVE-1001", "initial-correlation");
+    expect(initial.ok).toBe(true);
+    if (!initial.ok) return;
+    const resolveSpy = vi.spyOn(client, "resolvePayableBasis");
+    render(
+      <TerminalShell
+        config={config}
+        client={client}
+        localJournalBridge={bridgeWithLocalState()}
+        initialResolvedBasis={initial.response as PayableBasisResponse}
+        initialReferenceType="ticket"
+        initialReferenceValue="APT-ACTIVE-1001"
+        initialStatutoryState={{
+          status: "approved_application_not_requested",
+          entitlementType: "SENIOR_CITIZEN",
+          maskedIdReference: "AB******7890",
+          idDocumentType: "OSCA_ID",
+          issuingAuthority: "OSCA",
+          requesterAttested: true,
+          beneficiaryResidencySatisfied: true,
+          requestReference: "99999999-9999-4999-8999-999999990001",
+          statutoryDiscountDecisionCommandId: "77777777-7777-4777-8777-777777770001",
+          decisionResultStatus: "APPROVED",
+        }}
+        restorePayableBasisOnMount={false}
+        statutoryWorkflowAuthorized
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Apply approved benefit" }));
+
+    expect(await screen.findByRole("button", { name: "Acknowledge new amount" })).toBeInTheDocument();
+    expect(resolveSpy).toHaveBeenCalledWith(
+      "ticket",
+      "APT-ACTIVE-1001",
+      expect.any(String),
+      "77777777-7777-4777-8777-777777770001",
+    );
+    expect(screen.getByText(/Parking fee changed/i)).toBeInTheDocument();
+  });
+
   it("renders the authoritative seven-line statutory VAT breakdown in Parking Session Details", () => {
     renderAppliedStatutorySummary();
 
