@@ -19,12 +19,12 @@ public sealed record StartupOptions(
     string? SiteTimeZoneId = null,
     string? CentralPmsBaseUrl = null,
     string? ManualProofDiagnosticPath = null,
-    string? CentralPmsServiceIdentityId = null,
     string? TerminalId = null,
     string? SiteId = null,
     string? SiteGroupId = null,
     string? PosServerId = null,
-    string? HumanSessionCredentialPath = null)
+    string? HumanSessionCredentialPath = null,
+    string? DeviceTrustStatePath = null)
 {
     public static StartupOptions FromEnvironmentAndArgs(string[] args)
     {
@@ -45,12 +45,12 @@ public sealed record StartupOptions(
         var siteTimeZoneId = Environment.GetEnvironmentVariable("APT_SITE_TIME_ZONE_ID");
         var centralPmsBaseUrl = Environment.GetEnvironmentVariable("CENTRAL_PMS_BASE_URL");
         var manualProofDiagnosticPath = Environment.GetEnvironmentVariable("APT_MANUAL_PROOF_DIAGNOSTIC_PATH");
-        var centralPmsServiceIdentityId = Environment.GetEnvironmentVariable("APT_CENTRAL_PMS_SERVICE_IDENTITY_ID");
         var terminalId = Environment.GetEnvironmentVariable("APT_TERMINAL_ID");
         var siteId = Environment.GetEnvironmentVariable("APT_SITE_ID");
         var siteGroupId = Environment.GetEnvironmentVariable("APT_SITE_GROUP_ID");
         var posServerId = Environment.GetEnvironmentVariable("APT_POS_SERVER_ID");
         var humanSessionCredentialPath = Environment.GetEnvironmentVariable("APT_HUMAN_SESSION_CREDENTIAL_PATH");
+        var deviceTrustStatePath = Environment.GetEnvironmentVariable("APT_DEVICE_TRUST_STATE_PATH");
 
         foreach (var arg in args)
         {
@@ -123,6 +123,10 @@ public sealed record StartupOptions(
             {
                 manualProofDiagnosticPath = arg["--manual-proof-diagnostic-path=".Length..];
             }
+            else if (arg.StartsWith("--device-trust-state-path=", StringComparison.OrdinalIgnoreCase))
+            {
+                deviceTrustStatePath = arg["--device-trust-state-path=".Length..];
+            }
         }
 
         return new StartupOptions(
@@ -144,12 +148,12 @@ public sealed record StartupOptions(
             string.IsNullOrWhiteSpace(siteTimeZoneId) ? null : siteTimeZoneId,
             string.IsNullOrWhiteSpace(centralPmsBaseUrl) ? null : centralPmsBaseUrl,
             string.IsNullOrWhiteSpace(manualProofDiagnosticPath) ? null : manualProofDiagnosticPath,
-            string.IsNullOrWhiteSpace(centralPmsServiceIdentityId) ? null : centralPmsServiceIdentityId,
             string.IsNullOrWhiteSpace(terminalId) ? null : terminalId,
             string.IsNullOrWhiteSpace(siteId) ? null : siteId,
             string.IsNullOrWhiteSpace(siteGroupId) ? null : siteGroupId,
             string.IsNullOrWhiteSpace(posServerId) ? null : posServerId,
-            string.IsNullOrWhiteSpace(humanSessionCredentialPath) ? null : humanSessionCredentialPath);
+            string.IsNullOrWhiteSpace(humanSessionCredentialPath) ? null : humanSessionCredentialPath,
+            string.IsNullOrWhiteSpace(deviceTrustStatePath) ? null : deviceTrustStatePath);
     }
 
     private static bool IsTrue(string? value) =>

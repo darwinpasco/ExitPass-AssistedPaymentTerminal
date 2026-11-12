@@ -6,22 +6,27 @@ namespace AssistedPaymentTerminal.Desktop.Tests;
 public sealed class CentralPmsHttpClientCompositionTests
 {
     [Fact]
-    public void CentralPmsClients_UseManualClientCertificateSelectionWithoutServerValidationBypass()
+    public void CentralPmsClients_UseGovernedCertificateWithoutServerValidationBypass()
     {
-        var source = File.ReadAllText(FindMainWindowSource());
+        var mainWindow = File.ReadAllText(FindSource("MainWindow.xaml.cs"));
+        var clientFactory = File.ReadAllText(FindSource("GovernedCentralPmsHttpClientFactory.cs"));
+        var source = mainWindow + clientFactory;
 
         Assert.Equal(
-            3,
+            8,
             Regex.Matches(
-                source,
-                @"ClientCertificateOptions\s*=\s*ClientCertificateOption\.Manual")
+                mainWindow,
+                @"centralPmsClients\.Create\(")
                 .Count);
+        Assert.DoesNotContain("new HttpClient(", mainWindow, StringComparison.Ordinal);
+        Assert.Contains("ClientCertificateOption.Manual", clientFactory, StringComparison.Ordinal);
+        Assert.Contains("handler.ClientCertificates.Add(certificate)", clientFactory, StringComparison.Ordinal);
         Assert.DoesNotContain("ClientCertificateOption.Automatic", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ServerCertificateCustomValidationCallback", source, StringComparison.Ordinal);
         Assert.DoesNotContain("DangerousAcceptAnyServerCertificateValidator", source, StringComparison.Ordinal);
     }
 
-    private static string FindMainWindowSource()
+    private static string FindSource(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
@@ -30,7 +35,7 @@ public sealed class CentralPmsHttpClientCompositionTests
                 directory.FullName,
                 "src",
                 "AssistedPaymentTerminal.Desktop",
-                "MainWindow.xaml.cs");
+                fileName);
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -39,6 +44,6 @@ public sealed class CentralPmsHttpClientCompositionTests
             directory = directory.Parent;
         }
 
-        throw new FileNotFoundException("MainWindow.xaml.cs was not found from the test output directory.");
+        throw new FileNotFoundException($"{fileName} was not found from the test output directory.");
     }
 }

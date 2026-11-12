@@ -23,7 +23,7 @@ The request context is the existing statutory decision command reference. Centra
 
 ## Desktop boundary
 
-`MainWindow` owns a separate `apt-statutory-evidence` WebView bridge. The React layer sends bounded commands to that bridge and never constructs Central PMS service-authentication headers. The WPF host reads `APT_CENTRAL_PMS_SERVICE_IDENTITY_ID`, attaches the existing APT service identity and correlation headers, and calls the I-016 APT routes.
+`MainWindow` owns a separate `apt-statutory-evidence` WebView bridge. The React layer sends bounded commands to that bridge and never constructs Central PMS service-authentication headers. The WPF host loads the DPAPI-protected enrolled device state, derives the service identity from that verified state, attaches the exact enrolled mTLS certificate and correlation headers, and calls the I-016 APT routes.
 
 There is no production command-line switch for evidence credentials or validation behavior. The React bundle contains no service identity, permission header, authorization token, storage credential, provider endpoint, scanner endpoint, or internal route credential.
 

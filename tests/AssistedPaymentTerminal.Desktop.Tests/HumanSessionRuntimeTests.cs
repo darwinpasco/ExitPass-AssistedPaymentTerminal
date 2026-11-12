@@ -1573,11 +1573,11 @@ public sealed class HumanSessionRuntimeTests : IDisposable
     }
 
     [Fact]
-    public void FrontendMockModeEnvironmentFlagCannotReplaceTheHostI020Configuration()
+    public void FrontendMockModeCannotReplaceGovernedHostDeviceTrust()
     {
         var names = new[]
         {
-            "USE_MOCK_CENTRAL_PMS", "CENTRAL_PMS_BASE_URL", "APT_CENTRAL_PMS_SERVICE_IDENTITY_ID",
+            "USE_MOCK_CENTRAL_PMS", "CENTRAL_PMS_BASE_URL",
             "APT_TERMINAL_ID", "APT_SITE_ID", "APT_SITE_GROUP_ID", "APT_POS_SERVER_ID"
         };
         var prior = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
@@ -1585,19 +1585,35 @@ public sealed class HumanSessionRuntimeTests : IDisposable
         {
             Environment.SetEnvironmentVariable("USE_MOCK_CENTRAL_PMS", "true");
             Environment.SetEnvironmentVariable("CENTRAL_PMS_BASE_URL", "https://central-pms.i020.invalid");
-            Environment.SetEnvironmentVariable("APT_CENTRAL_PMS_SERVICE_IDENTITY_ID", DeviceId.ToString("D"));
             Environment.SetEnvironmentVariable("APT_TERMINAL_ID", "APT-TERMINAL-001");
             Environment.SetEnvironmentVariable("APT_SITE_ID", SiteId.ToString("D"));
             Environment.SetEnvironmentVariable("APT_SITE_GROUP_ID", SiteGroupId.ToString("D"));
             Environment.SetEnvironmentVariable("APT_POS_SERVER_ID", "POS-001");
 
             var options = StartupOptions.FromEnvironmentAndArgs([]);
-            var humanOptions = MainWindow.CreateHumanSessionOptions(options);
+            var trustState = new GovernedDeviceTrustState(
+                GovernedDeviceTrustState.CurrentSchemaVersion,
+                Guid.NewGuid(),
+                "DEV-TEST",
+                DeviceId,
+                GovernedDeviceTrustState.AssistedPaymentTerminalDeviceType,
+                SiteId,
+                SiteGroupId,
+                "APT-TERMINAL-001",
+                1,
+                GovernedDeviceTrustState.MtlsCertificateCredentialType,
+                new string('A', 40),
+                new string('b', 64),
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow);
+            var humanOptions = MainWindow.CreateHumanSessionOptions(options, trustState);
 
             Assert.Equal("https://central-pms.i020.invalid", options.CentralPmsBaseUrl);
-            Assert.Equal(DeviceId.ToString("D"), options.CentralPmsServiceIdentityId);
             Assert.NotNull(humanOptions);
             Assert.Equal(DeviceId, humanOptions!.DeviceServiceIdentityId);
+            Assert.DoesNotContain(
+                typeof(StartupOptions).GetProperties(),
+                property => property.Name.Contains("ServiceIdentity", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(
                 typeof(StartupOptions).GetProperties(),
                 property => property.Name.Contains("MockCentralPms", StringComparison.OrdinalIgnoreCase));
