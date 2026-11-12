@@ -61,7 +61,7 @@ Required setting names:
 - `APT_PROFILE`
 - `APT_TERMINAL_ID`
 - `APT_TERMINAL_SERIAL_NUMBER` (the persistent registered physical workstation serial; distinct from Terminal ID)
-- `APT_POS_VERSION_LABEL` (defaults to `Version No. ExitPass V1.0`)
+- `APT_POS_VERSION_LABEL` (defaults to `ExitPass POS Server V1.0.0`)
 - `APT_TERMINAL_DISPLAY_NAME`
 - `APT_SITE_ID`
 - `APT_SITE_NAME`

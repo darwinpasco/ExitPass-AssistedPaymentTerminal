@@ -9,7 +9,8 @@ describe("approved PITX APT runtime identity", () => {
 
     expect(config.APT_TERMINAL_ID).toBe("PITX-APT-01");
     expect(config.APT_TERMINAL_SERIAL_NUMBER).toBe("ACE4_2E00_653A_D952");
-    expect(config.APT_POS_VERSION_LABEL).toBe("Version No. ExitPass V1.0.0");
+    expect(config.APT_POS_VERSION_LABEL).toBe("ExitPass POS Server V1.0.0");
+    expect(launcher).toContain('APT_POS_VERSION_LABEL = "ExitPass POS Server V1.0.0"');
     expect(launcher).toContain('APT_TERMINAL_ID = "PITX-APT-01"');
     expect(launcher).toContain("APT_TERMINAL_SERIAL_NUMBER = $TerminalSerialNumber.Trim()");
     expect(launcher).toContain("ACE4_2E00_653A_D952");

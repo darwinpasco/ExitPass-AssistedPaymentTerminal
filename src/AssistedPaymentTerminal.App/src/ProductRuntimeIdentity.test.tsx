@@ -6,7 +6,8 @@ describe("ProductRuntimeIdentity", () => {
   afterEach(() => vi.useRealTimers());
 
   it("uses the approved ExitPass POS software version", () => {
-    expect(DEFAULT_POS_VERSION_LABEL).toBe("Version No. ExitPass V1.0.0");
+    expect(DEFAULT_POS_VERSION_LABEL).toBe("ExitPass POS Server V1.0.0");
+    expect(DEFAULT_POS_VERSION_LABEL).not.toContain("Version No. ExitPass");
   });
 
   it("formats the workstation clock in Asia/Manila", () => {
