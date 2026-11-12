@@ -49,13 +49,13 @@ Authentication loss before `CASH_RECEIVED` blocks it. Authentication loss afterw
 
 Configured development cashier, shift, and fabricated authentication references are not production authority. The UI fixture requires mock mode, loopback, and explicit `?humanSessionFixture=1`.
 
-`USE_MOCK_CENTRAL_PMS` belongs to the React Central PMS client configuration. The Windows host does not read that setting: it always constructs `CentralPmsHumanSessionClient` from `CENTRAL_PMS_BASE_URL`, `APT_CENTRAL_PMS_SERVICE_IDENTITY_ID`, and automatic Windows client-certificate selection. Consequently, mock mode alone cannot replace I-020 login, readback, continuation, reauthentication, or logout. A synthetic human session is possible only when all three development gates are present: React mock mode, a loopback origin, and the explicit `humanSessionFixture=1` query parameter.
+`USE_MOCK_CENTRAL_PMS` belongs to the React Central PMS client configuration. The Windows host does not read that setting: it loads DPAPI CurrentUser-protected enrollment state, resolves the exact enrolled certificate by thumbprint, derives the device service identity from that state, and attaches the certificate manually to HTTPS Central PMS requests. Consequently, mock mode or launcher-provided identity values cannot replace I-020 login, readback, continuation, reauthentication, or logout. A synthetic human session is possible only when all three development gates are present: React mock mode, a loopback origin, and the explicit `humanSessionFixture=1` query parameter.
 
 The original walkthrough's mock setting did not bypass host I-020 when the fixture query was absent, but it was ambiguous because non-authentication React calls remained mocked. The acceptance walkthrough therefore uses a generated, ignored `dist/apt-config.json` with `USE_MOCK_CENTRAL_PMS=false`, the disposable Central PMS URL, and no `humanSessionFixture` query. Cash capability is intrinsic to the cashier-assisted terminal profile and remains governed by its operational readiness gates.
 
 ## Real I-020 Windows Walkthrough Configuration
 
-The disposable Central PMS environment must authorize the configured terminal, Site, Site Group, service identity, and Windows client certificate. The certificate must be installed with its private key in the current Windows user's certificate store and trusted by the disposable Central PMS endpoint; the APT uses automatic Windows certificate selection and has no source-controlled certificate path or thumbprint setting.
+The disposable Central PMS environment must authorize the configured terminal, Site, Site Group, service identity, and Windows client certificate. Device Administration must provision the DPAPI trust state and install the matching certificate with its private key in the current Windows user's certificate store. The APT selects only the enrolled thumbprint, verifies its SHA-256 fingerprint, validity, private key, and client-authentication usage, and requires HTTPS.
 
 Build a disposable live-mode frontend in Window 1. Enter the real disposable URL when prompted; do not append `humanSessionFixture=1`:
 
@@ -82,7 +82,7 @@ $env:APT_SITE_ID = '11111111-1111-1111-1111-111111111111'
 $env:APT_SITE_GROUP_ID = '22222222-2222-2222-2222-222222222222'
 $env:APT_POS_SERVER_ID = 'POS-DEV-001'
 $env:CENTRAL_PMS_BASE_URL = (Read-Host 'Disposable Central PMS base URL').TrimEnd('/')
-$env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID = (Read-Host 'Disposable APT service identity ID').Trim()
+$env:APT_DEVICE_TRUST_STATE_PATH = 'D:\Temp\ExitPass\J008\device-trust.bin'
 $env:USE_MOCK_CENTRAL_PMS = 'false'
 $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = 'false'
 $env:APT_ENABLE_CENTRAL_PMS_FISCAL_ISSUANCE = 'false'

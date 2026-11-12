@@ -2,7 +2,8 @@
 param(
     [switch]$PreflightOnly,
     [switch]$WebViewSmokeCheck,
-    [string]$CentralPmsUrl = "http://127.0.0.1:56095",
+    [string]$CentralPmsUrl = "https://localhost:56064",
+    [string]$DeviceTrustStatePath = $(if ($env:APT_DEVICE_TRUST_STATE_PATH) { $env:APT_DEVICE_TRUST_STATE_PATH } else { Join-Path $env:LOCALAPPDATA 'ExitPass\AssistedPaymentTerminal\DeviceTrust\state.bin' }),
     [string]$TerminalSerialNumber = $(if ($env:APT_TERMINAL_SERIAL_NUMBER) { $env:APT_TERMINAL_SERIAL_NUMBER } else { 'ACE4_2E00_653A_D952' }),
     [string]$ReceiptPrinterName = $env:APT_RECEIPT_PRINTER_NAME,
     [ValidateSet("57", "58", "80")]
@@ -43,6 +44,7 @@ $runtimeConfig = [ordered]@{
     APT_SITE_NAME = "PITX Level 3"
     APT_SITE_GROUP_ID = "a6dbadf6-68b5-5bed-a7e0-a75faee70841"
     APT_POS_SERVER_ID = "3a138565-1b88-55f8-c83d-5380db6edccc"
+    APT_DEVICE_TRUST_STATE_PATH = $DeviceTrustStatePath
     CENTRAL_PMS_BASE_URL = $centralPmsUrl
     USE_MOCK_CENTRAL_PMS = "false"
     APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = "true"
@@ -65,6 +67,7 @@ $env:APT_SITE_ID = $runtimeConfig.APT_SITE_ID
 $env:APT_SITE_NAME = $runtimeConfig.APT_SITE_NAME
 $env:APT_SITE_GROUP_ID = $runtimeConfig.APT_SITE_GROUP_ID
 $env:APT_POS_SERVER_ID = $runtimeConfig.APT_POS_SERVER_ID
+$env:APT_DEVICE_TRUST_STATE_PATH = $runtimeConfig.APT_DEVICE_TRUST_STATE_PATH
 $env:CENTRAL_PMS_BASE_URL = $runtimeConfig.CENTRAL_PMS_BASE_URL
 $env:USE_MOCK_CENTRAL_PMS = $runtimeConfig.USE_MOCK_CENTRAL_PMS
 $env:APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION = $runtimeConfig.APT_ENABLE_CENTRAL_PMS_CASH_SUBMISSION
@@ -75,7 +78,6 @@ $env:APT_ENABLE_RECEIPT_PRINTING = $runtimeConfig.APT_ENABLE_RECEIPT_PRINTING
 $env:APT_RECEIPT_PRINTER_NAME = $runtimeConfig.APT_RECEIPT_PRINTER_NAME
 $env:APT_RECEIPT_PAPER_WIDTH_MM = $runtimeConfig.APT_RECEIPT_PAPER_WIDTH_MM
 $env:APT_WEB_UI_URL = $runtimeConfig.APT_WEB_UI_URL
-$env:APT_CENTRAL_PMS_SERVICE_IDENTITY_ID = "be31c0c2-7fdb-4029-a61e-50fd5bbf87ce"
 
 Write-Host "Central PMS readiness: PASS ($centralPmsUrl)"
 Write-Host "APT PITX context: $($runtimeConfig.APT_TERMINAL_ID) / $($runtimeConfig.APT_SITE_NAME)"

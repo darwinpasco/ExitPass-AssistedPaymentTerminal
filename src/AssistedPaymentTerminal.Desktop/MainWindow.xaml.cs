@@ -23,20 +23,23 @@ public partial class MainWindow : Window
     {
         _source = source;
         _options = options;
+        var trustState = new DpapiCurrentUserGovernedDeviceTrustStateStore(options.DeviceTrustStatePath).Load()
+            ?? throw new InvalidOperationException(
+                "This APT has not been enrolled through Device Administration. Governed device trust is required.");
+        ValidateConfiguredDeviceContext(options, trustState);
+        var centralPmsClients = new GovernedCentralPmsHttpClientFactory(
+            trustState,
+            new WindowsCurrentUserGovernedDeviceCertificateStore());
         var localOptions = CreateLocalOperationsOptions(options);
         _journal = new CashJournalService(localOptions);
         var journal = _journal;
-        var humanSessionOptions = CreateHumanSessionOptions(options);
-        var humanSessionHttpHandler = new HttpClientHandler
-        {
-            ClientCertificateOptions = ClientCertificateOption.Manual
-        };
+        var humanSessionOptions = CreateHumanSessionOptions(options, trustState);
         var humanAuthenticationTrace = HumanAuthenticationTrace.FromEnvironment();
         var humanSessionRuntime = new HumanSessionRuntime(
             new CentralPmsHumanSessionClient(
-                new HttpClient(humanSessionHttpHandler) { Timeout = TimeSpan.FromSeconds(15) },
+                centralPmsClients.Create(TimeSpan.FromSeconds(15)),
                 options.CentralPmsBaseUrl,
-                options.CentralPmsServiceIdentityId,
+                trustState.ServiceIdentityId.ToString("D"),
                 humanAuthenticationTrace),
             new DpapiCurrentUserHumanSessionCredentialStore(options.HumanSessionCredentialPath),
             journal,
@@ -53,13 +56,7 @@ public partial class MainWindow : Window
             _ => new WindowsReceiptPrinter()
         };
         _payableBasisBridge = new CentralPmsPayableBasisBridgeHandler(
-            new HttpClient(new HttpClientHandler
-            {
-                ClientCertificateOptions = ClientCertificateOption.Manual
-            })
-            {
-                Timeout = TimeSpan.FromSeconds(15)
-            },
+            centralPmsClients.Create(TimeSpan.FromSeconds(15)),
             options.CentralPmsBaseUrl,
             humanSessionRuntime,
             receiptPrintingEnabled: options.EnableReceiptPrinting,
@@ -75,35 +72,34 @@ public partial class MainWindow : Window
             receiptPaperWidthMm: options.ReceiptPaperWidthMm,
             centralPmsBaseUrl: options.CentralPmsBaseUrl,
             submissionService: new TerminalCashPaymentSubmissionService(
-                new CentralPmsTerminalCashPaymentClient(new HttpClient()),
+                new CentralPmsTerminalCashPaymentClient(
+                    centralPmsClients.Create(TimeSpan.FromSeconds(15))),
                 localOptions),
             fiscalService: new TerminalCashFiscalSubmissionService(
-                new CentralPmsTerminalCashFiscalClient(new HttpClient()),
+                new CentralPmsTerminalCashFiscalClient(
+                    centralPmsClients.Create(TimeSpan.FromSeconds(15))),
                 localOptions),
             receiptService: new TerminalCashReceiptRetrievalService(
-                new CentralPmsTerminalCashReceiptClient(new HttpClient()),
+                new CentralPmsTerminalCashReceiptClient(
+                    centralPmsClients.Create(TimeSpan.FromSeconds(15))),
                 localOptions),
             receiptPrintingEnabled: options.EnableReceiptPrinting,
             receiptPrinterName: options.ReceiptPrinterName,
             receiptPrinter: receiptPrinter,
+            receiptReprintClient: new CentralPmsTerminalCashReceiptReprintClient(
+                centralPmsClients.Create(TimeSpan.FromSeconds(15))),
             siteTimeZoneId: options.SiteTimeZoneId,
             humanCashAuthorization: humanSessionRuntime,
             allowDevelopmentSessionCommands: false,
             cashAdmissionRevalidator: new CentralPmsCashAdmissionRevalidator(
-                new HttpClient(new HttpClientHandler
-                {
-                    ClientCertificateOptions = ClientCertificateOption.Manual
-                })
-                {
-                    Timeout = TimeSpan.FromSeconds(15)
-                },
+                centralPmsClients.Create(TimeSpan.FromSeconds(15)),
                 options.CentralPmsBaseUrl,
                 humanSessionRuntime));
         _statutoryEvidenceBridge = new StatutoryEvidenceBridgeHandler(
             new CentralPmsStatutoryEvidenceClient(
-                new HttpClient { Timeout = TimeSpan.FromSeconds(30) },
+                centralPmsClients.Create(TimeSpan.FromSeconds(30)),
                 options.CentralPmsBaseUrl,
-                options.CentralPmsServiceIdentityId));
+                trustState.ServiceIdentityId.ToString("D")));
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -119,23 +115,44 @@ public partial class MainWindow : Window
             EnableCentralPmsReceiptRetrieval: options.EnableCentralPmsReceiptRetrieval);
     }
 
-    public static HumanSessionRuntimeOptions? CreateHumanSessionOptions(StartupOptions options)
+    public static HumanSessionRuntimeOptions? CreateHumanSessionOptions(
+        StartupOptions options,
+        GovernedDeviceTrustState trustState)
     {
-        return !string.IsNullOrWhiteSpace(options.TerminalId)
-            && Guid.TryParse(options.SiteId, out var siteId)
-            && siteId != Guid.Empty
-            && Guid.TryParse(options.SiteGroupId, out var siteGroupId)
-            && siteGroupId != Guid.Empty
-            && !string.IsNullOrWhiteSpace(options.PosServerId)
-            && Guid.TryParse(options.CentralPmsServiceIdentityId, out var deviceId)
-            && deviceId != Guid.Empty
+        ArgumentNullException.ThrowIfNull(trustState);
+        trustState.Validate();
+        return !string.IsNullOrWhiteSpace(options.PosServerId)
                 ? new HumanSessionRuntimeOptions(
-                    options.TerminalId.Trim(),
-                    siteId,
-                    siteGroupId,
+                    trustState.TerminalIdentifier,
+                    trustState.SiteId,
+                    trustState.SiteGroupId,
                     options.PosServerId.Trim(),
-                    deviceId)
+                    trustState.ServiceIdentityId)
                 : null;
+    }
+
+    public static void ValidateConfiguredDeviceContext(
+        StartupOptions options,
+        GovernedDeviceTrustState trustState)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(trustState);
+        trustState.Validate();
+        if (!string.Equals(options.TerminalId?.Trim(), trustState.TerminalIdentifier, StringComparison.Ordinal) ||
+            !Guid.TryParse(options.SiteId, out var configuredSiteId) ||
+            configuredSiteId != trustState.SiteId ||
+            !Guid.TryParse(options.SiteGroupId, out var configuredSiteGroupId) ||
+            configuredSiteGroupId != trustState.SiteGroupId)
+        {
+            throw new InvalidOperationException(
+                "The configured APT terminal/Site context does not match its governed Device Administration assignment.");
+        }
+
+        if (!Uri.TryCreate(options.CentralPmsBaseUrl, UriKind.Absolute, out var centralPms) ||
+            centralPms.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException("Governed APT runtime calls require an HTTPS Central PMS endpoint.");
+        }
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
