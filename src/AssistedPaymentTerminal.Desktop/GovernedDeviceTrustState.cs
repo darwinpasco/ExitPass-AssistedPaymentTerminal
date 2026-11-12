@@ -54,17 +54,47 @@ public interface IGovernedDeviceTrustStateStore
     GovernedDeviceTrustState? Load();
 }
 
-public sealed class DpapiCurrentUserGovernedDeviceTrustStateStore : IGovernedDeviceTrustStateStore
+public interface IGovernedDeviceTrustStateWriter : IGovernedDeviceTrustStateStore
+{
+    string Path { get; }
+    bool Exists { get; }
+    void ValidateWriteReadiness();
+    void Save(GovernedDeviceTrustState state);
+}
+
+public interface IGovernedDeviceTrustProtector
+{
+    byte[] Protect(byte[] plaintext, byte[] entropy);
+    byte[] Unprotect(byte[] protectedPayload, byte[] entropy);
+}
+
+public sealed class WindowsCurrentUserGovernedDeviceTrustProtector : IGovernedDeviceTrustProtector
+{
+    public byte[] Protect(byte[] plaintext, byte[] entropy) =>
+        ProtectedData.Protect(plaintext, entropy, DataProtectionScope.CurrentUser);
+
+    public byte[] Unprotect(byte[] protectedPayload, byte[] entropy) =>
+        ProtectedData.Unprotect(protectedPayload, entropy, DataProtectionScope.CurrentUser);
+}
+
+public sealed class DpapiCurrentUserGovernedDeviceTrustStateStore : IGovernedDeviceTrustStateWriter
 {
     private static readonly byte[] Entropy = SHA256.HashData(
         Encoding.UTF8.GetBytes("ExitPass.APT.GovernedDeviceTrustState.v1"));
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _path;
+    private readonly IGovernedDeviceTrustProtector _protector;
 
-    public DpapiCurrentUserGovernedDeviceTrustStateStore(string? path = null)
+    public DpapiCurrentUserGovernedDeviceTrustStateStore(
+        string? path = null,
+        IGovernedDeviceTrustProtector? protector = null)
     {
-        _path = string.IsNullOrWhiteSpace(path) ? DefaultPath() : Path.GetFullPath(path);
+        _path = string.IsNullOrWhiteSpace(path) ? DefaultPath() : System.IO.Path.GetFullPath(path);
+        _protector = protector ?? new WindowsCurrentUserGovernedDeviceTrustProtector();
     }
+
+    public string Path => _path;
+    public bool Exists => File.Exists(_path);
 
     public GovernedDeviceTrustState? Load()
     {
@@ -75,7 +105,7 @@ public sealed class DpapiCurrentUserGovernedDeviceTrustStateStore : IGovernedDev
         try
         {
             var protectedPayload = File.ReadAllBytes(_path);
-            var plaintext = ProtectedData.Unprotect(protectedPayload, Entropy, DataProtectionScope.CurrentUser);
+            var plaintext = _protector.Unprotect(protectedPayload, Entropy);
             try
             {
                 var state = JsonSerializer.Deserialize<GovernedDeviceTrustState>(plaintext, JsonOptions);
@@ -95,9 +125,109 @@ public sealed class DpapiCurrentUserGovernedDeviceTrustStateStore : IGovernedDev
         }
     }
 
+    public void ValidateWriteReadiness()
+    {
+        EnsureWindows();
+        var directory = System.IO.Path.GetDirectoryName(_path)!;
+        Directory.CreateDirectory(directory);
+        var plaintext = RandomNumberGenerator.GetBytes(32);
+        byte[]? protectedPayload = null;
+        byte[]? roundTrip = null;
+        var probePath = _path + $".{Guid.NewGuid():N}.write-probe";
+        try
+        {
+            protectedPayload = _protector.Protect(plaintext, Entropy);
+            roundTrip = _protector.Unprotect(protectedPayload, Entropy);
+            if (!CryptographicOperations.FixedTimeEquals(plaintext, roundTrip))
+                throw new CryptographicException("The DPAPI readiness round trip did not preserve the payload.");
+
+            using var stream = new FileStream(
+                probePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough);
+            stream.Write(protectedPayload);
+            stream.Flush(flushToDisk: true);
+        }
+        catch (Exception exception) when (exception is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                "The governed APT device-trust state cannot be protected and persisted by this Windows user.",
+                exception);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            if (protectedPayload is not null) CryptographicOperations.ZeroMemory(protectedPayload);
+            if (roundTrip is not null) CryptographicOperations.ZeroMemory(roundTrip);
+            TryDelete(probePath);
+        }
+    }
+
+    public void Save(GovernedDeviceTrustState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        state.Validate();
+        EnsureWindows();
+
+        var directory = System.IO.Path.GetDirectoryName(_path)!;
+        Directory.CreateDirectory(directory);
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        byte[]? protectedPayload = null;
+        var temporary = _path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            protectedPayload = _protector.Protect(plaintext, Entropy);
+            using (var stream = new FileStream(
+                temporary,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough))
+            {
+                stream.Write(protectedPayload);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporary, _path, overwrite: true);
+        }
+        catch (Exception exception) when (exception is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                "The governed APT device-trust state could not be persisted safely.",
+                exception);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            if (protectedPayload is not null) CryptographicOperations.ZeroMemory(protectedPayload);
+            TryDelete(temporary);
+        }
+    }
+
+    private static void EnsureWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Governed APT device trust requires Windows DPAPI CurrentUser.");
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Preserve the primary DPAPI or persistence failure for the operator.
+        }
+    }
+
     private static string DefaultPath()
     {
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(localAppData, "ExitPass", "AssistedPaymentTerminal", "DeviceTrust", "state.bin");
+        return System.IO.Path.Combine(localAppData, "ExitPass", "AssistedPaymentTerminal", "DeviceTrust", "state.bin");
     }
 }
