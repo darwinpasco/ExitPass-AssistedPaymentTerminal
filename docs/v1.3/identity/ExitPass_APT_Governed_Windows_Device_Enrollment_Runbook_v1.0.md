@@ -24,15 +24,17 @@ The utility accepts only `ROTATION` provisioning packages. It requires HTTPS wit
 1. Confirm Central PMS, the target Site, and Device Administration are healthy.
 2. Confirm the exact existing device is the intended target and remains assigned to the expected service identity, terminal, Site, and Site Group.
 3. Confirm there is no active cashier session, shift/cash custody operation, pending cash command, payment finalization, or fiscal issuance on the target environment.
-4. Confirm the physical BIOS serial with:
+4. Record the expected physical BIOS serial with:
 
    ```powershell
    (Get-CimInstance Win32_BIOS).SerialNumber.Trim()
    ```
 
-5. Confirm the Windows CurrentUser trusts the approved Central PMS server chain and that the HTTPS certificate covers the requested host.
-6. Record the active credential version and registered SHA-256 certificate fingerprint through authorized Device Administration readback.
-7. Back up the current APT trust metadata and local APT state through the approved environment backup procedure. Do not expose DPAPI plaintext or private key material.
+   This operator readback is an expectation, not proof by itself. Immediately before enrollment, the utility independently runs the fixed Windows CIM query under the APT user and requires the local `Win32_BIOS.SerialNumber` to match `--expected-physical-terminal-serial`.
+5. Select a protected result path that does not exist. The utility creates and flushes a reservation at this path before certificate generation or enrollment.
+6. Confirm the Windows CurrentUser trusts the approved Central PMS server chain and that the HTTPS certificate covers the requested host.
+7. Record the active credential version and registered SHA-256 certificate fingerprint through authorized Device Administration readback.
+8. Back up the current APT trust metadata and local APT state through the approved environment backup procedure. Do not expose DPAPI plaintext or private key material.
 
 ## Issue the rotation package
 
@@ -61,12 +63,14 @@ dotnet run --project .\tools\AssistedPaymentTerminal.DeviceAdministration\Assist
   --expected-site-id "2d1dcdf8-f563-537c-8542-0bde7cc9da97" `
   --expected-site-group-id "a6dbadf6-68b5-5bed-a7e0-a75faee70841" `
   --expected-terminal-id "PITX-APT-01" `
-  --physical-terminal-serial "ACE4_2E00_653A_D952" `
+  --expected-physical-terminal-serial "ACE4_2E00_653A_D952" `
   --expected-credential-version "<CURRENT_VERSION_PLUS_ONE>" `
   --prior-certificate-sha256 "<CURRENT_REGISTERED_SHA256>"
 ```
 
-If the package includes a terminal serial, it must match the explicit physical serial. The utility always sends the verified physical serial because the APT enrollment contract requires it.
+The command-line serial is only the approved expected value. The utility queries the local Windows BIOS serial itself, requires an exact case-insensitive match, and sends that verified local value. If the rotation package includes a terminal serial, it must also match. A `NULL` package serial is accepted for the existing registration, but it does not bypass the local CIM check or the enrollment request's required serial.
+
+The result path is reserved before the one-time request. An existing file, unwritable directory, or failed preflight stops before certificate creation. If the final result write fails after Central PMS enrollment and trust-state persistence, the utility reports `APT_POST_COMMIT_RESULT_WRITE_FAILED`, prints non-secret reconciliation evidence to the operator transcript, retains the reserved result marker and enrolled certificate, and marks provisioning-credential replay as prohibited.
 
 ## Post-enrollment validation
 
@@ -107,6 +111,7 @@ After both probes pass, separately deploy the reviewed APT build and point only 
 
 - Before Central PMS accepts enrollment, the utility removes only the newly generated certificate and leaves the package and prior trust state intact.
 - After Central PMS returns success, any response mismatch or local state-write failure is treated as a potentially committed enrollment. The new certificate and package are preserved for reconciliation. Do not replay the package.
+- If result persistence fails after verified enrollment, the package may already be deleted. Preserve the console transcript, reserved result file, DPAPI state, certificate fingerprint, and Device Administration readback. Never replay a surviving package or request another rotation until authoritative reconciliation is complete.
 - A consumed or expired one-time token cannot be recovered locally. Obtain authoritative Device Administration status before any new rotation.
 - Restoring an old DPAPI state file does not restore an old Central PMS credential. Central PMS credential status remains authoritative.
 - The utility never deletes the previous certificate. Removal requires separate proof that no environment relies on it and separate authorization.

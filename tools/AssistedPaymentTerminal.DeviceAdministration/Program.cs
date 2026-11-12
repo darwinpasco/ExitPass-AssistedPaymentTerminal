@@ -36,7 +36,10 @@ internal static class GovernedDeviceAdministrationProgram
                 ok = false,
                 exception.ErrorCode,
                 exception.HttpStatus,
-                exception.ServerEnrollmentMayHaveCommitted
+                exception.ServerEnrollmentMayHaveCommitted,
+                reconciliationRequired = exception.ReconciliationEvidence is not null || exception.ServerEnrollmentMayHaveCommitted,
+                provisioningCredentialReplayProhibited = exception.ServerEnrollmentMayHaveCommitted,
+                exception.ReconciliationEvidence
             });
             return 2;
         }
@@ -59,7 +62,7 @@ internal static class GovernedDeviceAdministrationProgram
             "expected-site-id",
             "expected-site-group-id",
             "expected-terminal-id",
-            "physical-terminal-serial",
+            "expected-physical-terminal-serial",
             "expected-credential-version",
             "prior-certificate-sha256",
             "unreadable-state-backup");
@@ -72,37 +75,18 @@ internal static class GovernedDeviceAdministrationProgram
             RequiredGuid(options, "expected-site-id"),
             RequiredGuid(options, "expected-site-group-id"),
             Required(options, "expected-terminal-id"),
-            Required(options, "physical-terminal-serial"),
+            Required(options, "expected-physical-terminal-serial"),
             RequiredLong(options, "expected-credential-version"),
             RequiredHex(options, "prior-certificate-sha256", 64),
             OptionalPath(options, "unreadable-state-backup"));
         var service = new GovernedDeviceEnrollmentService(
             new WindowsCurrentUserGovernedDeviceCertificateStore(),
             new DpapiCurrentUserGovernedDeviceTrustStateStore(statePath));
-        var outcome = await service.EnrollRotationAsync(
+        await service.EnrollRotationAsync(
             RequiredHttpsUri(options, "central-pms-base-url"),
             packagePath,
-            expectations).ConfigureAwait(false);
-
-        WriteResult(outputPath, new
-        {
-            ok = true,
-            outcome.DeviceId,
-            outcome.DeviceReference,
-            outcome.ServiceIdentityId,
-            outcome.SiteId,
-            outcome.SiteGroupId,
-            outcome.TerminalIdentifier,
-            outcome.TerminalSerialNumber,
-            outcome.CredentialVersion,
-            outcome.CertificateStoreThumbprint,
-            outcome.CertificateSha256Fingerprint,
-            outcome.CorrelationId,
-            outcome.EnrolledAt,
-            outcome.UnreadableStateBackupPath,
-            outcome.UnreadableStateBackupSha256,
-            provisioningPackageDeleted = !File.Exists(packagePath)
-        });
+            expectations,
+            outputPath).ConfigureAwait(false);
         return 0;
     }
 

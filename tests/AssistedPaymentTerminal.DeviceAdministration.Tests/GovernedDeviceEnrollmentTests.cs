@@ -21,6 +21,7 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
     public async Task RotationEnrollment_PreservesIdentityAndWritesValidatedState()
     {
         var context = CreateContext();
+        var resultPath = Path.Combine(_directory, "results", "enrollment.json");
         GovernedDeviceEnrollmentRequest? submitted = null;
         var handler = new DelegateHandler(async request =>
         {
@@ -32,7 +33,8 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
         var outcome = await service.EnrollRotationAsync(
             new Uri("https://central-pms.test"),
             context.PackagePath,
-            context.Expectations);
+            context.Expectations,
+            resultPath);
 
         Assert.NotNull(submitted);
         Assert.Equal(context.Package.ProvisioningCredential, submitted!.ProvisioningCredential);
@@ -45,6 +47,57 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
         Assert.Equal(context.CertificateStore.GeneratedFingerprint, context.StateStore.State.CertificateSha256Fingerprint);
         Assert.False(File.Exists(context.PackagePath));
         Assert.Empty(context.CertificateStore.DeletedThumbprints);
+        var result = JsonDocument.Parse(File.ReadAllBytes(resultPath));
+        Assert.True(result.RootElement.GetProperty("ok").GetBoolean());
+        Assert.True(result.RootElement.GetProperty("provisioningPackageDeleted").GetBoolean());
+        Assert.True(result.RootElement.GetProperty("provisioningCredentialReplayProhibited").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ExistingResultFile_IsRejectedBeforeCertificateCreationOrEnrollment()
+    {
+        var context = CreateContext();
+        var resultPath = Path.Combine(_directory, "existing-result.json");
+        File.WriteAllText(resultPath, "protected prior evidence");
+
+        var exception = await Assert.ThrowsAsync<GovernedDeviceEnrollmentException>(() =>
+            context.CreateService(new DelegateHandler(_ => throw new Xunit.Sdk.XunitException("HTTP must not run.")))
+                .EnrollRotationAsync(
+                    new Uri("https://central-pms.test"),
+                    context.PackagePath,
+                    context.Expectations,
+                    resultPath));
+
+        Assert.Equal("APT_ENROLLMENT_RESULT_DESTINATION_UNAVAILABLE", exception.ErrorCode);
+        Assert.Equal(0, context.CertificateStore.CreateCount);
+        Assert.Equal("protected prior evidence", File.ReadAllText(resultPath));
+        Assert.True(File.Exists(context.PackagePath));
+    }
+
+    [Fact]
+    public async Task PostCommitResultWriteFailure_IsDistinctAndProhibitsReplay()
+    {
+        var resultStore = new FailingResultStore();
+        var context = CreateContext(resultStore: resultStore);
+        var handler = new DelegateHandler(_ => Task.FromResult(JsonResponse(HttpStatusCode.OK, ValidResponse(context))));
+
+        var exception = await Assert.ThrowsAsync<GovernedDeviceEnrollmentException>(() =>
+            context.CreateService(handler).EnrollRotationAsync(
+                new Uri("https://central-pms.test"),
+                context.PackagePath,
+                context.Expectations,
+                Path.Combine(_directory, "result.json")));
+
+        Assert.Equal("APT_POST_COMMIT_RESULT_WRITE_FAILED", exception.ErrorCode);
+        Assert.True(exception.ServerEnrollmentMayHaveCommitted);
+        Assert.NotNull(exception.ReconciliationEvidence);
+        Assert.True(exception.ReconciliationEvidence!.ReconciliationRequired);
+        Assert.True(exception.ReconciliationEvidence.ProvisioningCredentialReplayProhibited);
+        Assert.True(exception.ReconciliationEvidence.ProvisioningPackageDeleted);
+        Assert.True(resultStore.Reservation.PotentialCommit);
+        Assert.Empty(context.CertificateStore.DeletedThumbprints);
+        Assert.NotNull(context.StateStore.State);
+        Assert.False(File.Exists(context.PackagePath));
     }
 
     [Fact]
@@ -98,6 +151,48 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
                 .EnrollRotationAsync(new Uri("https://central-pms.test"), context.PackagePath, context.Expectations));
 
         Assert.Equal("APT_DEVICE_TRUST_STATE_WRITE_UNAVAILABLE", exception.ErrorCode);
+        Assert.Equal(0, context.CertificateStore.CreateCount);
+        Assert.True(File.Exists(context.PackagePath));
+    }
+
+    [Fact]
+    public async Task PhysicalTerminalSerialMismatch_IsRejectedBeforeCertificateCreation()
+    {
+        var context = CreateContext(serialReader: new FixedSerialReader("DIFFERENT_WORKSTATION"));
+
+        var exception = await Assert.ThrowsAsync<GovernedDeviceEnrollmentException>(() =>
+            context.CreateService(new DelegateHandler(_ => throw new Xunit.Sdk.XunitException("HTTP must not run.")))
+                .EnrollRotationAsync(new Uri("https://central-pms.test"), context.PackagePath, context.Expectations));
+
+        Assert.Equal("APT_PHYSICAL_TERMINAL_SERIAL_MISMATCH", exception.ErrorCode);
+        Assert.Equal(0, context.CertificateStore.CreateCount);
+        Assert.True(File.Exists(context.PackagePath));
+    }
+
+    [Fact]
+    public async Task PhysicalTerminalSerialUnavailable_IsRejectedBeforeCertificateCreation()
+    {
+        var context = CreateContext(serialReader: new ThrowingSerialReader());
+
+        var exception = await Assert.ThrowsAsync<GovernedDeviceEnrollmentException>(() =>
+            context.CreateService(new DelegateHandler(_ => throw new Xunit.Sdk.XunitException("HTTP must not run.")))
+                .EnrollRotationAsync(new Uri("https://central-pms.test"), context.PackagePath, context.Expectations));
+
+        Assert.Equal("APT_PHYSICAL_TERMINAL_SERIAL_UNAVAILABLE", exception.ErrorCode);
+        Assert.Equal(0, context.CertificateStore.CreateCount);
+        Assert.True(File.Exists(context.PackagePath));
+    }
+
+    [Fact]
+    public async Task PackageTerminalSerialMustMatchLocallyVerifiedPhysicalSerial()
+    {
+        var context = CreateContext(package => package with { TerminalSerialNumber = "DIFFERENT_WORKSTATION" });
+
+        var exception = await Assert.ThrowsAsync<GovernedDeviceEnrollmentException>(() =>
+            context.CreateService(new DelegateHandler(_ => throw new Xunit.Sdk.XunitException("HTTP must not run.")))
+                .EnrollRotationAsync(new Uri("https://central-pms.test"), context.PackagePath, context.Expectations));
+
+        Assert.Equal("APT_PROVISIONING_PACKAGE_INVALID", exception.ErrorCode);
         Assert.Equal(0, context.CertificateStore.CreateCount);
         Assert.True(File.Exists(context.PackagePath));
     }
@@ -350,7 +445,9 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
 
     private EnrollmentContext CreateContext(
         Func<GovernedDeviceProvisioningPackage, GovernedDeviceProvisioningPackage>? packageTransform = null,
-        Func<GovernedDeviceEnrollmentExpectations, GovernedDeviceEnrollmentExpectations>? expectationsTransform = null)
+        Func<GovernedDeviceEnrollmentExpectations, GovernedDeviceEnrollmentExpectations>? expectationsTransform = null,
+        IGovernedPhysicalTerminalSerialReader? serialReader = null,
+        IGovernedDeviceEnrollmentResultStore? resultStore = null)
     {
         Directory.CreateDirectory(_directory);
         var deviceId = Guid.Parse("e84cf0bf-e100-4beb-9d42-787b449bf0cc");
@@ -384,7 +481,14 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
         var packagePath = Path.Combine(_directory, $"package-{Guid.NewGuid():N}.json");
         File.WriteAllText(packagePath, JsonSerializer.Serialize(package, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var stateStore = new MemoryStateStore(Path.Combine(_directory, $"state-{Guid.NewGuid():N}.bin"));
-        return new EnrollmentContext(package, expectations, packagePath, stateStore, new MemoryCertificateStore());
+        return new EnrollmentContext(
+            package,
+            expectations,
+            packagePath,
+            stateStore,
+            new MemoryCertificateStore(),
+            serialReader ?? new FixedSerialReader(expectations.PhysicalTerminalSerialNumber),
+            resultStore ?? new FileGovernedDeviceEnrollmentResultStore());
     }
 
     private static GovernedDeviceEnrollmentResponse ValidResponse(EnrollmentContext context) => new(
@@ -446,13 +550,17 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
         GovernedDeviceEnrollmentExpectations Expectations,
         string PackagePath,
         MemoryStateStore StateStore,
-        MemoryCertificateStore CertificateStore)
+        MemoryCertificateStore CertificateStore,
+        IGovernedPhysicalTerminalSerialReader SerialReader,
+        IGovernedDeviceEnrollmentResultStore ResultStore)
     {
         public GovernedDeviceEnrollmentService CreateService(HttpMessageHandler handler) => new(
             CertificateStore,
             StateStore,
             _ => handler,
-            () => Now);
+            () => Now,
+            SerialReader,
+            ResultStore);
     }
 
     private sealed class MemoryStateStore(string path) : IGovernedDeviceTrustStateWriter
@@ -532,5 +640,30 @@ public sealed class GovernedDeviceEnrollmentTests : IDisposable
 
         public byte[] Unprotect(byte[] protectedPayload, byte[] entropy) =>
             throw new Xunit.Sdk.XunitException("Unprotect must not run after protection fails.");
+    }
+
+    private sealed class FixedSerialReader(string serial) : IGovernedPhysicalTerminalSerialReader
+    {
+        public string Read() => serial;
+    }
+
+    private sealed class ThrowingSerialReader : IGovernedPhysicalTerminalSerialReader
+    {
+        public string Read() => throw new InvalidOperationException("Windows CIM unavailable.");
+    }
+
+    private sealed class FailingResultStore : IGovernedDeviceEnrollmentResultStore
+    {
+        public FailingResultReservation Reservation { get; } = new();
+        public IGovernedDeviceEnrollmentResultReservation Reserve(string path) => Reservation;
+    }
+
+    private sealed class FailingResultReservation : IGovernedDeviceEnrollmentResultReservation
+    {
+        public bool PotentialCommit { get; private set; }
+        public void SetPotentialCommit(bool potentialCommit) => PotentialCommit = potentialCommit;
+        public void Write(GovernedDeviceEnrollmentResultEvidence evidence) =>
+            throw new IOException("Result volume failed after enrollment.");
+        public void Dispose() { }
     }
 }

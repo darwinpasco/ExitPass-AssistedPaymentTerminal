@@ -76,17 +76,20 @@ public sealed class GovernedDeviceEnrollmentException : Exception
         string errorCode,
         int? httpStatus = null,
         bool serverEnrollmentMayHaveCommitted = false,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        GovernedDeviceEnrollmentResultEvidence? reconciliationEvidence = null)
         : base(errorCode, innerException)
     {
         ErrorCode = errorCode;
         HttpStatus = httpStatus;
         ServerEnrollmentMayHaveCommitted = serverEnrollmentMayHaveCommitted;
+        ReconciliationEvidence = reconciliationEvidence;
     }
 
     public string ErrorCode { get; }
     public int? HttpStatus { get; }
     public bool ServerEnrollmentMayHaveCommitted { get; }
+    public GovernedDeviceEnrollmentResultEvidence? ReconciliationEvidence { get; }
 }
 
 public sealed class GovernedDeviceEnrollmentService
@@ -101,29 +104,65 @@ public sealed class GovernedDeviceEnrollmentService
     private readonly IGovernedDeviceTrustStateWriter _stateStore;
     private readonly Func<X509Certificate2, HttpMessageHandler> _handlerFactory;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly IGovernedPhysicalTerminalSerialReader _physicalTerminalSerialReader;
+    private readonly IGovernedDeviceEnrollmentResultStore _resultStore;
 
     public GovernedDeviceEnrollmentService(
         IGovernedDeviceEnrollmentCertificateStore certificateStore,
         IGovernedDeviceTrustStateWriter stateStore,
         Func<X509Certificate2, HttpMessageHandler>? handlerFactory = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IGovernedPhysicalTerminalSerialReader? physicalTerminalSerialReader = null,
+        IGovernedDeviceEnrollmentResultStore? resultStore = null)
     {
         _certificateStore = certificateStore ?? throw new ArgumentNullException(nameof(certificateStore));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _handlerFactory = handlerFactory ?? CreateHandler;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _physicalTerminalSerialReader = physicalTerminalSerialReader ?? new WindowsCimPhysicalTerminalSerialReader();
+        _resultStore = resultStore ?? new FileGovernedDeviceEnrollmentResultStore();
     }
+
+    public Task<GovernedDeviceEnrollmentOutcome> EnrollRotationAsync(
+        Uri centralPmsBaseUri,
+        string provisioningPackagePath,
+        GovernedDeviceEnrollmentExpectations expectations,
+        CancellationToken cancellationToken = default) =>
+        EnrollRotationCoreAsync(
+            centralPmsBaseUri,
+            provisioningPackagePath,
+            expectations,
+            null,
+            cancellationToken);
 
     public async Task<GovernedDeviceEnrollmentOutcome> EnrollRotationAsync(
         Uri centralPmsBaseUri,
         string provisioningPackagePath,
         GovernedDeviceEnrollmentExpectations expectations,
+        string resultPath,
         CancellationToken cancellationToken = default)
+    {
+        using var resultReservation = _resultStore.Reserve(resultPath);
+        return await EnrollRotationCoreAsync(
+            centralPmsBaseUri,
+            provisioningPackagePath,
+            expectations,
+            resultReservation,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<GovernedDeviceEnrollmentOutcome> EnrollRotationCoreAsync(
+        Uri centralPmsBaseUri,
+        string provisioningPackagePath,
+        GovernedDeviceEnrollmentExpectations expectations,
+        IGovernedDeviceEnrollmentResultReservation? resultReservation,
+        CancellationToken cancellationToken)
     {
         ValidateCentralPmsUri(centralPmsBaseUri);
         ValidateExpectations(expectations);
+        var physicalTerminalSerial = ReadAndValidatePhysicalTerminalSerial(expectations);
         var package = await ReadPackageAsync(provisioningPackagePath, cancellationToken).ConfigureAwait(false);
-        ValidatePackage(package, expectations, _utcNow());
+        ValidatePackage(package, expectations, physicalTerminalSerial, _utcNow());
 
         try
         {
@@ -179,7 +218,7 @@ public sealed class GovernedDeviceEnrollmentService
                     package.SiteId,
                     package.SiteGroupId,
                     package.TerminalIdentifier,
-                    expectations.PhysicalTerminalSerialNumber), options: JsonOptions)
+                    physicalTerminalSerial), options: JsonOptions)
             };
             request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
             {
@@ -189,6 +228,7 @@ public sealed class GovernedDeviceEnrollmentService
             request.Headers.TryAddWithoutValidation("X-Correlation-Id", Guid.NewGuid().ToString("D"));
 
             serverEnrollmentMayHaveCommitted = true;
+            resultReservation?.SetPotentialCommit(true);
             using var response = await client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -196,6 +236,7 @@ public sealed class GovernedDeviceEnrollmentService
             if (!response.IsSuccessStatusCode)
             {
                 serverEnrollmentMayHaveCommitted = false;
+                resultReservation?.SetPotentialCommit(false);
                 var errorCode = await ReadErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
                 throw new GovernedDeviceEnrollmentException(
                     errorCode ?? "APT_DEVICE_ENROLLMENT_REJECTED",
@@ -246,14 +287,14 @@ public sealed class GovernedDeviceEnrollmentService
             }
 
             TryDeleteConsumedPackage(provisioningPackagePath);
-            return new GovernedDeviceEnrollmentOutcome(
+            var outcome = new GovernedDeviceEnrollmentOutcome(
                 state.DeviceId,
                 state.DeviceReference,
                 state.ServiceIdentityId,
                 state.SiteId,
                 state.SiteGroupId,
                 state.TerminalIdentifier,
-                expectations.PhysicalTerminalSerialNumber,
+                physicalTerminalSerial,
                 state.CredentialVersion,
                 state.CertificateStoreThumbprint,
                 state.CertificateSha256Fingerprint,
@@ -261,6 +302,28 @@ public sealed class GovernedDeviceEnrollmentService
                 state.EnrolledAt,
                 unreadableStateBackupPath,
                 unreadableStateBackupSha256);
+            if (resultReservation is not null)
+            {
+                var evidence = new GovernedDeviceEnrollmentResultEvidence(
+                    true,
+                    outcome,
+                    !File.Exists(provisioningPackagePath),
+                    false,
+                    true);
+                try
+                {
+                    resultReservation.Write(evidence);
+                }
+                catch (Exception exception)
+                {
+                    throw new GovernedDeviceEnrollmentException(
+                        "APT_POST_COMMIT_RESULT_WRITE_FAILED",
+                        serverEnrollmentMayHaveCommitted: true,
+                        innerException: exception,
+                        reconciliationEvidence: evidence with { ReconciliationRequired = true });
+                }
+            }
+            return outcome;
         }
         catch (GovernedDeviceEnrollmentException)
         {
@@ -329,6 +392,7 @@ public sealed class GovernedDeviceEnrollmentService
     private static void ValidatePackage(
         GovernedDeviceProvisioningPackage package,
         GovernedDeviceEnrollmentExpectations expectations,
+        string physicalTerminalSerial,
         DateTimeOffset now)
     {
         var packageSerial = package.TerminalSerialNumber?.Trim();
@@ -341,13 +405,38 @@ public sealed class GovernedDeviceEnrollmentService
             package.SiteId != expectations.SiteId ||
             package.SiteGroupId != expectations.SiteGroupId ||
             !string.Equals(package.TerminalIdentifier?.Trim(), expectations.TerminalIdentifier.Trim(), StringComparison.Ordinal) ||
-            (packageSerial is not null && !string.Equals(packageSerial, expectations.PhysicalTerminalSerialNumber.Trim(), StringComparison.OrdinalIgnoreCase)) ||
+            (packageSerial is not null && !string.Equals(packageSerial, physicalTerminalSerial, StringComparison.OrdinalIgnoreCase)) ||
             !string.Equals(package.Purpose, RotationPurpose, StringComparison.Ordinal) ||
             package.ExpiresAt <= now ||
             package.CorrelationId == Guid.Empty)
         {
             throw new GovernedDeviceEnrollmentException("APT_PROVISIONING_PACKAGE_INVALID");
         }
+    }
+
+    private string ReadAndValidatePhysicalTerminalSerial(
+        GovernedDeviceEnrollmentExpectations expectations)
+    {
+        string physicalTerminalSerial;
+        try
+        {
+            physicalTerminalSerial = _physicalTerminalSerialReader.Read().Trim();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or PlatformNotSupportedException)
+        {
+            throw new GovernedDeviceEnrollmentException(
+                "APT_PHYSICAL_TERMINAL_SERIAL_UNAVAILABLE",
+                innerException: exception);
+        }
+
+        if (!string.Equals(
+                physicalTerminalSerial,
+                expectations.PhysicalTerminalSerialNumber.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new GovernedDeviceEnrollmentException("APT_PHYSICAL_TERMINAL_SERIAL_MISMATCH");
+        }
+        return physicalTerminalSerial;
     }
 
     private static void ValidateEnrollment(
