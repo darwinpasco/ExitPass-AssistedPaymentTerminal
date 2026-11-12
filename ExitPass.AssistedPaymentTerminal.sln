@@ -37,6 +37,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.Pla
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.PlaintextDatabaseMigration.ValidationHarness", "tools\AssistedPaymentTerminal.PlaintextDatabaseMigration.ValidationHarness\AssistedPaymentTerminal.PlaintextDatabaseMigration.ValidationHarness.csproj", "{30F9E7B5-CB65-4BE8-B8A7-6CE9FF1A62EF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.DeviceAdministration", "tools\AssistedPaymentTerminal.DeviceAdministration\AssistedPaymentTerminal.DeviceAdministration.csproj", "{3F49958F-00E5-492E-8DEB-29A0A7771484}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AssistedPaymentTerminal.DeviceAdministration.Tests", "tests\AssistedPaymentTerminal.DeviceAdministration.Tests\AssistedPaymentTerminal.DeviceAdministration.Tests.csproj", "{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -102,6 +106,14 @@ Global
 		{30F9E7B5-CB65-4BE8-B8A7-6CE9FF1A62EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{30F9E7B5-CB65-4BE8-B8A7-6CE9FF1A62EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{30F9E7B5-CB65-4BE8-B8A7-6CE9FF1A62EF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3F49958F-00E5-492E-8DEB-29A0A7771484}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3F49958F-00E5-492E-8DEB-29A0A7771484}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3F49958F-00E5-492E-8DEB-29A0A7771484}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3F49958F-00E5-492E-8DEB-29A0A7771484}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2EE15A1F-CCE5-474B-A093-9A05837D5C50} = {0E2ACCC5-C73D-4ABA-AFE0-1F8F178976C5}
@@ -118,5 +130,7 @@ Global
 		{6F46D83F-619C-400E-96D5-1ADF78DCC28F} = {EF0C5216-7436-46A5-81CF-1AB0AC845A1A}
 		{AF62FE1D-F186-47BE-867F-5C83FD64B2EB} = {001D7FD3-28AC-487F-965E-DC58CA05F815}
 		{30F9E7B5-CB65-4BE8-B8A7-6CE9FF1A62EF} = {001D7FD3-28AC-487F-965E-DC58CA05F815}
+		{3F49958F-00E5-492E-8DEB-29A0A7771484} = {001D7FD3-28AC-487F-965E-DC58CA05F815}
+		{C33A55A1-3D9F-43E3-ABE3-5469A1E653C4} = {EF0C5216-7436-46A5-81CF-1AB0AC845A1A}
 	EndGlobalSection
 EndGlobal
