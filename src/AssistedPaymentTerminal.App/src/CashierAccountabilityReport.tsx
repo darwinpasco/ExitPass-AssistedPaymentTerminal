@@ -1,5 +1,13 @@
-import type { ReactNode } from "react";
+import { useRef, useState } from "react";
+import {
+  createWebViewCashierAccountabilityPrintBridge,
+  type CashierAccountabilityPrintBridge,
+  type CashierAccountabilityPrintSection,
+} from "./cashierAccountabilityPrintBridge";
+import { createCorrelationId } from "./correlation";
 import type { CashCustodySummary } from "./humanSessionBridge";
+
+const defaultPrintBridge = createWebViewCashierAccountabilityPrintBridge();
 
 type Props = {
   summary: CashCustodySummary;
@@ -10,8 +18,14 @@ type Props = {
   terminalSerialNumber: string | null;
   generatedAt: string;
   onClose: () => void;
-  onPrint?: () => void;
+  printBridge?: CashierAccountabilityPrintBridge;
 };
+
+type PrintState =
+  | { kind: "idle" }
+  | { kind: "submitting" }
+  | { kind: "submitted"; message: string }
+  | { kind: "failed"; message: string; retryable: boolean };
 
 export function CashierAccountabilityReport({
   summary,
@@ -22,8 +36,10 @@ export function CashierAccountabilityReport({
   terminalSerialNumber,
   generatedAt,
   onClose,
-  onPrint = () => window.print(),
+  printBridge = defaultPrintBridge,
 }: Props) {
+  const [printState, setPrintState] = useState<PrintState>({ kind: "idle" });
+  const printInProgress = useRef(false);
   const { session, submissions, accountability } = summary;
   const closed = session.status === "Closed";
   const currentNameApplies = Boolean(
@@ -35,6 +51,103 @@ export function CashierAccountabilityReport({
     ? session.unresolvedSubmissionCountAtClose ?? submissions.unresolvedSubmissionCount
     : submissions.unresolvedSubmissionCount;
   const variance = closed ? session.varianceAmount : null;
+  const status = closed ? "FINAL" as const : "INTERIM - CUSTODY OPEN" as const;
+  const sections: CashierAccountabilityPrintSection[] = [
+    {
+      title: "Accountability scope",
+      rows: [
+        { label: "Site", value: siteDisplayName ?? "Unavailable" },
+        { label: "Site ID", value: session.siteId },
+        { label: "Terminal", value: terminalDisplayName ?? session.terminalId },
+        { label: "Terminal ID", value: session.terminalId },
+        { label: "Terminal S/N", value: terminalSerialNumber ?? "Unavailable" },
+        { label: "Cashier ID", value: session.cashierId },
+        {
+          label: "Cashier name (current)",
+          value: currentNameApplies ? currentCashierDisplayName! : "Unavailable - no historical name snapshot",
+        },
+        { label: "Shift reference", value: session.cashierShiftId },
+        { label: "Custody reference", value: session.id },
+      ],
+    },
+    {
+      title: "Custody period",
+      rows: [
+        { label: "Opened", value: formatDateTime(session.openedAt) },
+        { label: "Closed", value: closed ? formatDateTime(session.closedAt) : "Custody remains open" },
+        { label: "Report generated", value: formatDateTime(generatedAt) },
+      ],
+    },
+    {
+      title: "Physical cash activity",
+      rows: [
+        { label: "Opening cash fund", value: formatMajorUnits(session.openingCashAmount) },
+        {
+          label: `Physical cash received (${submissions.physicalCashReceiptCount})`,
+          value: formatMinorUnits(accountability?.physicalCashReceivedMinorUnits),
+        },
+        {
+          label: `Central-Confirmed Payments (Local Record) (${submissions.confirmedSubmissionCount})`,
+          value: formatMinorUnits(accountability?.canonicallyConfirmedCashMinorUnits),
+        },
+        { label: "Completed cash returns", value: formatMinorUnits(accountability?.completedCashReturnsMinorUnits) },
+        { label: "Completed safe drops", value: formatMinorUnits(accountability?.completedSafeDropsMinorUnits) },
+        { label: "Completed direct remittances", value: formatMinorUnits(accountability?.completedDirectRemittancesMinorUnits) },
+        { label: "Unresolved cash submissions", value: String(unresolvedCount) },
+      ],
+    },
+    {
+      title: "Closing reconciliation",
+      rows: [
+        {
+          label: "Expected closing cash",
+          value: closed ? formatOptionalMajorUnits(session.expectedClosingCashAmount) : "Unavailable - custody open",
+        },
+        {
+          label: "Actual physical closing cash",
+          value: closed ? formatOptionalMajorUnits(session.closingCashAmount) : "Unavailable - custody open",
+        },
+        {
+          label: "Signed cash variance",
+          value: closed ? formatSignedVariance(variance) : "Unavailable - custody open",
+        },
+        { label: "Variance result", value: closed ? varianceClassification(variance) : "INTERIM" },
+      ],
+    },
+  ];
+  const footerNotes = [
+    "Physical cash received is custody evidence, not fiscal sales.",
+    "This is not a POS X/Z Reading or fiscal business-day report.",
+    ...(currentNameApplies
+      ? ["The display name is current identity data. Historical attribution uses Cashier ID."]
+      : []),
+  ];
+  const printLocked = printState.kind === "submitting" || printState.kind === "submitted"
+    || (printState.kind === "failed" && !printState.retryable);
+
+  async function printReport() {
+    if (printInProgress.current || printLocked) return;
+    printInProgress.current = true;
+    setPrintState({ kind: "submitting" });
+    try {
+      const result = await printBridge.submit(
+        createCorrelationId(),
+        `cashier-accountability:${session.id}:${generatedAt}`,
+        { status, custodyReference: session.id, sections, footerNotes },
+      );
+      setPrintState(result.ok
+        ? { kind: "submitted", message: result.payload.safeMessage }
+        : { kind: "failed", message: result.error.message, retryable: result.error.retryable });
+    } catch {
+      setPrintState({
+        kind: "failed",
+        message: "The Windows desktop host did not return a report printing result.",
+        retryable: false,
+      });
+    } finally {
+      printInProgress.current = false;
+    }
+  }
 
   return (
     <section className="cashier-session-group cashier-accountability-report" aria-label="Cashier Accountability Report preview">
@@ -44,85 +157,39 @@ export function CashierAccountabilityReport({
           <p>Read-only local cash-custody evidence.</p>
         </div>
         <div>
-          <button type="button" onClick={onPrint}>Print report</button>
+          <button type="button" disabled={printLocked} onClick={() => void printReport()}>
+            {printState.kind === "submitting" ? "Submitting report..." : "Print report"}
+          </button>
           <button type="button" className="secondary-action" onClick={onClose}>Close preview</button>
         </div>
       </div>
 
+      {printState.kind === "submitted" && <p className="status-notice info" role="status">{printState.message}</p>}
+      {printState.kind === "failed" && <p className="cash-error" role="alert">{printState.message}</p>}
+
       <article className="receipt-paper receipt-paper-57 cashier-accountability-print" aria-label="Printable Cashier Accountability Report">
         <header className="receipt-paper-header">
           <p className="receipt-paper-merchant">CASHIER ACCOUNTABILITY REPORT</p>
-          <p className="cashier-accountability-status">{closed ? "FINAL" : "INTERIM - CUSTODY OPEN"}</p>
+          <p className="cashier-accountability-status">{status}</p>
         </header>
 
-        <ReportSection title="Accountability scope">
-          <ReportRow label="Site" value={siteDisplayName ?? "Unavailable"} />
-          <ReportRow label="Site ID" value={session.siteId} />
-          <ReportRow label="Terminal" value={terminalDisplayName ?? session.terminalId} />
-          <ReportRow label="Terminal ID" value={session.terminalId} />
-          <ReportRow label="Terminal S/N" value={terminalSerialNumber ?? "Unavailable"} />
-          <ReportRow label="Cashier ID" value={session.cashierId} />
-          <ReportRow
-            label="Cashier name (current)"
-            value={currentNameApplies ? currentCashierDisplayName! : "Unavailable - no historical name snapshot"}
-          />
-          <ReportRow label="Shift reference" value={session.cashierShiftId} />
-          <ReportRow label="Custody reference" value={session.id} />
-        </ReportSection>
-
-        <ReportSection title="Custody period">
-          <ReportRow label="Opened" value={formatDateTime(session.openedAt)} />
-          <ReportRow label="Closed" value={closed ? formatDateTime(session.closedAt) : "Custody remains open"} />
-          <ReportRow label="Report generated" value={formatDateTime(generatedAt)} />
-        </ReportSection>
-
-        <ReportSection title="Physical cash activity">
-          <ReportRow label="Opening cash fund" value={formatMajorUnits(session.openingCashAmount)} />
-          <ReportRow
-            label={`Physical cash received (${submissions.physicalCashReceiptCount})`}
-            value={formatMinorUnits(accountability?.physicalCashReceivedMinorUnits)}
-          />
-          <ReportRow
-            label={`Central-Confirmed Payments (Local Record) (${submissions.confirmedSubmissionCount})`}
-            value={formatMinorUnits(accountability?.canonicallyConfirmedCashMinorUnits)}
-          />
-          <ReportRow label="Completed cash returns" value={formatMinorUnits(accountability?.completedCashReturnsMinorUnits)} />
-          <ReportRow label="Completed safe drops" value={formatMinorUnits(accountability?.completedSafeDropsMinorUnits)} />
-          <ReportRow label="Completed direct remittances" value={formatMinorUnits(accountability?.completedDirectRemittancesMinorUnits)} />
-          <ReportRow label="Unresolved cash submissions" value={String(unresolvedCount)} />
-        </ReportSection>
-
-        <ReportSection title="Closing reconciliation">
-          <ReportRow
-            label="Expected closing cash"
-            value={closed ? formatOptionalMajorUnits(session.expectedClosingCashAmount) : "Unavailable - custody open"}
-          />
-          <ReportRow
-            label="Actual physical closing cash"
-            value={closed ? formatOptionalMajorUnits(session.closingCashAmount) : "Unavailable - custody open"}
-          />
-          <ReportRow
-            label="Signed cash variance"
-            value={closed ? formatSignedVariance(variance) : "Unavailable - custody open"}
-          />
-          <ReportRow label="Variance result" value={closed ? varianceClassification(variance) : "INTERIM"} />
-        </ReportSection>
+        {sections.map((section) => <ReportSection key={section.title} section={section} />)}
 
         <footer className="receipt-paper-footer">
-          <p>Physical cash received is custody evidence, not fiscal sales.</p>
-          <p>This is not a POS X/Z Reading or fiscal business-day report.</p>
-          {currentNameApplies && <p>The display name is current identity data. Historical attribution uses Cashier ID.</p>}
+          {footerNotes.map((note) => <p key={note}>{note}</p>)}
         </footer>
       </article>
     </section>
   );
 }
 
-function ReportSection({ title, children }: { title: string; children: ReactNode }) {
+function ReportSection({ section }: { section: CashierAccountabilityPrintSection }) {
   return (
     <section className="receipt-paper-section">
-      <h4>{title}</h4>
-      <dl className="receipt-paper-fields">{children}</dl>
+      <h4>{section.title}</h4>
+      <dl className="receipt-paper-fields">
+        {section.rows.map((row) => <ReportRow key={row.label} label={row.label} value={row.value} />)}
+      </dl>
     </section>
   );
 }

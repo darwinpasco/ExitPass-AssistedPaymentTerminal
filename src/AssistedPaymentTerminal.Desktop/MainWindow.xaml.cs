@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly StatutoryEvidenceBridgeHandler _statutoryEvidenceBridge;
     private readonly HumanSessionBridgeHandler _humanSessionBridge;
     private readonly CentralPmsPayableBasisBridgeHandler _payableBasisBridge;
+    private readonly CashierAccountabilityPrintBridgeHandler _cashierAccountabilityPrintBridge;
     private bool _eventsRegistered;
 
     public MainWindow(WebViewSource source, StartupOptions options)
@@ -55,6 +56,9 @@ public partial class MainWindow : Window
             "visual-smoke" => new VisualSmokeReceiptPrinter(),
             _ => new WindowsReceiptPrinter()
         };
+        _cashierAccountabilityPrintBridge = new CashierAccountabilityPrintBridgeHandler(
+            options.EnableReceiptPrinting,
+            options.ReceiptPrinterName);
         _payableBasisBridge = new CentralPmsPayableBasisBridgeHandler(
             centralPmsClients.Create(TimeSpan.FromSeconds(15)),
             options.CentralPmsBaseUrl,
@@ -326,6 +330,7 @@ public partial class MainWindow : Window
             var response = await _humanSessionBridge.HandleWebMessageAsync(message)
                 ?? await _payableBasisBridge.HandleWebMessageAsync(message)
                 ?? await _statutoryEvidenceBridge.HandleWebMessageAsync(message)
+                ?? await _cashierAccountabilityPrintBridge.HandleWebMessageAsync(message)
                 ?? await _localJournalBridge.HandleWebMessageAsync(message);
 
             if (response is not null)
