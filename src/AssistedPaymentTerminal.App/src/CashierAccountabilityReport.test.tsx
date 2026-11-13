@@ -1,14 +1,34 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { CashierAccountabilityReport } from "./CashierAccountabilityReport";
+import type {
+  CashierAccountabilityPrintDocument,
+  CashierAccountabilityPrintResult,
+} from "./cashierAccountabilityPrintBridge";
 import type { CashCustodySummary } from "./humanSessionBridge";
 
 describe("CashierAccountabilityReport", () => {
   it("renders committed closed-custody evidence without treating confirmations as physical cash", async () => {
-    const onPrint = vi.fn();
-    renderReport(closedSummary(), { onPrint });
+    const submit = vi.fn(async (
+      correlationId: string,
+      _submissionKey: string,
+      _report: CashierAccountabilityPrintDocument,
+    ): Promise<CashierAccountabilityPrintResult> => ({
+      ok: true,
+      command: "cashierAccountabilityPrint.submit",
+      correlationId,
+      payload: {
+        submittedToWindowsSpooler: true,
+        physicalPrintingConfirmed: false,
+        duplicateSubmissionIgnored: false,
+        printerName: "TSC TTP-225",
+        paperWidthMm: 57,
+        safeMessage: "Cashier Accountability Report submitted to the Windows spooler. Physical printing is not confirmed.",
+      },
+    }));
+    renderReport(closedSummary(), { printBridge: { submit } });
 
     expect(screen.getByText("CASHIER ACCOUNTABILITY REPORT")).toBeVisible();
     expect(screen.getByText("FINAL")).toBeVisible();
@@ -29,7 +49,73 @@ describe("CashierAccountabilityReport", () => {
     expect(report).toHaveTextContent("Signed cash variance₱0.00");
 
     await userEvent.click(screen.getByRole("button", { name: "Print report" }));
-    expect(onPrint).toHaveBeenCalledOnce();
+    expect(submit).toHaveBeenCalledOnce();
+    expect(submit.mock.calls[0][1]).toContain("11111111-1111-4111-8111-111111111111");
+    expect(submit.mock.calls[0][2]).toMatchObject({
+      status: "FINAL",
+      custodyReference: "11111111-1111-4111-8111-111111111111",
+      sections: [
+        { title: "Accountability scope" },
+        { title: "Custody period" },
+        { title: "Physical cash activity" },
+        { title: "Closing reconciliation" },
+      ],
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("submitted to the Windows spooler");
+    expect(screen.getByRole("status")).toHaveTextContent("Physical printing is not confirmed");
+    expect(screen.getByRole("button", { name: "Print report" })).toBeDisabled();
+  });
+
+  it("guards an in-flight report against duplicate button clicks", async () => {
+    let complete!: (result: CashierAccountabilityPrintResult) => void;
+    const pending = new Promise<CashierAccountabilityPrintResult>((resolve) => { complete = resolve; });
+    const submit = vi.fn((
+      _correlationId: string,
+      _submissionKey: string,
+      _report: CashierAccountabilityPrintDocument,
+    ) => pending);
+    renderReport(closedSummary(), { printBridge: { submit } });
+
+    const button = screen.getByRole("button", { name: "Print report" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(submit).toHaveBeenCalledOnce();
+    const correlationId = submit.mock.calls[0][0];
+    complete({
+      ok: true,
+      command: "cashierAccountabilityPrint.submit",
+      correlationId,
+      payload: {
+        submittedToWindowsSpooler: true,
+        physicalPrintingConfirmed: false,
+        duplicateSubmissionIgnored: false,
+        printerName: "TSC TTP-225",
+        paperWidthMm: 57,
+        safeMessage: "Submitted to Windows spooler. Physical printing is not confirmed.",
+      },
+    });
+    expect(await screen.findByRole("status")).toBeVisible();
+  });
+
+  it("reports unavailable printers without claiming a physical print", async () => {
+    const submit = vi.fn(async (correlationId: string): Promise<CashierAccountabilityPrintResult> => ({
+      ok: false,
+      command: "cashierAccountabilityPrint.submit",
+      correlationId,
+      error: {
+        code: "PRINTER_QUEUE_NOT_FOUND",
+        message: "The configured Windows thermal printer queue was not found.",
+        retryable: true,
+      },
+    }));
+    renderReport(closedSummary(), { printBridge: { submit } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Print report" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("printer queue was not found");
+    expect(screen.queryByText(/Physical printing is not confirmed/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Print report" })).toBeEnabled();
   });
 
   it.each([
