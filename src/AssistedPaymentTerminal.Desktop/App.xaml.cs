@@ -33,7 +33,7 @@ public partial class App : Application
 
         try
         {
-            var source = WebViewSourceResolver.Resolve(options);
+            var source = DesktopStartupPreflight.ValidateHardwareAndResolveSource(options);
             if (options.SmokeCheckOnly)
             {
                 Shutdown(0);
@@ -77,6 +77,23 @@ public partial class App : Application
 
             MainWindow = new MainWindow(source, options);
             MainWindow.Show();
+        }
+        catch (TerminalHardwareStartupException exception)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "APT physical hardware startup validation refused startup. code={0} detail={1}",
+                exception.Code,
+                exception.Message);
+
+            if (!options.SmokeCheckOnly && !options.WebViewSmokeCheck)
+            {
+                MessageBox.Show(
+                    exception.Message,
+                    "ExitPass Assisted Payment Terminal startup refused",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            Shutdown(6);
         }
         catch (Exception exception)
         {
