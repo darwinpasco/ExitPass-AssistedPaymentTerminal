@@ -63,12 +63,14 @@ dotnet run --project .\tools\AssistedPaymentTerminal.DeviceAdministration\Assist
   --expected-site-id "2d1dcdf8-f563-537c-8542-0bde7cc9da97" `
   --expected-site-group-id "a6dbadf6-68b5-5bed-a7e0-a75faee70841" `
   --expected-terminal-id "PITX-APT-01" `
-  --expected-physical-terminal-serial "ACE4_2E00_653A_D952" `
+  --expected-physical-terminal-serial "PF6BJ1WA" `
   --expected-credential-version "<CURRENT_VERSION_PLUS_ONE>" `
   --prior-certificate-sha256 "<CURRENT_REGISTERED_SHA256>"
 ```
 
 The command-line serial is only the approved expected value. The utility queries the local Windows BIOS serial itself, requires an exact case-insensitive match, and sends that verified local value. If the rotation package includes a terminal serial, it must also match. A `NULL` package serial is accepted for the existing registration, but it does not bypass the local CIM check or the enrollment request's required serial.
+
+The enrollment BIOS serial remains distinct from the canonical display and Sales Invoice serial. Desktop startup separately requires `APT_EXPECTED_PHYSICAL_BIOS_SERIAL=PF6BJ1WA`, `APT_TERMINAL_SERIAL_NUMBER=ACE4_2E00_653A_D952`, and the approved `APT_PHYSICAL_DISK_UNIQUE_ID`. It reads the BIOS and selected physical SSD independently and refuses startup unless both serials match. These desktop settings do not change the enrollment package contract.
 
 The result path is reserved before the one-time request. An existing file, unwritable directory, or failed preflight stops before certificate creation. If the final result write fails after Central PMS enrollment and trust-state persistence, the utility reports `APT_POST_COMMIT_RESULT_WRITE_FAILED`, prints non-secret reconciliation evidence to the operator transcript, retains the reserved result marker and enrolled certificate, and marks provisioning-credential replay as prohibited.
 

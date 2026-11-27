@@ -5,6 +5,8 @@ param(
     [string]$CentralPmsUrl = "https://localhost:56064",
     [string]$DeviceTrustStatePath = $(if ($env:APT_DEVICE_TRUST_STATE_PATH) { $env:APT_DEVICE_TRUST_STATE_PATH } else { Join-Path $env:LOCALAPPDATA 'ExitPass\AssistedPaymentTerminal\DeviceTrust\state.bin' }),
     [string]$TerminalSerialNumber = $(if ($env:APT_TERMINAL_SERIAL_NUMBER) { $env:APT_TERMINAL_SERIAL_NUMBER } else { 'ACE4_2E00_653A_D952' }),
+    [string]$ExpectedPhysicalBiosSerial = $env:APT_EXPECTED_PHYSICAL_BIOS_SERIAL,
+    [string]$PhysicalDiskUniqueId = $env:APT_PHYSICAL_DISK_UNIQUE_ID,
     [string]$ReceiptPrinterName = $env:APT_RECEIPT_PRINTER_NAME,
     [ValidateSet("57", "58", "80")]
     [string]$ReceiptPaperWidthMm = $(if ($env:APT_RECEIPT_PAPER_WIDTH_MM) { $env:APT_RECEIPT_PAPER_WIDTH_MM } else { "57" })
@@ -19,10 +21,16 @@ $desktopProject = Join-Path $repoRoot "src\AssistedPaymentTerminal.Desktop\Assis
 $webUiUrl = "http://localhost:5173"
 
 if ([string]::IsNullOrWhiteSpace($TerminalSerialNumber)) {
-    throw "APT_TERMINAL_SERIAL_NUMBER must contain the registered physical workstation serial number."
+    throw "APT_TERMINAL_SERIAL_NUMBER must contain the canonical display and physical SSD serial number."
 }
 if ($TerminalSerialNumber.Trim() -cne 'ACE4_2E00_653A_D952') {
     throw "The PITX Level 3 APT serial number must match the approved active hardware registration."
+}
+if ([string]::IsNullOrWhiteSpace($ExpectedPhysicalBiosSerial)) {
+    throw "APT_EXPECTED_PHYSICAL_BIOS_SERIAL is required for desktop startup."
+}
+if ([string]::IsNullOrWhiteSpace($PhysicalDiskUniqueId)) {
+    throw "APT_PHYSICAL_DISK_UNIQUE_ID is required for deterministic physical SSD selection."
 }
 
 try {
@@ -38,6 +46,8 @@ $runtimeConfig = [ordered]@{
     APT_PROFILE = "CASHIER_ASSISTED_TERMINAL"
     APT_TERMINAL_ID = "PITX-APT-01"
     APT_TERMINAL_SERIAL_NUMBER = $TerminalSerialNumber.Trim()
+    APT_EXPECTED_PHYSICAL_BIOS_SERIAL = $ExpectedPhysicalBiosSerial.Trim()
+    APT_PHYSICAL_DISK_UNIQUE_ID = $PhysicalDiskUniqueId.Trim()
     APT_POS_VERSION_LABEL = "ExitPass POS Server V1.0.0"
     APT_TERMINAL_DISPLAY_NAME = "PITX Level 3 APT"
     APT_SITE_ID = "2d1dcdf8-f563-537c-8542-0bde7cc9da97"
@@ -61,6 +71,8 @@ $runtimeConfig = [ordered]@{
 $env:APT_PROFILE = $runtimeConfig.APT_PROFILE
 $env:APT_TERMINAL_ID = $runtimeConfig.APT_TERMINAL_ID
 $env:APT_TERMINAL_SERIAL_NUMBER = $runtimeConfig.APT_TERMINAL_SERIAL_NUMBER
+$env:APT_EXPECTED_PHYSICAL_BIOS_SERIAL = $runtimeConfig.APT_EXPECTED_PHYSICAL_BIOS_SERIAL
+$env:APT_PHYSICAL_DISK_UNIQUE_ID = $runtimeConfig.APT_PHYSICAL_DISK_UNIQUE_ID
 $env:APT_POS_VERSION_LABEL = $runtimeConfig.APT_POS_VERSION_LABEL
 $env:APT_TERMINAL_DISPLAY_NAME = $runtimeConfig.APT_TERMINAL_DISPLAY_NAME
 $env:APT_SITE_ID = $runtimeConfig.APT_SITE_ID
